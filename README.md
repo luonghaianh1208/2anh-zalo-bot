@@ -18,7 +18,7 @@ Zalo không có API bot cho tài khoản cá nhân, và hai thư viện Zalo vi�
 |---|---|
 | `zlapi` | Tác giả ghi rõ *stop_updating*, máy chủ đăng nhập đã bị gỡ |
 | `zca-py` | Còn ở mức Alpha |
-| **`zca-js`** | Đang được bảo trì, 125 API — nhưng là **JavaScript** |
+| **`zca-js`** | Đang được bảo trì, 149 API — nhưng là **JavaScript** |
 
 Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này giữ `zca-js` làm lớp Zalo và nối sang Python qua WebSocket cục bộ:
 
@@ -52,7 +52,7 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 
 Chuyển chế độ tự động, không cần cấu hình. Xem `/api/status` để biết đang chạy chế độ nào.
 
-**25 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
+**31 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
 
 | Nhóm | Công cụ |
 |---|---|
@@ -60,6 +60,8 @@ Chuyển chế độ tự động, không cần cấu hình. Xem `/api/status` �
 | Đọc ngữ cảnh | `zalo_read_history` `zalo_list_groups` `zalo_group_members` `zalo_find_user` `zalo_user_info` `zalo_list_friends` |
 | Riêng của Zalo | `zalo_create_poll` `zalo_poll_detail` `zalo_lock_poll` `zalo_create_note` `zalo_create_reminder` `zalo_list_reminders` `zalo_pin_conversation` `zalo_mute` |
 | Sửa sai & quản trị | `zalo_undo` `zalo_rename_group` `zalo_group_member_change` `zalo_group_deputy` `zalo_pending_members` `zalo_review_member` |
+| Lập nhóm & lời mời | `zalo_create_group` `zalo_invite_to_groups` `zalo_group_link` `zalo_join_group_link` |
+| Hồ sơ bot | `zalo_set_bio` `zalo_set_active_status` |
 
 Ví dụ: *"Tạo bình chọn trong nhóm Tổ Hoá hỏi thứ mấy họp được, ba phương án thứ 3, 5, 7"* — agent tự gọi `zalo_list_groups` rồi `zalo_create_poll`.
 
@@ -145,7 +147,7 @@ curl http://127.0.0.1:3872/api/status
 
 ### `data/personas.json`
 
-Mỗi tính cách gồm `name`, `system_prompt`, `tone`, `greeting`, `creativity` (0–1). Sửa được ở dashboard hoặc ngay trong file.
+Mỗi tính cách gồm `name`, `system_prompt`, `tone`, `greeting`, `creativity` (0–1). Sửa thẳng trong file, hoặc nhờ agent sửa hộ.
 
 ---
 

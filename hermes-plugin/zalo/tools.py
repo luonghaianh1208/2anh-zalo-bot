@@ -333,6 +333,66 @@ async def zalo_review_member(args: Dict[str, Any], **_kw) -> str:
 
 
 # =====================================================================
+#  Nhóm 5 — Lập nhóm & lời mời
+# =====================================================================
+
+async def zalo_create_group(args: Dict[str, Any], **_kw) -> str:
+    members = args.get("member_ids") or []
+    if not members:
+        return _err("cần `member_ids` — Zalo không cho lập nhóm rỗng")
+    options: Dict[str, Any] = {"members": [str(m) for m in members]}
+    if args.get("name"):
+        options["name"] = str(args["name"])
+    if args.get("avatar_path"):
+        options["avatarSource"] = str(args["avatar_path"])
+    return await _invoke("createGroup", [options])
+
+
+async def zalo_invite_to_groups(args: Dict[str, Any], **_kw) -> str:
+    user_id = str(args.get("user_id") or "")
+    group_ids = args.get("group_ids") or []
+    if not user_id or not group_ids:
+        return _err("cần `user_id` và `group_ids`")
+    return await _invoke("inviteUserToGroups", [user_id, [str(g) for g in group_ids]])
+
+
+async def zalo_group_link(args: Dict[str, Any], **_kw) -> str:
+    group_id = str(args.get("group_id") or "")
+    if not group_id:
+        return _err("cần `group_id`")
+    action = str(args.get("action") or "detail").lower()
+    if action == "enable":
+        return await _invoke("enableGroupLink", [group_id])
+    if action == "disable":
+        return await _invoke("disableGroupLink", [group_id])
+    return await _invoke("getGroupLinkDetail", [group_id])
+
+
+async def zalo_join_group_link(args: Dict[str, Any], **_kw) -> str:
+    link = (args.get("link") or "").strip()
+    if not link:
+        return _err("cần `link`")
+    return await _invoke("joinGroupLink", [link])
+
+
+# =====================================================================
+#  Nhóm 6 — Hồ sơ của chính tài khoản bot
+# =====================================================================
+
+async def zalo_set_bio(args: Dict[str, Any], **_kw) -> str:
+    bio = args.get("bio")
+    if bio is None:
+        return _err("cần `bio` (chuỗi rỗng để xoá dòng mô tả)")
+    return await _invoke("updateProfileBio", [str(bio)])
+
+
+async def zalo_set_active_status(args: Dict[str, Any], **_kw) -> str:
+    if "active" not in args:
+        return _err("cần `active` (true để hiện đang hoạt động, false để ẩn)")
+    return await _invoke("updateActiveStatus", [bool(args["active"])])
+
+
+# =====================================================================
 #  Khai báo công cụ
 # =====================================================================
 
@@ -625,6 +685,70 @@ TOOLS = [
         },
         ["group_id", "user_ids"],
     ), zalo_review_member),
+
+    # --- Nhóm 5: lập nhóm & lời mời ---
+    ("zalo_create_group", "🆕", _schema(
+        "zalo_create_group",
+        "Lập một nhóm Zalo mới với danh sách thành viên cho trước. Dùng khi "
+        "cần một chỗ riêng cho một việc cụ thể. Việc này tạo ra nhóm thật và "
+        "gửi thông báo tới từng người — hãy xác nhận với chủ trước khi làm.",
+        {
+            "member_ids": {"type": "array", "items": {"type": "string"},
+                           "description": "UID những người sẽ được thêm vào. Bắt buộc, không được rỗng."},
+            "name": {"type": "string", "description": "Tên nhóm."},
+            "avatar_path": {"type": "string", "description": "Đường dẫn ảnh đại diện nhóm."},
+        },
+        ["member_ids"],
+    ), zalo_create_group),
+
+    ("zalo_invite_to_groups", "✉️", _schema(
+        "zalo_invite_to_groups",
+        "Mời một người vào một hoặc nhiều nhóm cùng lúc. Gửi lời mời thật tới "
+        "người đó — hãy hỏi chủ trước.",
+        {
+            "user_id": {"type": "string", "description": "UID người được mời."},
+            "group_ids": {"type": "array", "items": {"type": "string"},
+                          "description": "Các nhóm muốn mời vào."},
+        },
+        ["user_id", "group_ids"],
+    ), zalo_invite_to_groups),
+
+    ("zalo_group_link", "🔗", _schema(
+        "zalo_group_link",
+        "Xem, bật hoặc tắt link mời của một nhóm. Dùng `action` = 'detail' để "
+        "lấy link hiện có, 'enable' để bật, 'disable' để thu hồi.",
+        {
+            "group_id": _GROUP_ID,
+            "action": {"type": "string", "enum": ["detail", "enable", "disable"],
+                       "description": "Mặc định 'detail'."},
+        },
+        ["group_id"],
+    ), zalo_group_link),
+
+    ("zalo_join_group_link", "🚪", _schema(
+        "zalo_join_group_link",
+        "Tham gia một nhóm Zalo bằng link mời. Sau khi vào, tài khoản bot sẽ "
+        "đọc được tin nhắn của nhóm đó.",
+        {"link": {"type": "string", "description": "Link mời nhóm Zalo."}},
+        ["link"],
+    ), zalo_join_group_link),
+
+    # --- Nhóm 6: hồ sơ tài khoản bot ---
+    ("zalo_set_bio", "📝", _schema(
+        "zalo_set_bio",
+        "Đổi dòng mô tả trên hồ sơ Zalo của chính tài khoản bot. Truyền chuỗi "
+        "rỗng để xoá.",
+        {"bio": {"type": "string", "description": "Nội dung mô tả mới."}},
+        ["bio"],
+    ), zalo_set_bio),
+
+    ("zalo_set_active_status", "🟢", _schema(
+        "zalo_set_active_status",
+        "Bật hoặc tắt hiển thị trạng thái đang hoạt động của tài khoản bot. "
+        "Tắt đi thì người khác không thấy bot online.",
+        {"active": {"type": "boolean", "description": "true là hiện, false là ẩn."}},
+        ["active"],
+    ), zalo_set_active_status),
 ]
 
 

@@ -62,6 +62,9 @@ const ALLOWED_METHODS = new Set([
   'addGroupDeputy', 'removeGroupDeputy',
   'getPendingGroupMembers', 'reviewPendingMemberRequest',
   'getGroupLinkInfo', 'enableGroupLink', 'disableGroupLink',
+  'createGroup', 'inviteUserToGroups', 'getGroupLinkDetail', 'joinGroupLink',
+  // Hồ sơ của chính tài khoản bot
+  'updateProfileBio', 'updateActiveStatus',
   // Quản lý hội thoại
   'setPinnedConversations', 'getPinConversations',
   'setMute', 'getMute',
