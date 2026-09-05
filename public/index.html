@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZCA — Zalo QR Login</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: #0d1117; color: #e6edf3; min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    }
+    .card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 16px;
+      padding: 40px 36px; width: 380px; text-align: center;
+    }
+    .card h1 { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+    .card .sub { font-size: 13px; color: #8b949e; margin-bottom: 24px; }
+    .qr-box {
+      width: 260px; height: 260px; margin: 0 auto 20px;
+      background: #fff; border-radius: 12px; display: flex;
+      align-items: center; justify-content: center; position: relative;
+      overflow: hidden;
+    }
+    .qr-box img { width: 220px; height: 220px; image-rendering: pixelated; }
+    .qr-box .placeholder { color: #555; font-size: 14px; }
+    .qr-box .overlay {
+      position: absolute; inset: 0; display: flex; align-items: center;
+      justify-content: center; font-size: 15px; font-weight: 600;
+    }
+    .overlay-scanned { background: rgba(35,134,54,0.85); color: #fff; }
+    .overlay-expired  { background: rgba(0,0,0,0.75); color: #f0883e; }
+    .status {
+      font-size: 14px; color: #8b949e; margin-bottom: 16px;
+      min-height: 20px;
+    }
+    .status.ok { color: #3fb950; }
+    .status.err { color: #f85149; }
+    .btn {
+      padding: 10px 28px; border-radius: 8px; border: none; font-size: 14px;
+      font-weight: 600; cursor: pointer; transition: background .15s;
+    }
+    .btn-primary { background: #238636; color: #fff; }
+    .btn-primary:hover { background: #2ea043; }
+    .btn-secondary { background: #30363d; color: #e6edf3; margin-left: 8px; }
+    .btn-secondary:hover { background: #3d444d; }
+    .btn-danger { background: #da3633; color: #fff; margin-left: 8px; }
+    .btn-danger:hover { background: #b62324; }
+    .user-info {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 10px;
+      padding: 14px; margin-top: 18px; text-align: left; font-size: 13px;
+      line-height: 1.6;
+    }
+    .user-info strong { color: #58a6ff; }
+    .nav { margin-top: 18px; font-size: 13px; }
+    .nav a { color: #58a6ff; text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔵 Zalo QR Login</h1>
+    <div class="sub">Quét QR bằng Zalo trên điện thoại (tài khoản phụ)</div>
+
+    <div class="qr-box" id="qrBox">
+      <div class="placeholder" id="qrPlaceholder">Nhấn nút bên dưới để tạo QR</div>
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <div>
+      <button class="btn btn-primary" id="btnStart" onclick="startQR()">Tạo QR</button>
+      <button class="btn btn-secondary" id="btnRefresh" onclick="startQR()" style="display:none">🔄 Refresh</button>
+      <button class="btn btn-danger" id="btnLogout" onclick="doLogout()" style="display:none">Đăng xuất</button>
+    </div>
+
+    <div class="user-info" id="userInfo" style="display:none"></div>
+
+    <div class="nav" id="navLinks" style="display:none; margin-top: 15px;">
+      <a href="/dashboard.html" class="btn btn-primary" style="display:inline-block; width:100%; text-decoration:none; padding:12px 0; font-size:15px;">🚀 BẤM VÀO ĐÂY ĐỂ VÀO DASHBOARD</a><br><br>
+      <a href="/sethome.html">→ Trang SetHome (nhắn tin từ acc phụ → acc chủ)</a>
+    </div>
+  </div>
+
+  <script>
+    const $ = s => document.querySelector(s);
+    let ws;
+    const statusEl = $('#status');
+    const qrBox = $('#qrBox');
+    const qrPlaceholder = $('#qrPlaceholder');
+    const btnStart = $('#btnStart');
+    const btnRefresh = $('#btnRefresh');
+    const btnLogout = $('#btnLogout');
+    const userInfoEl = $('#userInfo');
+    const navLinks = $('#navLinks');
+
+    function wsConnect() {
+      ws = new WebSocket(`ws://${location.host}`);
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        switch (msg.type) {
+          case 'qr-pending':
+            setStatus('Đang tạo QR...', '');
+            qrPlaceholder.textContent = 'Đang tạo QR...';
+            qrPlaceholder.style.display = '';
+            break;
+          case 'qr-generated':
+            setStatus('Quét QR bằng Zalo trên điện thoại', '');
+            const img = qrBox.querySelector('img') || qrBox.appendChild(document.createElement('img'));
+            img.src = 'data:image/png;base64,' + msg.data.image;
+            qrPlaceholder.style.display = 'none';
+            const old = qrBox.querySelector('.overlay');
+            if (old) old.remove();
+            break;
+          case 'qr-scanned':
+            setStatus('Đã quét — xác nhận trên điện thoại...', '');
+            showOverlay('✅ Đã quét', 'overlay-scanned');
+            break;
+          case 'qr-expired':
+            setStatus('QR hết hạn — nhấn Refresh', 'err');
+            showOverlay('⏰ Hết hạn', 'overlay-expired');
+            btnRefresh.style.display = '';
+            break;
+          case 'qr-declined':
+            setStatus('Từ chối đăng nhập', 'err');
+            showOverlay('❌ Từ chối', 'overlay-expired');
+            btnRefresh.style.display = '';
+            break;
+          case 'login-success':
+            setStatus('✅ Đăng nhập thành công! Đang chuyển đến Dashboard...', 'ok');
+            showUserInfo(msg.data);
+            btnStart.style.display = 'none';
+            btnRefresh.style.display = 'none';
+            btnLogout.style.display = '';
+            navLinks.style.display = '';
+            // Tự động chuyển trang ngay lập tức
+            window.location.replace('/dashboard.html');
+            break;
+          case 'error':
+            setStatus('❌ ' + msg.data, 'err');
+            btnRefresh.style.display = '';
+            break;
+        }
+      };
+      ws.onclose = () => setTimeout(wsConnect, 2000);
+    }
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = 'status' + (cls ? ' ' + cls : '');
+    }
+
+    function showOverlay(text, cls) {
+      let ov = qrBox.querySelector('.overlay');
+      if (!ov) { ov = document.createElement('div'); ov.className = 'overlay'; qrBox.appendChild(ov); }
+      ov.textContent = text;
+      ov.className = 'overlay ' + cls;
+    }
+
+    function showUserInfo(info) {
+      const displayName = info.display_name || '(không rõ)';
+      const uid = info.user_id || info.uid || '(không rõ)';
+      userInfoEl.innerHTML = `<strong>Đã đăng nhập:</strong><br/>
+        Tên: ${displayName}<br/>
+        UID: ${uid}<br/>
+        <em style="color:#8b949e">Lưu UID này — nhập vào trang SetHome</em>`;
+      userInfoEl.style.display = '';
+    }
+
+    async function startQR() {
+      btnStart.style.display = 'none';
+      btnRefresh.style.display = 'none';
+      qrPlaceholder.textContent = 'Đang tạo QR...';
+      qrPlaceholder.style.display = '';
+      // remove old img and overlays
+      const img = qrBox.querySelector('img'); if (img) img.remove();
+      const ov = qrBox.querySelector('.overlay'); if (ov) ov.remove();
+      try {
+        const r = await fetch('/api/qr/start', { method: 'POST' });
+        const j = await r.json();
+        if (!j.ok) setStatus('❌ ' + j.error, 'err');
+        else if (j.user) {
+          setStatus('✅ Đã đăng nhập! Đang chuyển đến Dashboard...', 'ok');
+          showUserInfo(j.user);
+          btnLogout.style.display = '';
+          navLinks.style.display = '';
+          setTimeout(() => {
+            window.location.href = '/dashboard.html';
+          }, 1000);
+        }
+      } catch (e) {
+        setStatus('❌ Lỗi kết nối server', 'err');
+      }
+    }
+
+    async function doLogout() {
+      await fetch('/api/logout', { method: 'POST' });
+      location.reload();
+    }
+
+    // init
+    // Tự động kiểm tra nếu đã đăng nhập từ trước thì vào thẳng Dashboard
+    async function checkAutoRedirect() {
+      try {
+        const r = await fetch('/api/status');
+        const j = await r.json();
+        if (j.status === 'logged-in' && j.user) {
+          window.location.replace('/dashboard.html');
+        }
+      } catch {}
+    }
+    checkAutoRedirect();
+    wsConnect();
+    fetch('/api/status').then(r => r.json()).then(j => {
+      if (j.status === 'logged-in' && j.user) {
+        setStatus('✅ Đã đăng nhập', 'ok');
+        showUserInfo(j.user);
+        btnStart.style.display = 'none';
+        btnLogout.style.display = '';
+        navLinks.style.display = '';
+      }
+    });
+  </script>
+</body>
+</html>

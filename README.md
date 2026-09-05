@@ -1,0 +1,211 @@
+# 2Anh Zalo Bot
+
+Cầu nối đưa **Zalo** vào [Hermes Agent](https://github.com/NousResearch/hermes-agent) như một nền tảng đầy đủ — ngang hàng với Telegram, Discord, Slack.
+
+Nhắn tin trên Zalo là nói chuyện với chính con agent đang chạy trên máy bạn: đủ tools, memory, skills và cron.
+
+```
+Zalo  ⇄  sidecar zca-js (Node)  ⇄  WebSocket  ⇄  plugin Python  ⇄  Hermes Agent
+```
+
+---
+
+## Vì sao lại có cầu nối
+
+Zalo không có API bot cho tài khoản cá nhân, và hai thư viện Zalo viết bằng Python đều không dùng được:
+
+| Thư viện | Tình trạng |
+|---|---|
+| `zlapi` | Tác giả ghi rõ *stop_updating*, máy chủ đăng nhập đã bị gỡ |
+| `zca-py` | Còn ở mức Alpha |
+| **`zca-js`** | Đang được bảo trì, 125 API — nhưng là **JavaScript** |
+
+Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này giữ `zca-js` làm lớp Zalo và nối sang Python qua WebSocket cục bộ:
+
+* **sidecar** giữ phiên Zalo — đăng nhập QR, lưu cookie, tự nối lại, gọi API gửi/thả cảm xúc/đang soạn tin;
+* **plugin Python** lo phần Hermes — phân quyền, lọc tag trong nhóm, đẩy tin vào agent.
+
+---
+
+## Tính năng
+
+**Kết nối**
+* Đăng nhập bằng QR qua trình duyệt, không cần nhập mật khẩu
+* Lưu phiên — khởi động lại máy không phải quét lại
+* Tự nối lại khi mất kết nối (2 → 5 → 10 → 30 → 60 giây)
+
+**Phân quyền — mặc định đóng**
+* Người lạ nhắn riêng thì bot im lặng (`dmPolicy: owner-only`)
+* Trong nhóm chỉ trả lời khi được tag đúng tên bot
+* Nhận diện UID Zalo thật, loại bỏ số điện thoại điền nhầm chỗ
+
+**Trả lời**
+* Markdown của Hermes được dịch sang định dạng gốc của Zalo — in đậm, đỏ, xanh lá, cam, vàng, nghiêng, gạch ngang
+* Thả cảm xúc theo ngữ cảnh câu chữ (55 icon), báo đã đọc, hiệu ứng đang soạn tin
+* Nhiều tính cách (persona) cấu hình được, đặt riêng cho từng nhóm
+
+**Hai chế độ**
+| Chế độ | Khi nào | Khả năng |
+|---|---|---|
+| `hermes-agent` | Hermes đang cắm vào cầu | Đầy đủ tools, memory, skills, cron |
+| `chatbot-noi-bo` | Không có Hermes | Gọi thẳng LLM, chỉ trò chuyện |
+
+Chuyển chế độ tự động, không cần cấu hình. Xem `/api/status` để biết đang chạy chế độ nào.
+
+**Dashboard cục bộ** tại `http://127.0.0.1:3872` — quét QR, quản lý nhóm, chỉnh tính cách, bật tắt tính năng.
+
+---
+
+## Yêu cầu
+
+* **Node.js 20+**
+* **Một tài khoản Zalo phụ** — xem phần Rủi ro bên dưới
+* *(tuỳ chọn)* **Hermes Agent** — không có thì bot chạy chế độ chatbot độc lập
+
+---
+
+## Cài đặt
+
+```bash
+git clone https://github.com/luonghaianh1208/2anh-zalo-bot.git
+cd 2anh-zalo-bot
+npm install
+npm run setup
+npm start
+```
+
+`npm run setup` sẽ: tạo `data/` với cấu hình mẫu, tạo `.env`, tìm thư mục Hermes, chép plugin vào đó và cài gói `websockets`. Chạy lại nhiều lần được — không đè lên thứ bạn đã sửa.
+
+### Kết nối Zalo
+
+1. Mở `http://127.0.0.1:3872`
+2. Bấm **Tạo QR**, quét bằng Zalo trên điện thoại *(dùng tài khoản phụ)*
+3. Từ Zalo cá nhân của bạn, nhắn `/sethome` cho tài khoản vừa quét
+   → bot ghi nhận bạn là chủ và in ra UID
+
+### Nối vào Hermes
+
+Thêm UID vừa nhận vào file `.env` **của Hermes** (`%LOCALAPPDATA%\hermes\.env` trên Windows, `~/.hermes/.env` trên Linux/macOS):
+
+```env
+ZALO_BRIDGE_URL=ws://127.0.0.1:3873
+ZALO_ALLOWED_USERS=<UID Zalo của bạn>
+ZALO_HOME_CHANNEL=<UID Zalo của bạn>
+ZALO_GROUP_REPLY_ONLY_TAGGED=true
+```
+
+Rồi khởi động Hermes:
+
+```bash
+hermes gateway run
+```
+
+**Thứ tự quan trọng:** sidecar phải chạy trước, Hermes mới cắm vào cầu được. Chạy ngược lại thì Hermes vẫn lên nhưng kênh Zalo im cho tới lần thử nối lại kế tiếp.
+
+Kiểm tra đã thông chưa:
+
+```bash
+curl http://127.0.0.1:3872/api/status
+# "hermesAttached": true, "mode": "hermes-agent"
+```
+
+---
+
+## Cấu hình
+
+### `data/bot_settings.json`
+
+| Khoá | Mặc định | Ý nghĩa |
+|---|---|---|
+| `enabled` | `true` | Bật/tắt toàn bộ bot |
+| `dmPolicy` | `owner-only` | `owner-only` \| `allowlist` \| `open` |
+| `replyOnlyTagged` | `true` | Trong nhóm chỉ trả lời khi được tag |
+| `silentListenOnly` | `false` | Chỉ nghe, không nói |
+| `adminUids` | `[]` | UID chủ nhân — điền bằng `/sethome` |
+| `allowedUids` | `[]` | Ai được nhắn riêng khi `dmPolicy: allowlist` |
+| `ownerName` | `""` | Tên chủ, dùng khi bot tự giới thiệu |
+| `orgName` | `""` | Tên đơn vị |
+| `persona` | `friendly` | Tính cách mặc định |
+| `groups` | `{}` | Ghi đè cấu hình cho từng nhóm |
+
+> **UID Zalo là dãy số dài 17–21 chữ số, không bắt đầu bằng `0`.** Số điện thoại thì ngược lại. Điền nhầm số điện thoại vào `adminUids` sẽ bị bỏ qua kèm cảnh báo trong log — đây là chủ ý, để một mục sai định dạng không vô tình mở quyền cho tất cả mọi người.
+
+### `data/personas.json`
+
+Mỗi tính cách gồm `name`, `system_prompt`, `tone`, `greeting`, `creativity` (0–1). Sửa được ở dashboard hoặc ngay trong file.
+
+---
+
+## Định dạng tin nhắn
+
+Hermes cứ viết Markdown như bình thường; cầu nối dịch sang style gốc của Zalo trước khi gửi:
+
+| Markdown | Hiển thị trên Zalo |
+|---|---|
+| `# H1`, `## H2` | **đậm + đỏ** |
+| `### H3` | **đậm + cam** |
+| `**text**` | **đậm** |
+| `*text*` | *nghiêng* |
+| `` `code` `` | **đậm** |
+| `~~text~~` | ~~gạch ngang~~ |
+| `> quote` | *nghiêng* |
+| `- item` | • item |
+| `[chữ](url)` | **chữ** (url) |
+| `[green]…[/green]` | **xanh lá** |
+| `[red]` `[orange]` `[yellow]` | các màu tương ứng |
+
+Emoji hiển thị gốc, dùng thoải mái.
+
+---
+
+## API
+
+| Đường dẫn | Việc |
+|---|---|
+| `GET /api/status` | Trạng thái đăng nhập, chế độ, đã cắm Hermes chưa |
+| `POST /api/qr/start` | Bắt đầu đăng nhập QR |
+| `POST /api/logout` | Đăng xuất, xoá phiên |
+| `GET /api/groups` | Danh sách nhóm đang tham gia |
+| `GET \| POST /api/config` | Đọc / ghi `bot_settings.json` |
+| `GET \| POST /api/personas` | Đọc / ghi `personas.json` |
+| `POST /api/send-home` | Gửi tin nhắn tay tới một UID |
+
+Cổng WebSocket `3873` là giao thức riêng giữa sidecar và Hermes.
+
+---
+
+## Rủi ro cần biết trước khi dùng
+
+**`zca-js` là thư viện không chính thức**, dựng lại từ Zalo Web. Dùng nó **vi phạm điều khoản dịch vụ của Zalo** và tài khoản có thể bị khoá.
+
+* **Luôn dùng tài khoản phụ.** Đừng đăng nhập tài khoản chính hay tài khoản công việc.
+* Đừng gửi tin hàng loạt, đừng tự động kết bạn — đó là những hành vi dễ bị đánh dấu nhất.
+* Giữ `replyOnlyTagged: true` trong nhóm.
+
+**Bảo mật:** thư mục `data/` chứa cookie và IMEI của phiên Zalo. Ai lấy được file đó là đăng nhập được vào tài khoản đó. `.gitignore` đã chặn sẵn — đừng gỡ ra.
+
+Dashboard chỉ nghe ở `127.0.0.1`, **không có mật khẩu**. Đừng mở nó ra mạng ngoài.
+
+---
+
+## Xử lý sự cố
+
+| Hiện tượng | Nguyên nhân thường gặp |
+|---|---|
+| Log ghi `no saved session` | Chưa quét QR, hoặc cookie hết hạn → quét lại |
+| `hermesAttached: false` | Hermes chưa chạy, hoặc `ZALO_BRIDGE_URL` sai cổng |
+| Bot im khi nhắn riêng | Chưa `/sethome`, hoặc UID chưa có trong `ZALO_ALLOWED_USERS` |
+| Bot im trong nhóm | Chưa tag đúng tên bot — mặc định chỉ trả lời khi được gọi |
+| `Unauthorized user ... on zalo` | Đúng như thiết kế: người đó không nằm trong allowlist |
+| Tin nhắn hiện `**` hoặc `[red]` | Sidecar chạy bản cũ — `git pull` rồi khởi động lại |
+| Cổng bị chiếm | Đổi `ZCA_PORT` / `ZALO_BRIDGE_PORT` trong `.env` |
+
+Log của sidecar in thẳng ra terminal đang chạy `npm start`. Log Hermes nằm ở `<hermes>/logs/gateway.log`.
+
+---
+
+## Giấy phép
+
+MIT — xem [LICENSE](LICENSE).
+
+Không liên kết với Zalo hay VNG. `zca-js` thuộc về [RFS-ADRENO/zca-js](https://github.com/RFS-ADRENO/zca-js).

@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zalo AI Bot — Dashboard Quản Lý Ma Trận</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      /* Quiz.com Design System Tokens */
+      --bg-cream: #EBDAC3;
+      --surface-cream: #FFFAE6;
+      --surface-white: #FFFFFF;
+      --deep-teal: #19444A;
+      --dark-teal: #123438;
+      --warm-orange: #DF7921;
+      --golden-yellow: #FFC679;
+      --lime-green: #C6EA84;
+      --bright-cyan: #6FEEFF;
+      --emerald-green: #00A76D;
+      --emerald-green-hover: #008C5A;
+      --text-black: #000000;
+      --text-muted: #555555;
+      --neutral-btn: #E5E3DC;
+      --neutral-btn-hover: #CECCC5;
+      --border-divider: #D6C8B4;
+      --danger-red: #E53E3E;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Nunito', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-cream);
+      color: var(--text-black);
+      min-height: 100vh;
+      padding: 24px 16px;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    header {
+      background: var(--surface-cream);
+      border: 2px solid var(--text-black);
+      border-radius: 24px;
+      padding: 18px 26px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      box-shadow: 0 6px 0 var(--text-black);
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .brand-icon {
+      width: 50px;
+      height: 50px;
+      background: var(--warm-orange);
+      border: 2px solid var(--text-black);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      box-shadow: 0 3px 0 var(--text-black);
+    }
+
+    .brand h1 { font-size: 22px; font-weight: 900; color: var(--deep-teal); }
+    .brand p { font-size: 13px; font-weight: 700; color: var(--text-muted); }
+
+    .header-right { display: flex; align-items: center; gap: 12px; }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 16px;
+      border-radius: 9999px;
+      font-size: 14px;
+      font-weight: 800;
+      background: var(--lime-green);
+      color: var(--deep-teal);
+      border: 2px solid var(--text-black);
+      box-shadow: 0 3px 0 var(--text-black);
+    }
+    .status-badge.offline { background: #FED7D7; color: var(--danger-red); }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; border: 1.5px solid var(--text-black); }
+
+    /* Admin & Controls Bar */
+    .admin-bar {
+      background: var(--surface-cream);
+      border: 2px solid var(--text-black);
+      border-radius: 20px;
+      padding: 14px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+      box-shadow: 0 5px 0 var(--text-black);
+      flex-wrap: wrap;
+    }
+
+    .admin-owner-box {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .owner-badge-title {
+      font-size: 14px;
+      font-weight: 900;
+      color: var(--deep-teal);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .phone-input {
+      background: var(--surface-white);
+      border: 2px solid var(--text-black);
+      border-radius: 9999px;
+      padding: 8px 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--deep-teal);
+      outline: none;
+      width: 170px;
+    }
+
+    .search-box { position: relative; flex: 1; max-width: 320px; }
+    .search-box input {
+      width: 100%;
+      background: var(--surface-white);
+      border: 2px solid var(--text-black);
+      border-radius: 9999px;
+      padding: 8px 18px 8px 38px;
+      font-family: 'Nunito', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-black);
+      outline: none;
+    }
+    .search-box .icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 14px; }
+
+    /* Buttons */
+    .btn {
+      font-family: 'Nunito', sans-serif;
+      font-size: 13px;
+      font-weight: 800;
+      padding: 8px 18px;
+      border-radius: 9999px;
+      border: 2px solid var(--text-black);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: 0 4px 0 var(--text-black);
+      transition: transform 0.1s, box-shadow 0.1s;
+      text-decoration: none;
+    }
+    .btn:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--text-black); }
+    .btn-primary { background: var(--emerald-green); color: var(--surface-white); }
+    .btn-primary:hover { background: var(--emerald-green-hover); }
+    .btn-warning { background: var(--golden-yellow); color: var(--text-black); }
+    .btn-secondary { background: var(--neutral-btn); color: var(--text-black); }
+    .btn-secondary:hover { background: var(--neutral-btn-hover); }
+    .btn-ghost { background: var(--surface-white); color: var(--text-black); }
+
+    /* Matrix Table Container */
+    .table-container {
+      background: var(--surface-cream);
+      border: 2px solid var(--text-black);
+      border-radius: 24px;
+      overflow-x: auto;
+      box-shadow: 0 8px 0 var(--text-black);
+      margin-bottom: 24px;
+      position: relative;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      text-align: left;
+    }
+
+    /* 2-tier Category Headers */
+    th.cat-header {
+      text-align: center;
+      font-size: 13px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 10px 14px;
+      border-bottom: 2px solid var(--text-black);
+      border-right: 1.5px solid var(--text-black);
+      color: #FFFFFF;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    }
+    .cat-basic { background: #0F3338; color: var(--bright-cyan); }
+    .cat-persona { background: #1B432C; color: var(--lime-green); }
+    .cat-media { background: #4D260D; color: var(--golden-yellow); }
+    .cat-group { background: #371D54; color: #E9D5FF; }
+
+    th.col-header {
+      background: var(--deep-teal);
+      color: #FFFFFF;
+      padding: 12px 14px;
+      font-weight: 800;
+      font-size: 13px;
+      border-bottom: 2px solid var(--text-black);
+      border-right: 1px solid rgba(255,255,255,0.2);
+      white-space: nowrap;
+      user-select: none;
+      text-align: center;
+    }
+
+    /* Sticky First Column */
+    th.sticky-col, td.sticky-col {
+      position: sticky;
+      left: 0;
+      border-right: 3px solid var(--text-black) !important;
+      box-shadow: 6px 0 12px rgba(0, 0, 0, 0.18);
+    }
+
+    th.sticky-col {
+      z-index: 50;
+      background: var(--dark-teal) !important;
+      color: #FFFFFF !important;
+      text-align: center !important;
+      vertical-align: middle !important;
+      font-size: 15px;
+      font-weight: 900;
+      letter-spacing: 0.02em;
+      padding: 16px 20px;
+      border-bottom: 2px solid var(--text-black);
+    }
+
+    td.sticky-col {
+      z-index: 30;
+      background: #FFFDF0 !important;
+    }
+
+    tr.global-row td.sticky-col {
+      background: #FCEAC5 !important;
+    }
+    tr.global-row:hover td.sticky-col {
+      background: #FADDA2 !important;
+    }
+    tr:hover td.sticky-col {
+      background: #FFF3C4 !important;
+    }
+
+    th .col-header-action {
+      display: block;
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--bright-cyan);
+      cursor: pointer;
+      margin-top: 4px;
+      text-decoration: underline;
+    }
+    th .col-header-action:hover { color: var(--golden-yellow); }
+
+    td {
+      padding: 14px 14px;
+      border-bottom: 1.5px solid var(--border-divider);
+      border-right: 1px solid rgba(0,0,0,0.08);
+      vertical-align: middle;
+      font-size: 14px;
+      font-weight: 700;
+      text-align: center;
+      background: var(--surface-cream);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #FFF3C4; }
+
+    /* Global Master Row */
+    tr.global-row td {
+      background: #FCEAC5;
+      border-bottom: 2.5px solid var(--text-black);
+    }
+    tr.global-row:hover td {
+      background: #FADDA2;
+    }
+
+    .group-cell { display: flex; align-items: center; gap: 12px; min-width: 250px; }
+    .group-avatar {
+      width: 42px; height: 42px; border-radius: 12px; background: var(--deep-teal); color: var(--surface-white);
+      display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 16px;
+      border: 2px solid var(--text-black); box-shadow: 0 2px 0 var(--text-black); overflow: hidden; flex-shrink: 0;
+    }
+    .group-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .group-meta { display: flex; flex-direction: column; text-align: left; }
+    
+    .group-name { font-size: 15px; font-weight: 900; color: #0C2326; }
+    .group-id { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700; color: #4A5568; margin-top: 2px; }
+
+    .edit-btn {
+      background: var(--golden-yellow); border: 1.5px solid var(--text-black); border-radius: 6px;
+      padding: 2px 6px; cursor: pointer; font-size: 11px; box-shadow: 0 1.5px 0 var(--text-black);
+    }
+
+    /* Toggle Switch */
+    .table-switch { position: relative; display: inline-block; width: 42px; height: 24px; }
+    .table-switch input { opacity: 0; width: 0; height: 0; }
+    .table-slider {
+      position: absolute; cursor: pointer; inset: 0; background-color: var(--neutral-btn);
+      border: 2px solid var(--text-black); transition: .2s; border-radius: 9999px;
+    }
+    .table-slider:before {
+      position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
+      background-color: var(--text-black); transition: .2s; border-radius: 50%;
+    }
+    input:checked + .table-slider { background-color: var(--emerald-green); }
+    input:checked + .table-slider:before { transform: translateX(18px); background-color: var(--surface-white); border: 1px solid var(--text-black); }
+
+    /* Persona Selector */
+    .persona-select {
+      background: var(--surface-white);
+      border: 2px solid var(--text-black);
+      border-radius: 10px;
+      padding: 5px 8px;
+      font-family: 'Nunito', sans-serif;
+      font-size: 12px;
+      font-weight: 800;
+      color: #0C2326;
+      outline: none;
+      cursor: pointer;
+    }
+
+    /* Sticky Save Bar */
+    .save-bar {
+      position: sticky; bottom: 20px; background: var(--surface-cream); border: 2px solid var(--text-black);
+      border-radius: 20px; padding: 14px 24px; display: flex; justify-content: space-between; align-items: center;
+      box-shadow: 0 6px 0 var(--text-black); z-index: 100;
+    }
+    .save-bar-info strong { font-size: 15px; font-weight: 900; color: #0C2326; }
+    .save-bar-info p { font-size: 12px; font-weight: 700; color: #4A5568; }
+
+    /* Toast */
+    .toast {
+      position: fixed; top: 20px; right: 20px; background: var(--lime-green); color: var(--deep-teal);
+      border: 2px solid var(--text-black); padding: 12px 22px; border-radius: 9999px; font-size: 14px;
+      font-weight: 900; display: none; z-index: 200; box-shadow: 0 5px 0 var(--text-black);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="toast" id="toast">🎉 Đã lưu cài đặt ma trận thành công!</div>
+
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="brand-icon">💬</div>
+        <div>
+          <h1>Zalo Bot Manager</h1>
+          <p>Điều khiển tính năng & quản lý nhóm thông minh</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <a href="/personas.html" class="btn btn-secondary">🎭 Cấu Hình Tính Cách</a>
+        <span class="status-badge" id="botStatusBadge">
+          <span class="status-dot"></span>
+          <span id="botStatusText">Đang kiểm tra...</span>
+        </span>
+        <a href="/" class="btn btn-ghost">📱 Quét QR</a>
+      </div>
+    </header>
+
+    <!-- Super Admin & Control Bar -->
+    <div class="admin-bar">
+      <!-- Phone Owner Set Box -->
+      <div class="admin-owner-box">
+        <span class="owner-badge-title">👑 SĐT Chủ Nhân:</span>
+        <input type="text" id="adminPhoneInput" class="phone-input" placeholder="Nhập UID Zalo (dãy số dài)">
+        <button class="btn btn-warning" onclick="setAdminPhone()">⚡ Nhận Chủ</button>
+      </div>
+
+      <div class="search-box">
+        <span class="icon">🔍</span>
+        <input type="text" id="searchInput" placeholder="Tìm tên hoặc ID nhóm..." oninput="filterGroups()">
+      </div>
+
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-secondary" onclick="refreshGroupList()">🔄 Quét Lại Nhóm</button>
+        <button class="btn btn-secondary" onclick="addManualGroup()">+ Thêm ID</button>
+      </div>
+    </div>
+
+    <!-- Unified Matrix Table with Fixed Sticky Column -->
+    <div class="table-container">
+      <table>
+        <thead>
+          <!-- Tầng 1: Phân Nhóm Chức Năng (Grouped Categories) -->
+          <tr>
+            <th rowspan="2" class="sticky-col" style="width: 270px;">Tên Nhóm / Phạm Vi</th>
+            <th colspan="3" class="cat-header cat-basic">⚙️ Chế Độ Hoạt Động Cơ Bản</th>
+            <th colspan="2" class="cat-header cat-persona">🎭 Phong Cách & Giọng Nói</th>
+            <th colspan="3" class="cat-header cat-media">📁 File, Link & Tri Thức</th>
+            <th colspan="4" class="cat-header cat-group">👥 Quản Trị Nhóm Nâng Cao</th>
+          </tr>
+          <!-- Tầng 2: Chi Tiết Từng Cột -->
+          <tr>
+            <!-- Basic -->
+            <th class="col-header">
+              Kích Hoạt
+              <span class="col-header-action" onclick="toggleAllCol('enabled')">Bật/Tắt</span>
+            </th>
+            <th class="col-header" style="background:#143f45;">
+              🤫 Chỉ Nghe
+              <span class="col-header-action" onclick="toggleAllCol('silentListenOnly')">Bật/Tắt</span>
+            </th>
+            <th class="col-header">
+              Chỉ Khi Tag
+              <span class="col-header-action" onclick="toggleAllCol('replyOnlyTagged')">Bật/Tắt</span>
+            </th>
+
+            <!-- Persona -->
+            <th class="col-header" style="background:#22442e;">🎭 Tính Cách</th>
+            <th class="col-header" style="background:#22442e;">
+              🗣️ Giọng Nói
+              <span class="col-header-action" onclick="toggleAllCol('voiceReply')">Bật/Tắt</span>
+            </th>
+
+            <!-- Media & Files -->
+            <th class="col-header" style="background:#422a19;">
+              Tạo File Tạm
+              <span class="col-header-action" onclick="toggleAllCol('autoCreateFile')">Bật/Tắt</span>
+            </th>
+            <th class="col-header" style="background:#422a19;">
+              Đọc File Lên
+              <span class="col-header-action" onclick="toggleAllCol('autoReadFile')">Bật/Tắt</span>
+            </th>
+            <th class="col-header" style="background:#422a19;">
+              Quét Link
+              <span class="col-header-action" onclick="toggleAllCol('autoReadLink')">Bật/Tắt</span>
+            </th>
+
+            <!-- Group Management -->
+            <th class="col-header" style="background:#2d2042;">
+              Tóm Tắt Tin
+              <span class="col-header-action" onclick="toggleAllCol('enableGroupDigest')">Bật/Tắt</span>
+            </th>
+            <th class="col-header" style="background:#2d2042;">
+              🛡️ Chống Spam
+              <span class="col-header-action" onclick="toggleAllCol('antiSpam')">Bật/Tắt</span>
+            </th>
+            <th class="col-header" style="background:#2d2042;">
+              Chào Mừng TV
+              <span class="col-header-action" onclick="toggleAllCol('autoWelcomeNewMember')">Bật/Tắt</span>
+            </th>
+            <th class="col-header" style="background:#2d2042;">
+              🗳️ Tạo Bình Chọn
+              <span class="col-header-action" onclick="toggleAllCol('autoPoll')">Bật/Tắt</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody id="matrixBody">
+          <!-- Hàng mặc định Global -->
+          <tr class="global-row" id="globalRow">
+            <td class="sticky-col">
+              <div class="group-cell">
+                <div class="group-avatar" style="background: var(--warm-orange);">🌐</div>
+                <div class="group-meta">
+                  <span class="group-name" style="color: #0C2326;">CÀI ĐẶT CHUNG (TOÀN BỘ)</span>
+                  <span class="group-id">Áp dụng mặc định cho tất cả nhóm</span>
+                </div>
+              </div>
+            </td>
+            <!-- Basic -->
+            <td><label class="table-switch"><input type="checkbox" id="g_enabled" onchange="updateGlobal('enabled', this.checked)"><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" id="g_silentListenOnly" onchange="updateGlobal('silentListenOnly', this.checked)"><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" id="g_replyOnlyTagged" onchange="updateGlobal('replyOnlyTagged', this.checked)"><span class="table-slider"></span></label></td>
+            <!-- Persona -->
+            <td>
+              <select class="persona-select" id="g_persona" onchange="updateGlobal('persona', this.value)">
+                <option value="standard">🏛️ Đoàn / Trường</option>
+                <option value="friendly">🎉 Học sinh / CLB</option>
+                <option value="sales">💼 Tư vấn LDP</option>
+              </select>
+            </td>
+            <td><label class="table-switch"><input type="checkbox" id="g_voiceReply" onchange="updateGlobal('voiceReply', this.checked)"><span class="table-slider"></span></label></td>
+            <!-- Media -->
+            <td><label class="table-switch"><input type="checkbox" id="g_autoCreateFile" onchange="updateGlobal('autoCreateFile', this.checked)"><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" id="g_autoReadFile" onchange="updateGlobal('autoReadFile', this.checked)"><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" id="g_autoReadLink" onchange="updateGlobal('autoReadLink', this.checked)"><span class="table-slider"></span></label></td>
+            <!-- Group -->
+            <td><label class="table-switch"><input type="checkbox" id="g_enableGroupDigest" onchange="updateGlobal('enableGroupDigest', this.checked)"><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" id="g_antiSpam" onchange="updateGlobal('antiSpam', this.checked)"><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" id="g_autoWelcomeNewMember" onchange="updateGlobal('autoWelcomeNewMember', this.checked)"><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" id="g_autoPoll" onchange="updateGlobal('autoPoll', this.checked)"><span class="table-slider"></span></label></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Floating Save Bar -->
+    <div class="save-bar">
+      <div class="save-bar-info">
+        <strong>Lưu & Áp Dụng Toàn Hệ Thống</strong>
+        <p>Các công tắc trên bảng sẽ có hiệu lực ngay lập tức cho Zalo Bot</p>
+      </div>
+      <button class="btn btn-primary" onclick="saveConfig()">💾 Lưu Cài Đặt Ma Trận</button>
+    </div>
+  </div>
+
+  <script>
+    let config = { global: {}, groups: {} };
+    let discoveredGroups = [];
+
+    async function init() {
+      await loadStatus();
+      await loadConfig();
+      await fetchDiscoveredGroups();
+      renderMatrix();
+    }
+
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        const badge = document.getElementById('botStatusBadge');
+        const text = document.getElementById('botStatusText');
+        if (data.status === 'logged-in') {
+          badge.className = 'status-badge';
+          const name = data.user?.display_name || data.user?.name || 'Zalo Bot';
+          text.textContent = `Online: ${name}`;
+        } else {
+          badge.className = 'status-badge offline';
+          text.textContent = 'Chưa đăng nhập (Quét QR)';
+        }
+      } catch (err) { console.error(err); }
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        config = await res.json();
+        if (!config.global) config.global = {};
+        if (!config.groups) config.groups = {};
+
+        const g = config.global;
+        // Điền số điện thoại chủ nhân
+        const adminInput = document.getElementById('adminPhoneInput');
+        if (g.adminUids && g.adminUids.length > 0) {
+          adminInput.value = g.adminUids[0];
+        }
+
+        document.getElementById('g_enabled').checked = g.enabled !== false;
+        document.getElementById('g_silentListenOnly').checked = !!g.silentListenOnly;
+        document.getElementById('g_replyOnlyTagged').checked = g.replyOnlyTagged !== false;
+        document.getElementById('g_persona').value = g.persona || 'friendly';
+        document.getElementById('g_voiceReply').checked = !!g.voiceReply;
+        document.getElementById('g_autoCreateFile').checked = g.autoCreateFile !== false;
+        document.getElementById('g_autoReadFile').checked = g.autoReadFile !== false;
+        document.getElementById('g_autoReadLink').checked = g.autoReadLink !== false;
+        document.getElementById('g_enableGroupDigest').checked = g.enableGroupDigest !== false;
+        document.getElementById('g_antiSpam').checked = g.antiSpam !== false;
+        document.getElementById('g_autoWelcomeNewMember').checked = g.autoWelcomeNewMember !== false;
+        document.getElementById('g_autoPoll').checked = g.autoPoll !== false;
+      } catch (err) { console.error(err); }
+    }
+
+    async function setAdminPhone() {
+      const phone = document.getElementById('adminPhoneInput').value.trim();
+      if (!phone) {
+        alert('Vui lòng nhập số điện thoại hoặc UID của chủ nhân!');
+        return;
+      }
+      config.global.adminUids = [phone];
+      await saveConfig();
+      showToast(`👑 Đã nhận diện [${phone}] là Chủ nhân Super Admin!`);
+    }
+
+    async function fetchDiscoveredGroups() {
+      try {
+        const res = await fetch('/api/groups');
+        const data = await res.json();
+        if (data.ok && data.groups) {
+          discoveredGroups = data.groups;
+        }
+      } catch (err) { console.error('fetchDiscoveredGroups error:', err); }
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg || '🎉 Đã lưu cài đặt ma trận thành công!';
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 3000);
+    }
+
+    async function renderMatrix() {
+      const tbody = document.getElementById('matrixBody');
+      const globalRowHtml = document.getElementById('globalRow').outerHTML;
+      
+      let parsedGroups = [];
+      if (discoveredGroups) {
+        if (Array.isArray(discoveredGroups)) {
+          parsedGroups = discoveredGroups;
+        } else if (discoveredGroups.gridVerMap) {
+          parsedGroups = Object.keys(discoveredGroups.gridVerMap).map(gid => ({
+            grid: gid,
+            name: `Nhóm Zalo (${gid.slice(-4)})`
+          }));
+        }
+      }
+
+      const allGroupIds = new Set([
+        ...Object.keys(config.groups || {}),
+        ...parsedGroups.map(g => g.grid || g.id || g.groupId)
+      ]);
+
+      let rowsHtml = '';
+      allGroupIds.forEach(gid => {
+        if (!gid) return;
+        const disc = parsedGroups.find(g => (g.grid || g.id || g.groupId) == gid);
+        const name = config.groups[gid]?.name || disc?.name || `Nhóm Zalo (${gid.slice(-4)})`;
+        const avatar = disc?.avatar || '';
+
+        const gCfg = config.groups[gid] || {
+          enabled: config.global.enabled !== false,
+          silentListenOnly: !!config.global.silentListenOnly,
+          replyOnlyTagged: config.global.replyOnlyTagged !== false,
+          persona: config.global.persona || 'friendly',
+          voiceReply: !!config.global.voiceReply,
+          autoCreateFile: config.global.autoCreateFile !== false,
+          autoReadFile: config.global.autoReadFile !== false,
+          autoReadLink: config.global.autoReadLink !== false,
+          enableGroupDigest: config.global.enableGroupDigest !== false,
+          antiSpam: config.global.antiSpam !== false,
+          autoWelcomeNewMember: config.global.autoWelcomeNewMember !== false,
+          autoPoll: config.global.autoPoll !== false
+        };
+
+        if (!config.groups[gid]) {
+          config.groups[gid] = { name, ...gCfg };
+        }
+
+        const avatarMarkup = avatar 
+          ? `<img src="${avatar}" alt="${name}">`
+          : (name.charAt(0).toUpperCase() || '👥');
+
+        rowsHtml += `
+          <tr class="group-data-row" data-gid="${gid}" data-name="${name.toLowerCase()}">
+            <td class="sticky-col">
+              <div class="group-cell">
+                <div class="group-avatar">${avatarMarkup}</div>
+                <div class="group-meta">
+                  <div style="display:flex; align-items:center; gap:6px;">
+                    <span class="group-name" id="name_display_${gid}">${name}</span>
+                    <button class="edit-btn" onclick="renameGroupInline('${gid}')" title="Đổi tên hiển thị">✏️</button>
+                  </div>
+                  <span class="group-id">${gid}</span>
+                </div>
+              </div>
+            </td>
+            <!-- Basic -->
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'enabled', this.checked)" ${gCfg.enabled ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'silentListenOnly', this.checked)" ${gCfg.silentListenOnly ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'replyOnlyTagged', this.checked)" ${gCfg.replyOnlyTagged ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <!-- Persona -->
+            <td>
+              <select class="persona-select" onchange="updateGroup('${gid}', 'persona', this.value)">
+                <option value="standard" ${gCfg.persona === 'standard' ? 'selected' : ''}>🏛️ Đoàn/Trường</option>
+                <option value="friendly" ${gCfg.persona === 'friendly' ? 'selected' : ''}>🎉 Học sinh/CLB</option>
+                <option value="sales" ${gCfg.persona === 'sales' ? 'selected' : ''}>💼 Tư vấn LDP</option>
+              </select>
+            </td>
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'voiceReply', this.checked)" ${gCfg.voiceReply ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <!-- Media -->
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'autoCreateFile', this.checked)" ${gCfg.autoCreateFile ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'autoReadFile', this.checked)" ${gCfg.autoReadFile ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'autoReadLink', this.checked)" ${gCfg.autoReadLink ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <!-- Group -->
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'enableGroupDigest', this.checked)" ${gCfg.enableGroupDigest ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'antiSpam', this.checked)" ${gCfg.antiSpam ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'autoWelcomeNewMember', this.checked)" ${gCfg.autoWelcomeNewMember ? 'checked' : ''}><span class="table-slider"></span></label></td>
+            <td><label class="table-switch"><input type="checkbox" onchange="updateGroup('${gid}', 'autoPoll', this.checked)" ${gCfg.autoPoll ? 'checked' : ''}><span class="table-slider"></span></label></td>
+          </tr>
+        `;
+      });
+
+      tbody.innerHTML = globalRowHtml + rowsHtml;
+    }
+
+    function renameGroupInline(gid) {
+      const currentName = config.groups[gid]?.name || '';
+      const newName = prompt('Nhập tên đặt cho nhóm này:', currentName);
+      if (newName && newName.trim()) {
+        if (!config.groups[gid]) config.groups[gid] = {};
+        config.groups[gid].name = newName.trim();
+        renderMatrix();
+      }
+    }
+
+    function updateGlobal(key, val) {
+      config.global[key] = val;
+    }
+
+    function updateGroup(gid, key, val) {
+      if (!config.groups[gid]) config.groups[gid] = {};
+      config.groups[gid][key] = val;
+    }
+
+    function toggleAllCol(key) {
+      const nextVal = !config.global[key];
+      config.global[key] = nextVal;
+      const el = document.getElementById(`g_${key}`);
+      if (el) el.checked = nextVal;
+
+      Object.keys(config.groups || {}).forEach(gid => {
+        config.groups[gid][key] = nextVal;
+      });
+      renderMatrix();
+    }
+
+    function filterGroups() {
+      const q = document.getElementById('searchInput').value.toLowerCase();
+      document.querySelectorAll('.group-data-row').forEach(row => {
+        const name = row.dataset.name || '';
+        const gid = row.dataset.gid || '';
+        if (name.includes(q) || gid.includes(q)) {
+          row.style.display = '';
+        } else {
+          row.style.display = 'none';
+        }
+      });
+    }
+
+    function addManualGroup() {
+      const gid = prompt('Nhập ID nhóm Zalo:');
+      if (!gid) return;
+      const name = prompt('Nhập tên nhóm:') || gid;
+      config.groups[gid] = {
+        name,
+        enabled: true,
+        silentListenOnly: false,
+        replyOnlyTagged: true,
+        persona: 'friendly',
+        voiceReply: false,
+        autoCreateFile: true,
+        autoReadFile: true,
+        autoReadLink: true,
+        enableGroupDigest: true,
+        antiSpam: true,
+        autoWelcomeNewMember: true,
+        autoPoll: true
+      };
+      renderMatrix();
+    }
+
+    async function refreshGroupList() {
+      await fetchDiscoveredGroups();
+      renderMatrix();
+    }
+
+    async function saveConfig() {
+      const phone = document.getElementById('adminPhoneInput').value.trim();
+      if (phone) {
+        config.global.adminUids = [phone];
+      }
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast('🎉 Đã lưu cài đặt ma trận thành công!');
+        }
+      } catch (err) {
+        alert('Lỗi lưu cài đặt: ' + err.message);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

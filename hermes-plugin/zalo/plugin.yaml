@@ -1,0 +1,44 @@
+name: zalo-platform
+label: Zalo
+kind: platform
+version: 1.0.0
+description: >
+  Zalo gateway adapter for Hermes Agent.
+
+  Zalo has no official personal-account bot API, and the two Python
+  libraries for it are not usable (zlapi is marked stop_updating and lost
+  its login server; zca-py is alpha). This adapter therefore talks to a
+  small Node sidecar that runs zca-js — the actively maintained JS
+  library — over a loopback WebSocket. The sidecar owns the Zalo session
+  (QR login, cookie persistence); this adapter owns the Hermes side
+  (routing, allowlists, agent dispatch), so Zalo behaves like every other
+  Hermes platform: full tools, memory, skills and cron.
+
+  Start the sidecar with:  node E:\Hermes\zca-test\server.js
+author: 2Anh AI Education
+requires_env: []
+optional_env:
+  - name: ZALO_BRIDGE_URL
+    description: "WebSocket URL of the zca-js sidecar (default: ws://127.0.0.1:3873)"
+    prompt: "Zalo bridge URL"
+    password: false
+  - name: ZALO_ALLOWED_USERS
+    description: "Comma-separated Zalo user IDs allowed to talk to the bot"
+    prompt: "Allowed Zalo user IDs (comma-separated)"
+    password: false
+  - name: ZALO_ALLOW_ALL_USERS
+    description: "Allow any Zalo user to trigger the bot (dev only)"
+    prompt: "Allow all Zalo users? (true/false)"
+    password: false
+  - name: ZALO_GROUP_REPLY_ONLY_TAGGED
+    description: "In groups, only reply when the bot is mentioned (default: true)"
+    prompt: "Groups: reply only when tagged? (true/false)"
+    password: false
+  - name: ZALO_HOME_CHANNEL
+    description: "Default Zalo thread ID for cron / notification delivery"
+    prompt: "Home channel thread ID"
+    password: false
+  - name: ZALO_HOME_CHANNEL_NAME
+    description: "Display name for the Zalo home channel"
+    prompt: "Home channel display name"
+    password: false

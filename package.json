@@ -1,0 +1,32 @@
+{
+  "name": "2anh-zalo-bot",
+  "version": "1.0.0",
+  "description": "Cầu nối Zalo cho Hermes Agent — đăng nhập bằng QR, chạy như một nền tảng đầy đủ của Hermes (tools, memory, skills), kèm dashboard quản trị cục bộ.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node scripts/setup.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "zalo",
+    "hermes-agent",
+    "zca-js",
+    "chatbot",
+    "vietnamese"
+  ],
+  "author": "2Anh AI Education",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luonghaianh1208/2anh-zalo-bot.git"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "ws": "^8.21.3",
+    "zca-js": "^2.1.2"
+  }
+}

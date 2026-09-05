@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cấu Hình Tính Cách Bot (Personas) — Zalo Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-cream: #EBDAC3;
+      --surface-cream: #FFFAE6;
+      --surface-white: #FFFFFF;
+      --deep-teal: #19444A;
+      --warm-orange: #DF7921;
+      --golden-yellow: #FFC679;
+      --lime-green: #C6EA84;
+      --bright-cyan: #6FEEFF;
+      --emerald-green: #00A76D;
+      --emerald-green-hover: #008C5A;
+      --text-black: #000000;
+      --text-muted: #555555;
+      --neutral-btn: #E5E3DC;
+      --neutral-btn-hover: #CECCC5;
+      --border-divider: #CECECE;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Nunito', sans-serif;
+      background-color: var(--bg-cream);
+      color: var(--text-black);
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+
+    .container { max-width: 1200px; margin: 0 auto; }
+
+    header {
+      background: var(--surface-cream);
+      border: 2px solid var(--text-black);
+      border-radius: 24px;
+      padding: 18px 26px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      box-shadow: 0 6px 0 var(--text-black);
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 16px; }
+    .brand-icon {
+      width: 50px; height: 50px; background: var(--warm-orange); border: 2px solid var(--text-black);
+      border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 26px;
+      box-shadow: 0 3px 0 var(--text-black);
+    }
+    .brand h1 { font-size: 22px; font-weight: 900; color: var(--deep-teal); }
+    .brand p { font-size: 13px; font-weight: 700; color: var(--text-muted); }
+
+    .btn {
+      font-family: 'Nunito', sans-serif; font-size: 14px; font-weight: 800; padding: 9px 20px;
+      border-radius: 9999px; border: 2px solid var(--text-black); cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      box-shadow: 0 4px 0 var(--text-black); transition: transform 0.1s, box-shadow 0.1s; text-decoration: none;
+    }
+    .btn:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--text-black); }
+    .btn-primary { background: var(--emerald-green); color: var(--surface-white); }
+    .btn-primary:hover { background: var(--emerald-green-hover); }
+    .btn-secondary { background: var(--neutral-btn); color: var(--text-black); }
+    .btn-ghost { background: var(--surface-white); color: var(--text-black); }
+
+    .tabs {
+      display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;
+    }
+    .tab-btn {
+      background: var(--surface-cream); border: 2px solid var(--text-black); border-radius: 16px;
+      padding: 12px 20px; font-family: 'Nunito', sans-serif; font-size: 15px; font-weight: 900;
+      color: var(--deep-teal); cursor: pointer; box-shadow: 0 4px 0 var(--text-black); transition: all 0.15s;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .tab-btn.active {
+      background: var(--deep-teal); color: var(--bright-cyan); transform: translateY(2px); box-shadow: 0 2px 0 var(--text-black);
+    }
+
+    .editor-card {
+      background: var(--surface-cream); border: 2px solid var(--text-black); border-radius: 24px;
+      padding: 26px; box-shadow: 0 8px 0 var(--text-black); margin-bottom: 24px;
+    }
+
+    .form-group { margin-bottom: 20px; }
+    .form-label { display: block; font-size: 14px; font-weight: 900; color: var(--deep-teal); margin-bottom: 8px; }
+    .form-hint { font-size: 12px; font-weight: 700; color: var(--text-muted); margin-top: 4px; }
+
+    .input-text, .textarea {
+      width: 100%; background: var(--surface-white); border: 2px solid var(--text-black);
+      border-radius: 14px; padding: 12px 16px; font-family: 'Nunito', sans-serif; font-size: 14px;
+      font-weight: 700; color: var(--text-black); outline: none; box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .textarea { min-height: 120px; resize: vertical; line-height: 1.6; }
+    .code-editor { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+
+    .slider-row { display: flex; align-items: center; gap: 16px; }
+    .slider { flex: 1; accent-color: var(--emerald-green); height: 8px; }
+    .slider-val { font-family: 'JetBrains Mono', monospace; font-weight: 800; font-size: 15px; width: 40px; }
+
+    .save-bar {
+      position: sticky; bottom: 20px; background: var(--surface-cream); border: 2px solid var(--text-black);
+      border-radius: 20px; padding: 14px 24px; display: flex; justify-content: space-between; align-items: center;
+      box-shadow: 0 6px 0 var(--text-black); z-index: 100;
+    }
+
+    .toast {
+      position: fixed; top: 20px; right: 20px; background: var(--lime-green); color: var(--deep-teal);
+      border: 2px solid var(--text-black); padding: 12px 22px; border-radius: 9999px; font-size: 14px;
+      font-weight: 900; display: none; z-index: 200; box-shadow: 0 5px 0 var(--text-black);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="toast" id="toast">🎉 Đã lưu cấu hình Tính Cách thành công!</div>
+
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="brand-icon">🎭</div>
+        <div>
+          <h1>Cấu Hình Tính Cách Bot (Personas)</h1>
+          <p>Tùy chỉnh Prompt, Văn phong & Lời chào cho từng đối tượng nhóm Zalo</p>
+        </div>
+      </div>
+      <div style="display: flex; gap: 10px;">
+        <a href="/dashboard.html" class="btn btn-ghost">📊 Về Dashboard Ma Trận</a>
+      </div>
+    </header>
+
+    <!-- Tabs for 3 Personas -->
+    <div class="tabs" id="tabsContainer">
+      <button class="tab-btn active" onclick="switchTab('standard')">🏛️ Đoàn / Trường</button>
+      <button class="tab-btn" onclick="switchTab('friendly')">🎉 Học sinh / CLB</button>
+      <button class="tab-btn" onclick="switchTab('sales')">💼 Tư vấn LDP / Khách Hàng</button>
+    </div>
+
+    <!-- Active Persona Editor -->
+    <div class="editor-card">
+      <div class="form-group">
+        <label class="form-label">Tên Nhận Diện Tính Cách</label>
+        <input type="text" id="p_name" class="input-text">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Mô Tả Mục Đích & Bối Cảnh Sử Dụng</label>
+        <input type="text" id="p_desc" class="input-text">
+        <div class="form-hint">Mô tả ngắn gọn bối cảnh nhóm nào nên áp dụng phong cách này</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">System Prompt (Chỉ dẫn hệ thống cho Bot)</label>
+        <textarea id="p_prompt" class="textarea code-editor" style="min-height: 140px;"></textarea>
+        <div class="form-hint">Chỉ đạo vai trò, phong cách xưng hô, quy tắc ứng xử cốt lõi khi nhận diện ở chế độ này</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Câu Chào Mẫu Khi Được Gọi Hoặc Chào Thành Viên Mới</label>
+        <input type="text" id="p_greeting" class="input-text">
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div class="form-group">
+          <label class="form-label">Văn Phong / Giọng Điệu (Tone)</label>
+          <input type="text" id="p_tone" class="input-text">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Độ Sáng Tạo / Linh Hoạt (Creativity: 0.0 - 1.0)</label>
+          <div class="slider-row">
+            <input type="range" id="p_creativity" min="0" max="1" step="0.1" class="slider" oninput="document.getElementById('creativity_val').textContent = this.value">
+            <span class="slider-val" id="creativity_val">0.5</span>
+          </div>
+          <div class="form-hint">Thấp (0.2-0.4): chuẩn xác, nguyên tắc | Cao (0.7-0.9): hài hước, linh hoạt</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Floating Save Bar -->
+    <div class="save-bar">
+      <div>
+        <strong>Lưu Cấu Hình Persona</strong>
+        <p style="font-size:12px; font-weight:700; color:var(--text-muted);">Áp dụng ngay tức thì cho toàn bộ các nhóm đang chọn tính cách này</p>
+      </div>
+      <button class="btn btn-primary" onclick="savePersonas()">💾 Lưu Thiết Lập Tính Cách</button>
+    </div>
+  </div>
+
+  <script>
+    let personasData = {};
+    let activeKey = 'standard';
+
+    async function init() {
+      try {
+        const res = await fetch('/api/personas');
+        personasData = await res.json();
+        renderForm(activeKey);
+      } catch (err) {
+        console.error('Lỗi load personas:', err);
+      }
+    }
+
+    function switchTab(key) {
+      saveCurrentFormToMemory();
+      activeKey = key;
+      document.querySelectorAll('.tab-btn').forEach((btn, idx) => {
+        const keys = ['standard', 'friendly', 'sales'];
+        btn.classList.toggle('active', keys[idx] === key);
+      });
+      renderForm(key);
+    }
+
+    function renderForm(key) {
+      const p = personasData[key] || {};
+      document.getElementById('p_name').value = p.name || '';
+      document.getElementById('p_desc').value = p.description || '';
+      document.getElementById('p_prompt').value = p.system_prompt || '';
+      document.getElementById('p_greeting').value = p.greeting || '';
+      document.getElementById('p_tone').value = p.tone || '';
+      const c = p.creativity !== undefined ? p.creativity : 0.5;
+      document.getElementById('p_creativity').value = c;
+      document.getElementById('creativity_val').textContent = c;
+    }
+
+    function saveCurrentFormToMemory() {
+      if (!personasData[activeKey]) personasData[activeKey] = {};
+      personasData[activeKey].name = document.getElementById('p_name').value;
+      personasData[activeKey].description = document.getElementById('p_desc').value;
+      personasData[activeKey].system_prompt = document.getElementById('p_prompt').value;
+      personasData[activeKey].greeting = document.getElementById('p_greeting').value;
+      personasData[activeKey].tone = document.getElementById('p_tone').value;
+      personasData[activeKey].creativity = parseFloat(document.getElementById('p_creativity').value);
+    }
+
+    async function savePersonas() {
+      saveCurrentFormToMemory();
+      try {
+        const res = await fetch('/api/personas', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(personasData)
+        });
+        const data = await res.json();
+        if (data.ok) {
+          const toast = document.getElementById('toast');
+          toast.style.display = 'block';
+          setTimeout(() => { toast.style.display = 'none'; }, 3000);
+        }
+      } catch (err) {
+        alert('Lỗi lưu cấu hình: ' + err.message);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

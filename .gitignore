@@ -1,0 +1,39 @@
+# ============================================================
+#  KHÔNG BAO GIỜ đưa lên Git — chứa phiên đăng nhập và khoá
+# ============================================================
+
+# Cookie Zalo, IMEI, hồ sơ tài khoản. Ai có file này là đăng nhập
+# được vào tài khoản Zalo đó.
+data/
+!data/.gitkeep
+
+# Biến môi trường: API key, allowlist
+.env
+.env.*
+!.env.example
+
+# Tiến trình đang chạy
+*.pid
+
+# ============================================================
+#  Phụ thuộc và tệp tạm
+# ============================================================
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json
+
+logs/
+*.log
+
+# Python bytecode (plugin Hermes)
+__pycache__/
+*.py[cod]
+
+# Hệ điều hành / trình soạn thảo
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
