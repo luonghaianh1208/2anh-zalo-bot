@@ -488,6 +488,31 @@ KB_TEXT_SUFFIXES = {
     ".csv", ".xml", ".rst", ".ini", ".toml",
 }
 
+# Tài liệu nhị phân đọc được nhờ bộ trích văn bản sẵn có của Hermes
+# (``tools/read_extract.py``). Kho tài liệu thực tế của một đơn vị phần lớn là
+# .docx và .pdf chứ không phải Markdown, nên chỉ nhận tệp văn bản thuần thì
+# danh sách sẽ rỗng.
+KB_DOC_SUFFIXES = {".docx", ".xlsx", ".pdf", ".doc", ".pptx", ".ppt", ".rtf", ".epub", ".odt"}
+
+
+def _kb_readable(suffix: str) -> bool:
+    return suffix.lower() in KB_TEXT_SUFFIXES or suffix.lower() in KB_DOC_SUFFIXES
+
+
+def _kb_extract(path) -> Optional[str]:
+    """Rút văn bản từ tài liệu nhị phân. None nghĩa là không rút được."""
+    try:
+        from tools.read_extract import extract_document_text, is_extractable_document
+    except Exception:
+        return None
+    try:
+        if not is_extractable_document(str(path)):
+            return None
+        return extract_document_text(str(path))
+    except Exception as exc:
+        logger.debug("[zalo] không rút được văn bản từ %s: %s", path, exc)
+        return None
+
 # Thư mục không bao giờ đọc tới, kể cả khi nằm trong kho.
 #
 # Kho tài liệu thường trỏ vào một thư mục dự án chứ không phải một thư mục
@@ -560,19 +585,56 @@ async def zalo_kb_list(args: Dict[str, Any], **_kw) -> str:
         return _err("chưa cấu hình kho tài liệu (ZALO_KB_DIR)")
 
     query = (args.get("query") or "").strip().lower()
+    files, skipped = _kb_walk(root, query)
+    payload = {"root": root.name or str(root), "files": files, "count": len(files)}
+    if skipped:
+        payload["skipped"] = skipped
+    return _ok(payload)
+
+
+def _kb_walk(root, query: str, limit: int = 200):
+    """Duyệt kho tài liệu, bỏ qua những nhánh không đọc được.
+
+    Dùng ``os.walk`` chứ không phải ``Path.rglob``: kho tài liệu hay nằm trên
+    ổ mạng (RaiDrive, OneDrive, SMB) nơi một đường dẫn quá dài hoặc một thư
+    mục mất kết nối làm cả phép duyệt ném lỗi giữa chừng. Ở đây một nhánh
+    hỏng chỉ bị bỏ qua, phần còn lại vẫn liệt kê được.
+    """
+    import os
+
     files = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in KB_TEXT_SUFFIXES:
-            continue
-        rel = path.relative_to(root).as_posix()
-        if not _kb_allowed(rel):
-            continue
-        if query and query not in rel.lower():
-            continue
-        files.append({"path": rel, "size": path.stat().st_size})
-        if len(files) >= 200:
-            break
-    return _ok({"root": root.name, "files": files, "count": len(files)})
+    skipped = 0
+    root_str = str(root)
+
+    def on_error(_exc):
+        nonlocal skipped
+        skipped += 1
+
+    for dirpath, dirnames, filenames in os.walk(root_str, onerror=on_error):
+        # Cắt sớm những thư mục không bao giờ đọc tới — đỡ phải lội vào
+        # node_modules hay .git trên ổ mạng chậm.
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".") and d.lower() not in KB_SKIP_DIRS
+        ]
+        for name in sorted(filenames):
+            suffix = os.path.splitext(name)[1]
+            if not _kb_readable(suffix):
+                continue
+            full = os.path.join(dirpath, name)
+            try:
+                rel = os.path.relpath(full, root_str).replace("\\", "/")
+                if not _kb_allowed(rel):
+                    continue
+                if query and query not in rel.lower():
+                    continue
+                files.append({"path": rel, "size": os.path.getsize(full)})
+            except OSError:
+                skipped += 1
+                continue
+            if len(files) >= limit:
+                return files, skipped
+    return files, skipped
 
 
 async def zalo_kb_read(args: Dict[str, Any], **_kw) -> str:
@@ -593,8 +655,21 @@ async def zalo_kb_read(args: Dict[str, Any], **_kw) -> str:
     if not _kb_allowed(target.relative_to(root).as_posix()):
         return _err(f"không có tệp '{rel}' trong kho tài liệu")
 
-    if target.suffix.lower() not in KB_TEXT_SUFFIXES:
-        return _err(f"chỉ đọc được tệp văn bản, không đọc '{target.suffix}'")
+    if not _kb_readable(target.suffix):
+        return _err(f"không đọc được định dạng '{target.suffix}'")
+
+    rel_out = target.relative_to(root).as_posix()
+
+    # Tài liệu nhị phân (.docx, .pdf…) đi qua bộ trích văn bản của Hermes.
+    if target.suffix.lower() in KB_DOC_SUFFIXES:
+        text = _kb_extract(target)
+        if text is None:
+            return _err(
+                f"không rút được nội dung từ '{rel_out}'. Tệp có thể là bản quét "
+                "ảnh không có lớp chữ, hoặc thiếu thư viện đọc định dạng này."
+            )
+        truncated = len(text) > KB_MAX_BYTES
+        return _ok({"path": rel_out, "content": text[:KB_MAX_BYTES], "truncated": truncated})
 
     try:
         raw = target.read_bytes()[: KB_MAX_BYTES + 1]
@@ -602,10 +677,9 @@ async def zalo_kb_read(args: Dict[str, Any], **_kw) -> str:
         return _err(f"không đọc được tệp: {exc}")
 
     truncated = len(raw) > KB_MAX_BYTES
-    text = raw[:KB_MAX_BYTES].decode("utf-8", errors="replace")
     return _ok({
-        "path": target.relative_to(root).as_posix(),
-        "content": text,
+        "path": rel_out,
+        "content": raw[:KB_MAX_BYTES].decode("utf-8", errors="replace"),
         "truncated": truncated,
     })
 
