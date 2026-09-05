@@ -768,6 +768,81 @@ async def zalo_web_read(args: Dict[str, Any], **_kw) -> str:
 
 
 # =====================================================================
+#  Nhóm 9 — Sổ hồ sơ người quen
+# =====================================================================
+#
+# ``memories/USER.md`` của Hermes chỉ có một hồ sơ — của chủ nhân. Trong nhóm
+# Zalo thì mỗi người một khác, nên cần cuốn sổ tra theo UID.
+#
+# Ranh giới: hồ sơ ở đây là lời tự khai, không phải danh tính đã xác thực. Nó
+# chỉ dùng để xưng hô và hiểu ngữ cảnh, không bao giờ dùng để cấp quyền —
+# quyền vẫn chỉ dựa vào ZALO_ALLOWED_USERS.
+
+async def zalo_remember_person(args: Dict[str, Any], **_kw) -> str:
+    from .people import remember_person
+
+    turn = _turn()
+    sender = turn.get("sender_uid") or ""
+    if not sender:
+        return _err("không xác định được người đang trò chuyện")
+
+    # Chủ nhân ghi hộ được cho người khác; người thường chỉ ghi cho chính mình.
+    # Nếu ai cũng ghi hộ được thì một người có thể gán nhãn sai cho người khác,
+    # rồi bot mang nhãn đó ra dùng ở lượt sau.
+    target = str(args.get("user_id") or "").strip() or sender
+    if target != sender and not turn.get("is_owner"):
+        return _err("chỉ ghi được hồ sơ của chính mình")
+
+    fields = args.get("fields")
+    if fields is not None and not isinstance(fields, dict):
+        return _err("`fields` phải là một đối tượng, ví dụ {\"lĩnh vực\": \"kỹ thuật\"}")
+
+    if not any([args.get("name"), args.get("note"), fields]):
+        return _err("cần ít nhất một trong `name`, `note`, `fields`")
+
+    try:
+        entry = remember_person(
+            target,
+            name=args.get("name", ""),
+            note=args.get("note", ""),
+            fields=fields,
+            updated_by=sender,
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+    return _ok({"user_id": target, "profile": entry})
+
+
+async def zalo_recall_person(args: Dict[str, Any], **_kw) -> str:
+    from .people import get_person
+
+    turn = _turn()
+    sender = turn.get("sender_uid") or ""
+    target = str(args.get("user_id") or "").strip() or sender
+    if target != sender and not turn.get("is_owner"):
+        return _err("chỉ xem được hồ sơ của chính mình")
+
+    person = get_person(target)
+    if not person:
+        return _ok({"user_id": target, "profile": None, "note": "chưa có hồ sơ"})
+    return _ok({"user_id": target, "profile": person})
+
+
+async def zalo_list_people(args: Dict[str, Any], **_kw) -> str:
+    from .people import list_people
+    return _ok(list_people(limit=max(1, min(int(args.get("limit", 50) or 50), 200))))
+
+
+async def zalo_forget_person(args: Dict[str, Any], **_kw) -> str:
+    from .people import forget_person
+
+    uid = str(args.get("user_id") or "").strip()
+    if not uid:
+        return _err("cần `user_id`")
+    return _ok({"user_id": uid, "removed": forget_person(uid)})
+
+
+# =====================================================================
 #  Khai báo công cụ
 # =====================================================================
 
@@ -1169,6 +1244,47 @@ TOOLS = [
         },
         [],
     ), zalo_web_read, TOOLSET_PUBLIC),
+
+    # --- Nhóm 9: sổ hồ sơ người quen ---
+    ("zalo_remember_person", "🧠", _schema(
+        "zalo_remember_person",
+        "Ghi nhớ thông tin người đang trò chuyện để lần sau xưng hô và tư vấn "
+        "cho đúng. Gọi khi họ tự giới thiệu — tên, công việc, lĩnh vực, sở "
+        "thích, nhu cầu. Chỉ lưu điều họ tự nói ra, đừng suy đoán. Không lưu "
+        "thông tin nhạy cảm như số tài khoản hay mật khẩu.",
+        {
+            "name": {"type": "string", "description": "Tên hoặc cách xưng hô họ muốn."},
+            "note": {"type": "string", "description": "Ghi chú ngắn về họ."},
+            "fields": {"type": "object",
+                       "description": "Các mục rời, ví dụ {\"lĩnh vực\": \"kỹ thuật\", \"đơn vị\": \"phòng IT\"}."},
+            "user_id": {"type": "string",
+                        "description": "Chỉ chủ nhân mới ghi hộ người khác được. Bỏ trống là ghi cho người đang nhắn."},
+        },
+        [],
+    ), zalo_remember_person, TOOLSET_PUBLIC),
+
+    ("zalo_recall_person", "🔖", _schema(
+        "zalo_recall_person",
+        "Xem lại hồ sơ đã lưu của một người. Thường không cần gọi — hồ sơ của "
+        "người đang nhắn đã được kẹp sẵn vào đầu cuộc trò chuyện.",
+        {"user_id": {"type": "string",
+                     "description": "Bỏ trống là xem hồ sơ của chính người đang nhắn."}},
+        [],
+    ), zalo_recall_person, TOOLSET_PUBLIC),
+
+    ("zalo_list_people", "📒", _schema(
+        "zalo_list_people",
+        "Liệt kê những người bot đã ghi nhớ, mới nhất trước.",
+        {"limit": {"type": "integer", "description": "Số hồ sơ, tối đa 200. Mặc định 50."}},
+        [],
+    ), zalo_list_people, TOOLSET_OWNER),
+
+    ("zalo_forget_person", "🗑️", _schema(
+        "zalo_forget_person",
+        "Xoá hồ sơ một người khỏi sổ nhớ.",
+        {"user_id": {"type": "string", "description": "UID Zalo của người cần xoá."}},
+        ["user_id"],
+    ), zalo_forget_person, TOOLSET_OWNER),
 ]
 
 

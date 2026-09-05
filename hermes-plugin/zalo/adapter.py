@@ -377,8 +377,19 @@ class ZaloAdapter(BasePlatformAdapter):
         except (ValueError, OSError, TypeError):
             timestamp = datetime.now(tz=timezone.utc)
 
+        # Kẹp hồ sơ người quen vào đầu tin. Nhờ đó bot xưng hô đúng và nhớ
+        # bối cảnh của họ ngay từ câu đầu, không phải hỏi lại mỗi lần.
+        prompt_text = self._strip_mention(text)
+        try:
+            from .people import describe_person
+            known = describe_person(sender_uid)
+        except Exception:
+            known = ""
+        if known:
+            prompt_text = f"[Người nhắn — {sender_name}: {known}]\n{prompt_text}"
+
         event = MessageEvent(
-            text=self._strip_mention(text),
+            text=prompt_text,
             message_type=MessageType.TEXT,
             user_id=sender_uid,
             user_name=sender_name,

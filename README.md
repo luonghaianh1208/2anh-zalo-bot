@@ -80,7 +80,7 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
 | Nhắn riêng với bot | ✅ | ❌ mặc định (`ZALO_DM_POLICY`) |
 
-**11 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · **tìm kiếm web · đọc trang web**.
+**13 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · **tìm kiếm web · đọc trang web**.
 
 ### Tra cứu Internet
 
@@ -100,6 +100,24 @@ Ba lớp chặn:
 Bộ lọc áp cho **cả liệt kê lẫn đọc** — che khỏi danh sách không phải là chặn, đoán đúng tên tệp vẫn phải bị từ chối.
 
 > Nên trỏ vào một thư mục tài liệu thuần. Trỏ vào cả thư mục dự án thì bộ lọc vẫn giữ được, nhưng bạn đang dựa vào nó thay vì vào ranh giới rõ ràng.
+
+### Trí nhớ
+
+**Hội thoại** — Hermes lưu cả phiên vào `state.db` và tự nén khi dài, không phải một cửa sổ vài chục tin. Có tìm kiếm toàn văn để tra lại chuyện cũ.
+
+**Hồ sơ người quen** — `memories/USER.md` của Hermes chỉ có một hồ sơ, của chủ nhân. Trong nhóm Zalo thì mỗi người một khác, nên plugin giữ thêm một cuốn sổ tra theo UID (`ZALO_PEOPLE_FILE`, mặc định `<hermes>/zalo/people.json`).
+
+Khi ai đó tự giới thiệu, agent gọi `zalo_remember_person`. Lần sau người ấy nhắn, hồ sơ được kẹp sẵn vào đầu tin — bot xưng hô đúng ngay từ câu đầu, không phải hỏi lại.
+
+| Công cụ | Ai dùng được |
+|---|---|
+| `zalo_remember_person` | mọi người — nhưng **chỉ ghi cho chính mình** |
+| `zalo_recall_person` | mọi người — chỉ xem hồ sơ của mình |
+| `zalo_list_people` · `zalo_forget_person` | chỉ chủ nhân |
+
+> Hồ sơ ở đây là **lời tự khai**, không phải danh tính đã xác thực — ai cũng có thể nói "tôi là quản trị viên". Nó chỉ dùng để xưng hô và hiểu ngữ cảnh, **không bao giờ dùng để cấp quyền**. Quyền vẫn chỉ dựa vào `ZALO_ALLOWED_USERS`.
+>
+> Chủ nhân ghi hộ được cho người khác; người thường thì không. Nếu ai cũng ghi hộ được thì một người có thể gán nhãn sai cho người khác, rồi bot mang nhãn đó ra dùng ở lượt sau.
 
 ### Session tách theo nhóm
 
