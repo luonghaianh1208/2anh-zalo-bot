@@ -373,9 +373,16 @@ class ZaloAdapter(BasePlatformAdapter):
         )
 
         # Cử chỉ lịch sự của Zalo: báo đã xem + thả cảm xúc hợp ngữ cảnh.
-        # Chỉ làm cho tin nhắn thực sự được xử lý — thả cảm xúc cho mọi tin
-        # trong một nhóm đông sẽ thành quấy rối.
-        if msg_id and self._ack_gestures:
+        #
+        # Chỉ làm với người thật sự được phép sai bảo bot. Gateway sẽ chặn
+        # người lạ ở bước sau, nhưng nếu thả cảm xúc trước đó thì họ thấy bot
+        # thả tim rồi im bặt — vừa kỳ quặc vừa để lộ là có bot đang nghe.
+        #
+        # Cố tình chặt hơn gateway một chút: gateway còn cho qua bằng DM
+        # pairing hay GATEWAY_ALLOW_ALL_USERS, những đường adapter không nhìn
+        # thấy. Người hợp lệ qua các đường đó chỉ mất cử chỉ chào hỏi, vẫn
+        # được trả lời đầy đủ — đánh đổi đáng giá so với việc rò rỉ.
+        if msg_id and self._ack_gestures and self._may_greet(sender_uid):
             await self._command(
                 {
                     "type": "ack_message",
@@ -423,6 +430,17 @@ class ZaloAdapter(BasePlatformAdapter):
         if name:
             cleaned = re.sub(rf"@{re.escape(name)}", "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip() or text
+
+    def _may_greet(self, sender_uid: str) -> bool:
+        """Người này có nằm trong allowlist không.
+
+        Đọc cùng biến môi trường mà gateway dùng (``ZALO_ALLOWED_USERS``,
+        khai báo ở ``register_platform``), nên hai bên không lệch nhau.
+        """
+        if _truthy(_get_scoped_secret("ZALO_ALLOW_ALL_USERS", "false")):
+            return True
+        allowed = _split_ids(_get_scoped_secret("ZALO_ALLOWED_USERS", "") or "")
+        return bool(allowed) and str(sender_uid) in allowed
 
     def _is_duplicate(self, msg_id: str) -> bool:
         now = time.time()
