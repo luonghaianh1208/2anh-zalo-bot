@@ -76,7 +76,13 @@ from gateway.platforms.base import (
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
 from agent.secret_scope import get_secret as _scoped_get_secret
 
-from .tools import register_tools, set_active_adapter, clear_active_adapter
+from .tools import (
+    register_tools,
+    set_active_adapter,
+    clear_active_adapter,
+    set_turn_context,
+    TOOLSET_PUBLIC,
+)
 
 
 def _get_scoped_secret(name, default=None):
@@ -398,6 +404,16 @@ class ZaloAdapter(BasePlatformAdapter):
                 expect_ack=False,
             )
 
+        # Ghi lại ai đang hỏi và ở đâu, để các công cụ công khai biết đường
+        # khoá phạm vi. Đặt ngay trước handle_message: gateway spawn task con
+        # từ đây, và task con kế thừa context của cha.
+        set_turn_context(
+            sender_uid=sender_uid,
+            thread_id=thread_id,
+            is_group=is_group,
+            is_owner=self._is_owner(sender_uid),
+        )
+
         await self.handle_message(event)
 
     def _is_mentioned(self, frame: Dict[str, Any], text: str) -> bool:
@@ -431,16 +447,37 @@ class ZaloAdapter(BasePlatformAdapter):
             cleaned = re.sub(rf"@{re.escape(name)}", "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip() or text
 
+    def toolsets_for_source(self, source) -> Optional[List[str]]:
+        """Quyết định người này được dùng bộ công cụ nào.
+
+        Gateway hỏi hàm này trước mỗi lượt agent chạy. Trả về ``None`` nghĩa là
+        dùng cấu hình mặc định của nền tảng.
+
+        Điểm cốt lõi: ``hermes-zalo`` kéo theo cả bộ công cụ lõi của Hermes —
+        ``terminal``, ``read_file``, ``write_file``, ``browser_*``. Ai được
+        dùng nó là chạy được lệnh shell và đọc được mọi tệp trên máy chủ, kể cả
+        tệp chứa khoá API. Nên người ngoài chỉ nhận ``zalo_public``: mười công
+        cụ tác động trong đúng cuộc trò chuyện của họ, không hơn.
+        """
+        uid = str(getattr(source, "user_id", "") or "")
+        if self._is_owner(uid):
+            return [f"hermes-{self.name}", TOOLSET_PUBLIC]
+        return [TOOLSET_PUBLIC]
+
+    def _is_owner(self, sender_uid: str) -> bool:
+        """Người này có nằm trong ZALO_ALLOWED_USERS không."""
+        if _truthy(_get_scoped_secret("ZALO_ALLOW_ALL_USERS", "false")):
+            return True
+        allowed = _split_ids(_get_scoped_secret("ZALO_ALLOWED_USERS", "") or "")
+        return bool(allowed) and str(sender_uid) in allowed
+
     def _may_greet(self, sender_uid: str) -> bool:
         """Người này có nằm trong allowlist không.
 
         Đọc cùng biến môi trường mà gateway dùng (``ZALO_ALLOWED_USERS``,
         khai báo ở ``register_platform``), nên hai bên không lệch nhau.
         """
-        if _truthy(_get_scoped_secret("ZALO_ALLOW_ALL_USERS", "false")):
-            return True
-        allowed = _split_ids(_get_scoped_secret("ZALO_ALLOWED_USERS", "") or "")
-        return bool(allowed) and str(sender_uid) in allowed
+        return self._is_owner(sender_uid)
 
     def _is_duplicate(self, msg_id: str) -> bool:
         now = time.time()

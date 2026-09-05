@@ -14,11 +14,54 @@ hàm dễ làm khoá tài khoản (gửi lời mời kết bạn hàng loạt, c
 nhóm) hoặc chạm tới tiền bạc cố tình bị bỏ ra ngoài.
 """
 
+import contextvars
 import json
 import logging
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Hai toolset, hai mức quyền.
+#
+# TOOLSET_PUBLIC gom những việc chỉ tác động trong chính cuộc trò chuyện đang
+# diễn ra. TOOLSET_OWNER gom những việc vươn ra ngoài nó — sang nhóm khác, sang
+# hồ sơ tài khoản, hoặc phơi ra thông tin riêng của chủ.
+#
+# Toolset công khai KHÔNG kèm bộ công cụ lõi của Hermes (terminal, read_file,
+# write_file, browser…). Đó mới là điểm mấu chốt: nếu người ngoài được dùng
+# `hermes-zalo` thì họ chạy được lệnh shell và đọc được mọi tệp trên máy chủ,
+# kể cả tệp chứa khoá API.
+TOOLSET_PUBLIC = "zalo_public"
+TOOLSET_OWNER = "zalo"
+
+# Ngữ cảnh của lượt tin đang xử lý. Dùng ContextVar chứ không phải biến thường:
+# gateway xử lý nhiều lượt song song, biến thường sẽ lẫn người này sang người
+# kia — đúng loại lỗi khiến ai cũng thành chủ nhân.
+_TURN: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "zalo_turn", default=None
+)
+
+
+def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool, is_owner: bool) -> None:
+    """Adapter gọi trước khi đẩy tin vào agent."""
+    _TURN.set({
+        "sender_uid": str(sender_uid),
+        "thread_id": str(thread_id),
+        "is_group": bool(is_group),
+        "is_owner": bool(is_owner),
+    })
+
+
+def _turn() -> Dict[str, Any]:
+    return _TURN.get() or {}
+
+
+def _current_thread() -> Optional[str]:
+    return _turn().get("thread_id")
+
+
+def _current_thread_kind() -> str:
+    return "group" if _turn().get("is_group") else "dm"
 
 # Adapter đang sống tự ghi tên mình vào đây khi kết nối, để các công cụ tìm
 # được đường ra cầu nối. Công cụ được đăng ký lúc nạp plugin, còn adapter thì
@@ -52,6 +95,36 @@ def _thread_type(kind: Optional[str]) -> int:
     return THREAD_GROUP if str(kind or "").lower() == "group" else THREAD_USER
 
 
+def _scoped_thread(args: Dict[str, Any], key: str = "thread_id") -> tuple:
+    """Chốt hội thoại đích cho một công cụ công khai.
+
+    Người ngoài chỉ được tác động lên đúng cuộc trò chuyện họ đang tham gia.
+    Nếu không ràng buộc, một tham số ``thread_id`` tuỳ ý là đủ để họ nhờ bot
+    gửi tin hay tạo bình chọn trong nhóm khác mà họ không có mặt.
+
+    Trả về ``(thread_id, kind, error)``; ``error`` khác None nghĩa là chặn.
+    """
+    turn = _turn()
+    asked = str(args.get(key) or "").strip()
+    current = _current_thread()
+
+    if turn.get("is_owner"):
+        # Chủ nhân được nhắm tới hội thoại bất kỳ.
+        target = asked or current
+        if not target:
+            return None, None, _err(f"cần `{key}`")
+        kind = args.get("thread_kind") or (_current_thread_kind() if target == current else "dm")
+        return target, kind, None
+
+    if not current:
+        return None, None, _err("không xác định được cuộc trò chuyện hiện tại")
+    if asked and asked != current:
+        return None, None, _err(
+            "chỉ dùng được trong chính cuộc trò chuyện này — không nhắm tới hội thoại khác"
+        )
+    return current, _current_thread_kind(), None
+
+
 async def _invoke(method: str, args: List[Any]) -> str:
     """Gọi một hàm zca-js qua cầu nối và gói kết quả lại thành JSON."""
     adapter = _ACTIVE_ADAPTER
@@ -76,30 +149,31 @@ async def zalo_send_file(args: Dict[str, Any], **_kw) -> str:
     paths = args.get("paths") or ([args["path"]] if args.get("path") else [])
     if not paths:
         return _err("cần `path` hoặc `paths`")
-    thread_id = str(args.get("thread_id") or "")
-    if not thread_id:
-        return _err("cần `thread_id`")
-    return await _invoke("uploadAttachment", [
-        paths, thread_id, _thread_type(args.get("thread_kind")),
-    ])
+    thread_id, kind, err = _scoped_thread(args)
+    if err:
+        return err
+    return await _invoke("uploadAttachment", [paths, thread_id, _thread_type(kind)])
 
 
 async def zalo_send_voice(args: Dict[str, Any], **_kw) -> str:
     url = args.get("url")
-    thread_id = str(args.get("thread_id") or "")
-    if not url or not thread_id:
-        return _err("cần `url` và `thread_id`")
+    if not url:
+        return _err("cần `url`")
+    thread_id, kind, err = _scoped_thread(args)
+    if err:
+        return err
     return await _invoke("sendVoice", [
-        {"voiceUrl": url, "ttl": args.get("ttl", 0)},
-        thread_id, _thread_type(args.get("thread_kind")),
+        {"voiceUrl": url, "ttl": args.get("ttl", 0)}, thread_id, _thread_type(kind),
     ])
 
 
 async def zalo_send_sticker(args: Dict[str, Any], **_kw) -> str:
     keyword = (args.get("keyword") or "").strip()
-    thread_id = str(args.get("thread_id") or "")
-    if not keyword or not thread_id:
-        return _err("cần `keyword` và `thread_id`")
+    if not keyword:
+        return _err("cần `keyword`")
+    thread_id, kind, err = _scoped_thread(args)
+    if err:
+        return err
 
     found = await _invoke("searchSticker", [keyword])
     payload = json.loads(found)
@@ -111,19 +185,18 @@ async def zalo_send_sticker(args: Dict[str, Any], **_kw) -> str:
     if not stickers:
         return _err(f"không tìm thấy sticker nào cho '{keyword}'")
 
-    return await _invoke("sendSticker", [
-        stickers[0], thread_id, _thread_type(args.get("thread_kind")),
-    ])
+    return await _invoke("sendSticker", [stickers[0], thread_id, _thread_type(kind)])
 
 
 async def zalo_send_link(args: Dict[str, Any], **_kw) -> str:
     url = args.get("url")
-    thread_id = str(args.get("thread_id") or "")
-    if not url or not thread_id:
-        return _err("cần `url` và `thread_id`")
+    if not url:
+        return _err("cần `url`")
+    thread_id, kind, err = _scoped_thread(args)
+    if err:
+        return err
     return await _invoke("sendLink", [
-        {"link": url, "msg": args.get("message", "")},
-        thread_id, _thread_type(args.get("thread_kind")),
+        {"link": url, "msg": args.get("message", "")}, thread_id, _thread_type(kind),
     ])
 
 
@@ -154,9 +227,9 @@ async def zalo_list_groups(args: Dict[str, Any], **_kw) -> str:
 
 
 async def zalo_group_members(args: Dict[str, Any], **_kw) -> str:
-    thread_id = str(args.get("thread_id") or "")
-    if not thread_id:
-        return _err("cần `thread_id`")
+    thread_id, _kind, err = _scoped_thread(args)
+    if err:
+        return err
     return await _invoke("getGroupMembersInfo", [thread_id])
 
 
@@ -188,9 +261,11 @@ async def zalo_list_friends(args: Dict[str, Any], **_kw) -> str:
 async def zalo_create_poll(args: Dict[str, Any], **_kw) -> str:
     question = (args.get("question") or "").strip()
     options = args.get("options") or []
-    group_id = str(args.get("group_id") or "")
-    if not question or len(options) < 2 or not group_id:
-        return _err("cần `question`, ít nhất 2 `options`, và `group_id`")
+    if not question or len(options) < 2:
+        return _err("cần `question` và ít nhất 2 `options`")
+    group_id, _kind, err = _scoped_thread(args, "group_id")
+    if err:
+        return err
     return await _invoke("createPoll", [{
         "question": question,
         "options": options,
@@ -217,9 +292,11 @@ async def zalo_lock_poll(args: Dict[str, Any], **_kw) -> str:
 
 async def zalo_create_note(args: Dict[str, Any], **_kw) -> str:
     title = (args.get("title") or "").strip()
-    group_id = str(args.get("group_id") or "")
-    if not title or not group_id:
-        return _err("cần `title` và `group_id`")
+    if not title:
+        return _err("cần `title`")
+    group_id, _kind, err = _scoped_thread(args, "group_id")
+    if err:
+        return err
     return await _invoke("createNote", [{
         "title": title,
         "pinAct": bool(args.get("pin", True)),
@@ -228,23 +305,25 @@ async def zalo_create_note(args: Dict[str, Any], **_kw) -> str:
 
 async def zalo_create_reminder(args: Dict[str, Any], **_kw) -> str:
     title = (args.get("title") or "").strip()
-    thread_id = str(args.get("thread_id") or "")
     start_time = args.get("start_time")
-    if not title or not thread_id or start_time is None:
-        return _err("cần `title`, `thread_id` và `start_time` (mốc thời gian tính bằng mili giây)")
+    if not title or start_time is None:
+        return _err("cần `title` và `start_time` (mốc thời gian tính bằng mili giây)")
+    thread_id, kind, err = _scoped_thread(args)
+    if err:
+        return err
     return await _invoke("createReminder", [{
         "title": title,
         "startTime": int(start_time),
         "repeat": int(args.get("repeat", 0)),
-    }, thread_id, _thread_type(args.get("thread_kind"))])
+    }, thread_id, _thread_type(kind)])
 
 
 async def zalo_list_reminders(args: Dict[str, Any], **_kw) -> str:
-    thread_id = str(args.get("thread_id") or "")
-    if not thread_id:
-        return _err("cần `thread_id`")
+    thread_id, kind, err = _scoped_thread(args)
+    if err:
+        return err
     return await _invoke("getListReminder", [
-        {"page": 1, "count": 20}, thread_id, _thread_type(args.get("thread_kind")),
+        {"page": 1, "count": 20}, thread_id, _thread_type(kind),
     ])
 
 
@@ -431,7 +510,7 @@ TOOLS = [
                       "description": "Nhiều tệp cùng lúc."},
         },
         ["thread_id"],
-    ), zalo_send_file),
+    ), zalo_send_file, TOOLSET_PUBLIC),
 
     ("zalo_send_voice", "🎙️", _schema(
         "zalo_send_voice",
@@ -444,7 +523,7 @@ TOOLS = [
             "ttl": {"type": "integer", "description": "Thời gian tự xoá (ms). 0 = không xoá."},
         },
         ["thread_id", "url"],
-    ), zalo_send_voice),
+    ), zalo_send_voice, TOOLSET_PUBLIC),
 
     ("zalo_send_sticker", "🎨", _schema(
         "zalo_send_sticker",
@@ -456,7 +535,7 @@ TOOLS = [
             "keyword": {"type": "string", "description": "Từ khoá tìm sticker, ví dụ 'vui', 'cảm ơn'."},
         },
         ["thread_id", "keyword"],
-    ), zalo_send_sticker),
+    ), zalo_send_sticker, TOOLSET_PUBLIC),
 
     ("zalo_send_link", "🔗", _schema(
         "zalo_send_link",
@@ -468,7 +547,7 @@ TOOLS = [
             "message": {"type": "string", "description": "Lời nhắn đi kèm."},
         },
         ["thread_id", "url"],
-    ), zalo_send_link),
+    ), zalo_send_link, TOOLSET_PUBLIC),
 
     ("zalo_forward", "↪️", _schema(
         "zalo_forward",
@@ -480,7 +559,7 @@ TOOLS = [
             "thread_kind": _THREAD_KIND,
         },
         ["message", "thread_ids"],
-    ), zalo_forward),
+    ), zalo_forward, TOOLSET_OWNER),
 
     # --- Nhóm 2: đọc ngữ cảnh ---
     ("zalo_read_history", "📜", _schema(
@@ -492,20 +571,20 @@ TOOLS = [
             "count": {"type": "integer", "description": "Số tin muốn đọc (tối đa 100, mặc định 30)."},
         },
         ["thread_id"],
-    ), zalo_read_history),
+    ), zalo_read_history, TOOLSET_OWNER),
 
     ("zalo_list_groups", "👥", _schema(
         "zalo_list_groups",
         "Liệt kê các nhóm Zalo mà tài khoản này đang tham gia.",
         {}, [],
-    ), zalo_list_groups),
+    ), zalo_list_groups, TOOLSET_OWNER),
 
     ("zalo_group_members", "🧑‍🤝‍🧑", _schema(
         "zalo_group_members",
         "Xem danh sách thành viên một nhóm, kèm tên và vai trò.",
         {"thread_id": _GROUP_ID},
         ["thread_id"],
-    ), zalo_group_members),
+    ), zalo_group_members, TOOLSET_PUBLIC),
 
     ("zalo_find_user", "🔍", _schema(
         "zalo_find_user",
@@ -515,20 +594,20 @@ TOOLS = [
             "username": {"type": "string", "description": "Tên đăng nhập Zalo."},
         },
         [],
-    ), zalo_find_user),
+    ), zalo_find_user, TOOLSET_OWNER),
 
     ("zalo_user_info", "👤", _schema(
         "zalo_user_info",
         "Xem hồ sơ một người dùng Zalo theo UID.",
         {"user_id": {"type": "string", "description": "UID Zalo (dãy số dài)."}},
         ["user_id"],
-    ), zalo_user_info),
+    ), zalo_user_info, TOOLSET_OWNER),
 
     ("zalo_list_friends", "📇", _schema(
         "zalo_list_friends",
         "Liệt kê danh bạ bạn bè Zalo.",
         {}, [],
-    ), zalo_list_friends),
+    ), zalo_list_friends, TOOLSET_OWNER),
 
     # --- Nhóm 3: tính năng riêng của Zalo ---
     ("zalo_create_poll", "🗳️", _schema(
@@ -546,21 +625,21 @@ TOOLS = [
             "hide_preview": {"type": "boolean", "description": "Ẩn kết quả cho tới khi khoá."},
         },
         ["group_id", "question", "options"],
-    ), zalo_create_poll),
+    ), zalo_create_poll, TOOLSET_PUBLIC),
 
     ("zalo_poll_detail", "📊", _schema(
         "zalo_poll_detail",
         "Xem kết quả một cuộc bình chọn: ai chọn gì, bao nhiêu phiếu.",
         {"poll_id": {"type": "string", "description": "ID cuộc bình chọn."}},
         ["poll_id"],
-    ), zalo_poll_detail),
+    ), zalo_poll_detail, TOOLSET_PUBLIC),
 
     ("zalo_lock_poll", "🔒", _schema(
         "zalo_lock_poll",
         "Khoá một cuộc bình chọn, không cho bỏ phiếu thêm.",
         {"poll_id": {"type": "string", "description": "ID cuộc bình chọn."}},
         ["poll_id"],
-    ), zalo_lock_poll),
+    ), zalo_lock_poll, TOOLSET_OWNER),
 
     ("zalo_create_note", "📌", _schema(
         "zalo_create_note",
@@ -571,7 +650,7 @@ TOOLS = [
             "pin": {"type": "boolean", "description": "Ghim lên đầu nhóm. Mặc định có."},
         },
         ["group_id", "title"],
-    ), zalo_create_note),
+    ), zalo_create_note, TOOLSET_PUBLIC),
 
     ("zalo_create_reminder", "⏰", _schema(
         "zalo_create_reminder",
@@ -587,14 +666,14 @@ TOOLS = [
                        "description": "0 không lặp, 1 hằng ngày, 2 hằng tuần, 3 hằng tháng."},
         },
         ["thread_id", "title", "start_time"],
-    ), zalo_create_reminder),
+    ), zalo_create_reminder, TOOLSET_PUBLIC),
 
     ("zalo_list_reminders", "🔔", _schema(
         "zalo_list_reminders",
         "Xem các lời nhắc đang đặt trong một hội thoại.",
         {"thread_id": _THREAD_ID, "thread_kind": _THREAD_KIND},
         ["thread_id"],
-    ), zalo_list_reminders),
+    ), zalo_list_reminders, TOOLSET_PUBLIC),
 
     ("zalo_pin_conversation", "📍", _schema(
         "zalo_pin_conversation",
@@ -605,7 +684,7 @@ TOOLS = [
             "pinned": {"type": "boolean", "description": "true để ghim, false để bỏ."},
         },
         ["thread_id"],
-    ), zalo_pin_conversation),
+    ), zalo_pin_conversation, TOOLSET_OWNER),
 
     ("zalo_mute", "🔕", _schema(
         "zalo_mute",
@@ -618,7 +697,7 @@ TOOLS = [
                          "description": "Số giây tắt. -1 là vĩnh viễn (mặc định)."},
         },
         ["thread_id"],
-    ), zalo_mute),
+    ), zalo_mute, TOOLSET_OWNER),
 
     # --- Nhóm 4: sửa sai & quản trị ---
     ("zalo_undo", "↩️", _schema(
@@ -632,7 +711,7 @@ TOOLS = [
             "cli_msg_id": {"type": "string", "description": "cliMsgId của tin nhắn đó."},
         },
         ["thread_id", "msg_id"],
-    ), zalo_undo),
+    ), zalo_undo, TOOLSET_OWNER),
 
     ("zalo_rename_group", "✏️", _schema(
         "zalo_rename_group",
@@ -642,7 +721,7 @@ TOOLS = [
             "name": {"type": "string", "description": "Tên mới."},
         },
         ["group_id", "name"],
-    ), zalo_rename_group),
+    ), zalo_rename_group, TOOLSET_OWNER),
 
     ("zalo_group_member_change", "🚪", _schema(
         "zalo_group_member_change",
@@ -655,7 +734,7 @@ TOOLS = [
             "action": {"type": "string", "enum": ["add", "remove"]},
         },
         ["group_id", "user_ids", "action"],
-    ), zalo_group_member_change),
+    ), zalo_group_member_change, TOOLSET_OWNER),
 
     ("zalo_group_deputy", "🎖️", _schema(
         "zalo_group_deputy",
@@ -666,14 +745,14 @@ TOOLS = [
             "action": {"type": "string", "enum": ["add", "remove"]},
         },
         ["group_id", "user_id", "action"],
-    ), zalo_group_deputy),
+    ), zalo_group_deputy, TOOLSET_OWNER),
 
     ("zalo_pending_members", "📥", _schema(
         "zalo_pending_members",
         "Xem danh sách người đang chờ được duyệt vào nhóm.",
         {"group_id": _GROUP_ID},
         ["group_id"],
-    ), zalo_pending_members),
+    ), zalo_pending_members, TOOLSET_OWNER),
 
     ("zalo_review_member", "✅", _schema(
         "zalo_review_member",
@@ -684,7 +763,7 @@ TOOLS = [
             "approve": {"type": "boolean", "description": "true là duyệt, false là từ chối."},
         },
         ["group_id", "user_ids"],
-    ), zalo_review_member),
+    ), zalo_review_member, TOOLSET_OWNER),
 
     # --- Nhóm 5: lập nhóm & lời mời ---
     ("zalo_create_group", "🆕", _schema(
@@ -699,7 +778,7 @@ TOOLS = [
             "avatar_path": {"type": "string", "description": "Đường dẫn ảnh đại diện nhóm."},
         },
         ["member_ids"],
-    ), zalo_create_group),
+    ), zalo_create_group, TOOLSET_OWNER),
 
     ("zalo_invite_to_groups", "✉️", _schema(
         "zalo_invite_to_groups",
@@ -711,7 +790,7 @@ TOOLS = [
                           "description": "Các nhóm muốn mời vào."},
         },
         ["user_id", "group_ids"],
-    ), zalo_invite_to_groups),
+    ), zalo_invite_to_groups, TOOLSET_OWNER),
 
     ("zalo_group_link", "🔗", _schema(
         "zalo_group_link",
@@ -723,7 +802,7 @@ TOOLS = [
                        "description": "Mặc định 'detail'."},
         },
         ["group_id"],
-    ), zalo_group_link),
+    ), zalo_group_link, TOOLSET_OWNER),
 
     ("zalo_join_group_link", "🚪", _schema(
         "zalo_join_group_link",
@@ -731,7 +810,7 @@ TOOLS = [
         "đọc được tin nhắn của nhóm đó.",
         {"link": {"type": "string", "description": "Link mời nhóm Zalo."}},
         ["link"],
-    ), zalo_join_group_link),
+    ), zalo_join_group_link, TOOLSET_OWNER),
 
     # --- Nhóm 6: hồ sơ tài khoản bot ---
     ("zalo_set_bio", "📝", _schema(
@@ -740,7 +819,7 @@ TOOLS = [
         "rỗng để xoá.",
         {"bio": {"type": "string", "description": "Nội dung mô tả mới."}},
         ["bio"],
-    ), zalo_set_bio),
+    ), zalo_set_bio, TOOLSET_OWNER),
 
     ("zalo_set_active_status", "🟢", _schema(
         "zalo_set_active_status",
@@ -748,23 +827,28 @@ TOOLS = [
         "Tắt đi thì người khác không thấy bot online.",
         {"active": {"type": "boolean", "description": "true là hiện, false là ẩn."}},
         ["active"],
-    ), zalo_set_active_status),
+    ), zalo_set_active_status, TOOLSET_OWNER),
 ]
 
 
 def register_tools(ctx) -> None:
-    """Đăng ký toàn bộ công cụ Zalo vào registry của Hermes."""
-    for name, emoji, schema, handler in TOOLS:
+    """Đăng ký công cụ Zalo, chia làm hai mức quyền."""
+    counts = {TOOLSET_PUBLIC: 0, TOOLSET_OWNER: 0}
+    for name, emoji, schema, handler, toolset in TOOLS:
         try:
             ctx.register_tool(
                 name=name,
-                toolset="zalo",
+                toolset=toolset,
                 schema=schema,
                 handler=handler,
                 is_async=True,
                 description=schema["description"],
                 emoji=emoji,
             )
+            counts[toolset] = counts.get(toolset, 0) + 1
         except Exception as exc:  # pragma: no cover — đăng ký hỏng không được làm chết plugin
             logger.warning("[zalo] không đăng ký được công cụ %s: %s", name, exc)
-    logger.info("[zalo] đã đăng ký %d công cụ", len(TOOLS))
+    logger.info(
+        "[zalo] đã đăng ký %d công cụ — %d công khai, %d chỉ chủ nhân",
+        sum(counts.values()), counts.get(TOOLSET_PUBLIC, 0), counts.get(TOOLSET_OWNER, 0),
+    )

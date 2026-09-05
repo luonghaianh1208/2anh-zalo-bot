@@ -67,6 +67,24 @@ Ví dụ: *"Tạo bình chọn trong nhóm Tổ Hoá hỏi thứ mấy họp đ�
 
 Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắng**. Những hàm dễ làm khoá tài khoản (gửi lời mời kết bạn hàng loạt, chặn người, giải tán nhóm) hay chạm tới tiền bạc cố tình bị bỏ ra ngoài.
 
+### Hai mức quyền
+
+31 công cụ chia làm hai nhóm, quyết định bằng `ZALO_ALLOWED_USERS`:
+
+| | Chủ nhân | Người khác trong nhóm |
+|---|---|---|
+| Toolset | `hermes-zalo` + `zalo_public` | chỉ `zalo_public` |
+| Số công cụ Zalo | 31 | 10 |
+| `terminal`, `read_file`, `write_file` | ✅ | ❌ |
+| `browser_*`, `web_search` | ✅ | ❌ |
+| Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
+
+**10 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · tạo bình chọn · xem kết quả bình chọn · ghim ghi chú · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm.
+
+Điểm cốt lõi: toolset mặc định của mọi nền tảng Hermes (`hermes-<tên>`) **luôn kèm** `terminal`, `read_file`, `write_file`, `browser_*`. Ai được dùng nó là chạy được lệnh shell và đọc được mọi tệp trên máy chủ — kể cả tệp chứa khoá API. Vì vậy người ngoài chỉ nhận `zalo_public`, một toolset riêng không chứa bộ lõi đó.
+
+Công cụ công khai còn bị **khoá phạm vi**: người ngoài truyền `thread_id` của nhóm khác sẽ bị từ chối, chỉ tác động được lên đúng cuộc trò chuyện họ đang tham gia. Ngữ cảnh lượt tin lưu bằng `contextvars` — gateway xử lý nhiều lượt song song, biến thường sẽ lẫn người này sang người kia.
+
 **Trang quét QR** tại `http://127.0.0.1:3872` — chỉ dùng lúc đăng nhập lần đầu và khi phiên hết hạn. Không có trang quản trị: mọi thao tác đều ra lệnh cho agent.
 
 ---
