@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws';
-import { ThreadType } from 'zca-js';
+import { ThreadType, Reactions } from 'zca-js';
 import { formatZaloMarkdown } from './markdown-formatter.js';
+import { pickSmartReaction } from './smart-reaction.js';
 
 /**
  * Cầu nối Zalo ↔ Hermes Agent.
@@ -29,6 +30,45 @@ import { formatZaloMarkdown } from './markdown-formatter.js';
  */
 
 const DEFAULT_PORT = 3873;
+
+/**
+ * Các API zca-js mà Hermes được phép gọi qua lệnh `invoke`.
+ *
+ * Danh sách trắng, không phải danh sách đen: thư viện có 149 hàm, trong đó
+ * nhiều hàm đủ sức làm khoá tài khoản (gửi lời mời kết bạn hàng loạt, chặn
+ * người, giải tán nhóm) hoặc chạm tới tiền bạc (thẻ ngân hàng, catalog bán
+ * hàng). Thà mở thêm từng cái khi thật sự cần còn hơn để agent tự do gọi
+ * bất cứ thứ gì.
+ */
+const ALLOWED_METHODS = new Set([
+  // Gửi nội dung
+  'sendMessage', 'sendVoice', 'sendVideo', 'sendSticker', 'sendLink', 'sendCard',
+  'uploadAttachment', 'forwardMessage',
+  // Sửa sai
+  'undo', 'deleteMessage',
+  // Đọc ngữ cảnh
+  'getGroupChatHistory', 'getGroupMembersInfo', 'getGroupInfo', 'getAllGroups',
+  'getAllFriends', 'getUserInfo', 'findUser', 'findUserByUsername',
+  'getMultiUsersByPhones', 'lastOnline', 'getFriendOnlines', 'fetchAccountInfo',
+  'getOwnId', 'getStickers', 'searchSticker', 'getStickersDetail', 'parseLink',
+  // Tính năng riêng của Zalo
+  'createPoll', 'votePoll', 'getPollDetail', 'lockPoll', 'addPollOptions',
+  'createNote', 'editNote', 'getListBoard',
+  'createReminder', 'editReminder', 'removeReminder', 'getListReminder',
+  'getReminder', 'getReminderResponses',
+  // Quản trị nhóm
+  'changeGroupName', 'changeGroupAvatar', 'updateGroupSettings',
+  'addUserToGroup', 'removeUserFromGroup',
+  'addGroupDeputy', 'removeGroupDeputy',
+  'getPendingGroupMembers', 'reviewPendingMemberRequest',
+  'getGroupLinkInfo', 'enableGroupLink', 'disableGroupLink',
+  // Quản lý hội thoại
+  'setPinnedConversations', 'getPinConversations',
+  'setMute', 'getMute',
+  'addUnreadMark', 'removeUnreadMark', 'getUnreadMark',
+  // Lịch sự
+  'sendSeenEvent', 'sendTypingEvent', 'sendDeliveredEvent', 'addReaction',
+]);
 
 let wss = null;
 let clients = new Set();
@@ -174,9 +214,79 @@ async function handleCommand(ws, cmd) {
       break;
     }
 
+    // Cử chỉ "đã nhận tin" gộp làm một: báo đã xem + thả cảm xúc hợp ngữ cảnh.
+    // Hermes ra lệnh này khi quyết định xử lý một tin nhắn — chỉ nó mới biết
+    // tin nào đáng phản hồi, nên sidecar không tự làm (thả cảm xúc cho mọi
+    // tin trong nhóm đông sẽ thành quấy rối).
+    case 'ack_message': {
+      const dest = {
+        data: { msgId: String(cmd.msgId), cliMsgId: String(cmd.cliMsgId) },
+        threadId: String(cmd.threadId),
+        type: threadType,
+      };
+      if (cmd.seen && cmd.raw) {
+        try {
+          await zaloApi.sendSeenEvent(cmd.raw, threadType);
+        } catch (e) {
+          console.warn('[bridge] sendSeenEvent lỗi:', e?.message || e);
+        }
+      }
+      if (cmd.react !== false && cmd.msgId) {
+        try {
+          const icon = cmd.icon
+            ? (Reactions[cmd.icon] ?? cmd.icon)
+            : pickSmartReaction(cmd.text || '');
+          await zaloApi.addReaction(icon, dest);
+        } catch (e) {
+          console.warn('[bridge] addReaction lỗi:', e?.message || e);
+        }
+      }
+      if (cmd.reqId) send(ws, { type: 'ack', reqId: cmd.reqId, ok: true });
+      break;
+    }
+
+    // Gọi thẳng một hàm zca-js nằm trong danh sách trắng. Nhờ lệnh này mà
+    // thêm tính năng mới chỉ là thêm tool bên Python, không phải sửa cầu nối.
+    case 'invoke': {
+      const method = String(cmd.method || '');
+      if (!ALLOWED_METHODS.has(method)) {
+        if (cmd.reqId) {
+          send(ws, { type: 'ack', reqId: cmd.reqId, ok: false, error: `API không được phép: ${method}` });
+        }
+        break;
+      }
+      if (typeof zaloApi[method] !== 'function') {
+        if (cmd.reqId) {
+          send(ws, { type: 'ack', reqId: cmd.reqId, ok: false, error: `zca-js không có hàm ${method}` });
+        }
+        break;
+      }
+      const args = Array.isArray(cmd.args) ? cmd.args : [];
+      const result = await zaloApi[method](...args);
+      if (cmd.reqId) send(ws, { type: 'ack', reqId: cmd.reqId, ok: true, result: safeResult(result) });
+      break;
+    }
+
     default:
       if (cmd.reqId) send(ws, { type: 'ack', reqId: cmd.reqId, ok: false, error: `lệnh lạ: ${cmd.type}` });
   }
+}
+
+/**
+ * Cắt bớt kết quả trước khi trả về Hermes.
+ *
+ * Vài API trả về danh sách rất dài (toàn bộ bạn bè, lịch sử nhóm) — nhồi hết
+ * vào ngữ cảnh của agent vừa tốn token vừa vô ích. Giới hạn ở đây, agent cần
+ * thêm thì hỏi tiếp.
+ */
+function safeResult(value, maxItems = 200) {
+  if (Array.isArray(value)) {
+    const cut = value.slice(0, maxItems);
+    return cut.length < value.length
+      ? { items: cut, truncated: true, total: value.length }
+      : cut;
+  }
+  return value ?? null;
 }
 
 function send(ws, obj) {

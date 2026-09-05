@@ -44,7 +44,8 @@ export const DEFAULT_CONFIG = {
     autoPoll: true,
     autoReminders: true,
     autoAcceptFriend: false,
-    // Chủ nhân — điền bằng lệnh /sethome trên Zalo, hoặc nhập tay ở dashboard.
+    // Chủ nhân — điền bằng lệnh /sethome trên Zalo. Giá trị thật nằm ở
+    // data/bot_settings.json; đây chỉ là mặc định khi chưa có file đó.
     // UID Zalo là dãy số dài (17-21 chữ số), KHÔNG phải số điện thoại.
     adminUids: [],
     allowedUids: [],        // ai được nhắn riêng khi dmPolicy = "allowlist"

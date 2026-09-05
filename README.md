@@ -52,7 +52,20 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 
 Chuyển chế độ tự động, không cần cấu hình. Xem `/api/status` để biết đang chạy chế độ nào.
 
-**Dashboard cục bộ** tại `http://127.0.0.1:3872` — quét QR, quản lý nhóm, chỉnh tính cách, bật tắt tính năng.
+**25 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
+
+| Nhóm | Công cụ |
+|---|---|
+| Gửi nội dung | `zalo_send_file` `zalo_send_voice` `zalo_send_sticker` `zalo_send_link` `zalo_forward` |
+| Đọc ngữ cảnh | `zalo_read_history` `zalo_list_groups` `zalo_group_members` `zalo_find_user` `zalo_user_info` `zalo_list_friends` |
+| Riêng của Zalo | `zalo_create_poll` `zalo_poll_detail` `zalo_lock_poll` `zalo_create_note` `zalo_create_reminder` `zalo_list_reminders` `zalo_pin_conversation` `zalo_mute` |
+| Sửa sai & quản trị | `zalo_undo` `zalo_rename_group` `zalo_group_member_change` `zalo_group_deputy` `zalo_pending_members` `zalo_review_member` |
+
+Ví dụ: *"Tạo bình chọn trong nhóm Tổ Hoá hỏi thứ mấy họp được, ba phương án thứ 3, 5, 7"* — agent tự gọi `zalo_list_groups` rồi `zalo_create_poll`.
+
+Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắng**. Những hàm dễ làm khoá tài khoản (gửi lời mời kết bạn hàng loạt, chặn người, giải tán nhóm) hay chạm tới tiền bạc cố tình bị bỏ ra ngoài.
+
+**Trang quét QR** tại `http://127.0.0.1:3872` — chỉ dùng lúc đăng nhập lần đầu và khi phiên hết hạn. Không có trang quản trị: mọi thao tác đều ra lệnh cho agent.
 
 ---
 
@@ -160,6 +173,8 @@ Emoji hiển thị gốc, dùng thoải mái.
 
 ## API
 
+Giữ lại để chẩn đoán bằng `curl` — không có giao diện nào gọi chúng nữa.
+
 | Đường dẫn | Việc |
 |---|---|
 | `GET /api/status` | Trạng thái đăng nhập, chế độ, đã cắm Hermes chưa |
@@ -170,7 +185,7 @@ Emoji hiển thị gốc, dùng thoải mái.
 | `GET \| POST /api/personas` | Đọc / ghi `personas.json` |
 | `POST /api/send-home` | Gửi tin nhắn tay tới một UID |
 
-Cổng WebSocket `3873` là giao thức riêng giữa sidecar và Hermes.
+Cổng WebSocket `3873` là giao thức riêng giữa sidecar và Hermes: `hello`, `message`, `ack` đi từ sidecar ra; `send`, `typing`, `ack_message`, `invoke` đi từ Hermes vào.
 
 ---
 

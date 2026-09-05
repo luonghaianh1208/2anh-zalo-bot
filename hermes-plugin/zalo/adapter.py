@@ -76,6 +76,8 @@ from gateway.platforms.base import (
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
 from agent.secret_scope import get_secret as _scoped_get_secret
 
+from .tools import register_tools, set_active_adapter, clear_active_adapter
+
 
 def _get_scoped_secret(name, default=None):
     """Scope-aware credential read with the default-profile startup fallback.
@@ -168,6 +170,16 @@ class ZaloAdapter(BasePlatformAdapter):
                       _get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "true")),
             default=True,
         )
+        # Báo đã xem + thả cảm xúc khi nhận tin. Tắt được cho ai muốn bot
+        # hoạt động kín tiếng.
+        self._ack_gestures: bool = _truthy(
+            extra.get("ack_gestures", _get_scoped_secret("ZALO_ACK_GESTURES", "true")),
+            default=True,
+        )
+        self._auto_react: bool = _truthy(
+            extra.get("auto_react", _get_scoped_secret("ZALO_AUTO_REACT", "true")),
+            default=True,
+        )
 
         self._ws = None
         self._reader_task: Optional[asyncio.Task] = None
@@ -202,11 +214,17 @@ class ZaloAdapter(BasePlatformAdapter):
             return False
 
         self._reader_task = asyncio.create_task(self._read_loop())
+        set_active_adapter(self)   # để các tool zalo_* tìm được đường ra cầu nối
         logger.info("[zalo] connected to sidecar at %s", self._bridge_url)
         return True
 
+    async def invoke(self, method: str, args: list) -> Optional[Dict[str, Any]]:
+        """Gọi một hàm zca-js qua cầu nối. Dùng bởi các tool trong tools.py."""
+        return await self._command({"type": "invoke", "method": method, "args": args}, expect_ack=True)
+
     async def disconnect(self) -> None:
         self._closing = True
+        clear_active_adapter(self)
 
         if self._reader_task:
             self._reader_task.cancel()
@@ -353,6 +371,26 @@ class ZaloAdapter(BasePlatformAdapter):
             "[zalo] %s from %s (%s): %s",
             "group" if is_group else "dm", sender_name, sender_uid, text[:80],
         )
+
+        # Cử chỉ lịch sự của Zalo: báo đã xem + thả cảm xúc hợp ngữ cảnh.
+        # Chỉ làm cho tin nhắn thực sự được xử lý — thả cảm xúc cho mọi tin
+        # trong một nhóm đông sẽ thành quấy rối.
+        if msg_id and self._ack_gestures:
+            await self._command(
+                {
+                    "type": "ack_message",
+                    "threadId": thread_id,
+                    "threadType": THREAD_TYPE_GROUP if is_group else THREAD_TYPE_USER,
+                    "msgId": msg_id,
+                    "cliMsgId": str(frame.get("cliMsgId") or ""),
+                    "text": text,
+                    "seen": True,
+                    "react": self._auto_react,
+                    "raw": frame.get("raw"),
+                },
+                expect_ack=False,
+            )
+
         await self.handle_message(event)
 
     def _is_mentioned(self, frame: Dict[str, Any], text: str) -> bool:
@@ -516,6 +554,10 @@ def _env_enablement() -> Optional[dict]:
 
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin loader at startup."""
+    # Công cụ Zalo: thay cho trang quản trị cũ. Ra lệnh cho agent nhanh hơn
+    # mở trình duyệt và gạt công tắc, lại làm được cả chuỗi việc.
+    register_tools(ctx)
+
     ctx.register_platform(
         name="zalo",
         label="Zalo",
