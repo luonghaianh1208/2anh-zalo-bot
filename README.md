@@ -80,7 +80,13 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
 | Nhắn riêng với bot | ✅ | ❌ mặc định (`ZALO_DM_POLICY`) |
 
-**9 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm · **liệt kê kho tài liệu · đọc tài liệu**.
+**11 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · **tìm kiếm web · đọc trang web**.
+
+### Tra cứu Internet
+
+Hai công cụ web là **bản bọc** của `web_search`/`web_extract` chứ không cấp thẳng. Lý do: mọi toolset sẵn có chứa chúng (`debugging`, `coding`) đều kèm luôn `terminal` và `read_file` — cấp một cái là cấp cả cụm.
+
+Bọc lại còn bịt được một lỗ hổng: `web_extract` nhận URL tuỳ ý, nên nếu để nguyên thì `http://127.0.0.1:20128/v1/models` hay `file:///…/.env` là đủ để đọc nội bộ qua đường Internet. Bản bọc chỉ cho `http`/`https` trỏ ra địa chỉ công cộng — chặn loopback, dải mạng riêng, link-local, và cả `169.254.169.254` (địa chỉ metadata của máy chủ đám mây).
 
 ### Kho tài liệu tư vấn
 

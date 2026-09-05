@@ -611,6 +611,89 @@ async def zalo_kb_read(args: Dict[str, Any], **_kw) -> str:
 
 
 # =====================================================================
+#  Nhóm 8 — Tra cứu Internet (bản bọc, chỉ đọc ra ngoài)
+# =====================================================================
+#
+# Người trong nhóm không được cấp thẳng ``web_search``/``web_extract`` của
+# Hermes. Lý do không phải vì hai công cụ đó nguy hiểm, mà vì mọi toolset sẵn
+# có chứa chúng (``debugging``, ``coding``) đều kèm luôn ``terminal`` và
+# ``read_file`` — cấp một cái là cấp cả cụm.
+#
+# Bọc lại còn được thêm một việc quan trọng: chặn tra cứu quay ngược vào máy
+# chủ. ``web_extract`` nhận URL tuỳ ý, nên nếu để nguyên thì một địa chỉ như
+# ``http://127.0.0.1:20128/v1/models`` hay ``file:///…/.env`` là đủ để đọc
+# nội bộ qua đường Internet.
+
+_BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
+
+
+def _is_public_url(raw: str) -> bool:
+    """Chỉ cho phép http/https trỏ ra địa chỉ công cộng."""
+    import ipaddress
+    from urllib.parse import urlparse
+
+    try:
+        u = urlparse(str(raw).strip())
+    except ValueError:
+        return False
+
+    if u.scheme not in ("http", "https"):
+        return False                      # chặn file://, ftp://, gopher://…
+
+    host = (u.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(_BLOCKED_HOST_SUFFIXES):
+        return False
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True                       # tên miền — để tầng mạng lo tiếp
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+    )
+
+
+async def _core(tool_name: str, args: Dict[str, Any]) -> str:
+    """Gọi lại một công cụ lõi của Hermes qua registry."""
+    from tools.registry import registry
+    try:
+        result = registry.dispatch(tool_name, args)
+        if hasattr(result, "__await__"):
+            result = await result
+        return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as exc:
+        return _err(f"{tool_name} lỗi: {exc}")
+
+
+async def zalo_web_search(args: Dict[str, Any], **_kw) -> str:
+    query = (args.get("query") or "").strip()
+    if not query:
+        return _err("cần `query`")
+    limit = max(1, min(int(args.get("limit", 5) or 5), 10))
+    return await _core("web_search", {"query": query, "limit": limit})
+
+
+async def zalo_web_read(args: Dict[str, Any], **_kw) -> str:
+    raw = args.get("urls") or ([args["url"]] if args.get("url") else [])
+    if isinstance(raw, str):
+        raw = [raw]
+    urls = [str(u).strip() for u in raw if str(u).strip()]
+    if not urls:
+        return _err("cần `url` hoặc `urls`")
+
+    blocked = [u for u in urls if not _is_public_url(u)]
+    if blocked:
+        return _err(
+            "chỉ đọc được địa chỉ web công cộng (http/https), không đọc địa chỉ "
+            f"nội bộ: {', '.join(blocked[:3])}"
+        )
+    return await _core("web_extract", {"urls": urls[:5]})
+
+
+# =====================================================================
 #  Khai báo công cụ
 # =====================================================================
 
@@ -988,6 +1071,30 @@ TOOLS = [
                   "description": "Đường dẫn tương đối trong kho, ví dụ 'docs/bang-gia.md'."}},
         ["path"],
     ), zalo_kb_read, TOOLSET_PUBLIC),
+
+    # --- Nhóm 8: tra cứu Internet ---
+    ("zalo_web_search", "🔎", _schema(
+        "zalo_web_search",
+        "Tìm kiếm trên Internet. Dùng khi câu hỏi cần thông tin mới hoặc nằm "
+        "ngoài kiến thức sẵn có và kho tài liệu.",
+        {
+            "query": {"type": "string", "description": "Nội dung cần tìm."},
+            "limit": {"type": "integer", "description": "Số kết quả, 1-10. Mặc định 5."},
+        },
+        ["query"],
+    ), zalo_web_search, TOOLSET_PUBLIC),
+
+    ("zalo_web_read", "🌐", _schema(
+        "zalo_web_read",
+        "Đọc nội dung một hoặc vài trang web theo địa chỉ. Chỉ đọc được địa "
+        "chỉ công cộng http/https, tối đa 5 trang mỗi lần.",
+        {
+            "url": {"type": "string", "description": "Địa chỉ trang cần đọc."},
+            "urls": {"type": "array", "items": {"type": "string"},
+                     "description": "Nhiều địa chỉ cùng lúc, tối đa 5."},
+        },
+        [],
+    ), zalo_web_read, TOOLSET_PUBLIC),
 ]
 
 
