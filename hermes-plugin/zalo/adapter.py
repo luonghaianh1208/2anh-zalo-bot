@@ -76,8 +76,11 @@ from gateway.platforms.base import (
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
 from agent.secret_scope import get_secret as _scoped_get_secret
 
-from .tools import (
-    register_tools,
+# Công cụ nằm ở plugin standalone `zalo_tools`, không phải ở đây — xem
+# ghi chú trong plugins/zalo_tools/__init__.py về việc Hermes nạp platform
+# plugin theo kiểu lười.
+from plugins.zalo_tools.tools import (
+    TOOLSET_OWNER,
     set_active_adapter,
     clear_active_adapter,
     set_turn_context,
@@ -486,9 +489,20 @@ class ZaloAdapter(BasePlatformAdapter):
         cụ tác động trong đúng cuộc trò chuyện của họ, không hơn.
         """
         uid = str(getattr(source, "user_id", "") or "")
-        if self._is_owner(uid):
-            return [f"hermes-{self.name}", TOOLSET_PUBLIC]
-        return [TOOLSET_PUBLIC]
+
+        # Dùng khoá nền tảng, KHÔNG dùng ``self.name``: thuộc tính đó trả về
+        # ``platform.value.title()`` — "Zalo" chứ không phải "zalo" — nên
+        # ``hermes-Zalo`` không khớp toolset nào và agent lặng lẽ mất sạch
+        # công cụ. Đúng loại lỗi chỉ lộ ra khi đo ở nơi người dùng thật chạm
+        # tới, chứ không lộ khi tự gọi resolve_toolset trong bài kiểm thử.
+        platform_key = str(self.platform.value)
+        chosen = ([f"hermes-{platform_key}", TOOLSET_OWNER, TOOLSET_PUBLIC]
+                  if self._is_owner(uid) else [TOOLSET_PUBLIC])
+
+        logger.debug("[zalo] %s (%s) → %s",
+                     "chủ nhân" if self._is_owner(uid) else "người trong nhóm",
+                     uid, chosen)
+        return chosen
 
     def _is_owner(self, sender_uid: str) -> bool:
         """Người này có nằm trong ZALO_ALLOWED_USERS không.
@@ -647,10 +661,9 @@ def _env_enablement() -> Optional[dict]:
 
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin loader at startup."""
-    # Công cụ Zalo: thay cho trang quản trị cũ. Ra lệnh cho agent nhanh hơn
-    # mở trình duyệt và gạt công tắc, lại làm được cả chuỗi việc.
-    register_tools(ctx)
-
+    # Công cụ do plugin `zalo-tools` đăng ký, không phải ở đây: platform
+    # plugin nạp lười nên công cụ đăng ký từ đây sẽ tới muộn và bị Hermes bỏ
+    # qua khi lập danh sách toolset.
     ctx.register_platform(
         name="zalo",
         label="Zalo",

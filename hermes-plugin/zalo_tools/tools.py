@@ -32,7 +32,10 @@ logger = logging.getLogger(__name__)
 # `hermes-zalo` thì họ chạy được lệnh shell và đọc được mọi tệp trên máy chủ,
 # kể cả tệp chứa khoá API.
 TOOLSET_PUBLIC = "zalo_public"
-TOOLSET_OWNER = "zalo"
+# Cố tình KHÔNG đặt tên trùng khoá nền tảng ("zalo"): Hermes tự bật toolset
+# cùng tên với nền tảng cho mọi phiên, nên đặt trùng thì người ngoài cũng nhận
+# luôn bộ công cụ dành riêng cho chủ.
+TOOLSET_OWNER = "zalo_owner"
 
 # Ngữ cảnh của lượt tin đang xử lý. Dùng ContextVar chứ không phải biến thường:
 # gateway xử lý nhiều lượt song song, biến thường sẽ lẫn người này sang người
@@ -185,7 +188,23 @@ async def zalo_send_sticker(args: Dict[str, Any], **_kw) -> str:
     if not stickers:
         return _err(f"không tìm thấy sticker nào cho '{keyword}'")
 
-    return await _invoke("sendSticker", [stickers[0], thread_id, _thread_type(kind)])
+    # searchSticker trả về StickerBasic {type, cate_id, sticker_id} còn
+    # sendSticker đòi {id, cateId, type}. Tên trường khác hẳn nhau, nên truyền
+    # thẳng object sang thì id/cateId thành undefined và Zalo lặng lẽ không gửi.
+    top = stickers[0]
+    if not isinstance(top, dict):
+        return _err(f"sticker trả về không đúng định dạng: {top!r}")
+    sticker_id = top.get("sticker_id", top.get("id"))
+    cate_id = top.get("cate_id", top.get("cateId"))
+    if sticker_id is None or cate_id is None:
+        return _err(f"sticker thiếu id/cateId: {sorted(top)}")
+    payload_out = {
+        "id": int(sticker_id),
+        "cateId": int(cate_id),
+        "type": int(top.get("type", 0)),
+    }
+
+    return await _invoke("sendSticker", [payload_out, thread_id, _thread_type(kind)])
 
 
 async def zalo_send_link(args: Dict[str, Any], **_kw) -> str:
@@ -1288,6 +1307,28 @@ TOOLS = [
 ]
 
 
+def _owner_only(handler, tool_name: str):
+    """Bọc một công cụ để chỉ chủ nhân gọi được.
+
+    Đây mới là rào chắn thật. Việc chia toolset chỉ giấu công cụ khỏi danh
+    sách — mà Hermes lại tự bật mọi toolset của plugin trừ khi bị tắt tường
+    minh, nên không thể trông cậy vào nó một mình. Kiểm tra ngay tại điểm
+    thực thi thì dù công cụ có lọt vào danh sách, người ngoài gọi vẫn bị từ
+    chối.
+    """
+    async def guarded(args: Dict[str, Any], **kw) -> str:
+        turn = _turn()
+        if turn and not turn.get("is_owner"):
+            logger.info("[zalo] chặn %s — %s không phải chủ nhân",
+                        tool_name, turn.get("sender_uid"))
+            return _err("công cụ này chỉ chủ nhân dùng được")
+        return await handler(args, **kw)
+
+    guarded.__name__ = getattr(handler, "__name__", tool_name)
+    guarded.__doc__ = getattr(handler, "__doc__", None)
+    return guarded
+
+
 def register_tools(ctx) -> None:
     """Đăng ký công cụ Zalo, chia làm hai mức quyền."""
     counts = {TOOLSET_PUBLIC: 0, TOOLSET_OWNER: 0}
@@ -1297,7 +1338,7 @@ def register_tools(ctx) -> None:
                 name=name,
                 toolset=toolset,
                 schema=schema,
-                handler=handler,
+                handler=handler if toolset == TOOLSET_PUBLIC else _owner_only(handler, name),
                 is_async=True,
                 description=schema["description"],
                 emoji=emoji,

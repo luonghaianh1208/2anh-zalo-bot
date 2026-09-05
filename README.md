@@ -69,18 +69,20 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 
 ### Hai mức quyền
 
-31 công cụ chia làm hai nhóm, quyết định bằng `ZALO_ALLOWED_USERS`:
+39 công cụ chia làm hai nhóm, quyết định bằng `ZALO_ALLOWED_USERS`:
 
 | | Chủ nhân | Người khác trong nhóm |
 |---|---|---|
-| Toolset | `hermes-zalo` + `zalo_public` | chỉ `zalo_public` |
-| Số công cụ Zalo | 31 | 7 |
+| Toolset | `hermes-zalo` + `zalo_owner` + `zalo_public` | chỉ `zalo_public` |
+| Số công cụ Zalo | 39 | 13 |
 | `terminal`, `read_file`, `write_file` | ✅ | ❌ |
 | `browser_*`, `web_search` | ✅ | ❌ |
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
 | Nhắn riêng với bot | ✅ | ❌ mặc định (`ZALO_DM_POLICY`) |
 
-**13 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · **tìm kiếm web · đọc trang web**.
+**13 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · nhớ người quen · tra sổ người quen · **tìm kiếm web · đọc trang web**.
+
+Việc phân nhóm toolset chỉ *giấu* công cụ khỏi danh sách. Rào chắn thật nằm ở tầng thực thi: mỗi công cụ thuộc nhóm chủ nhân được bọc một lớp kiểm tra danh tính người gửi, nên dù công cụ có lọt vào danh sách vì cấu hình sai thì người ngoài gọi vẫn bị từ chối.
 
 ### Tra cứu Internet
 
@@ -166,7 +168,34 @@ npm start
 
 ### Nối vào Hermes
 
-Thêm UID vừa nhận vào file `.env` **của Hermes** (`%LOCALAPPDATA%\hermes\.env` trên Windows, `~/.hermes/.env` trên Linux/macOS):
+**Bước 1 — chép plugin vào Hermes.** Thư mục `hermes-plugin/` chứa hai plugin, chép vào đúng chỗ trong mã nguồn Hermes:
+
+```bash
+cp -r hermes-plugin/zalo        <hermes-agent>/plugins/platforms/zalo
+cp -r hermes-plugin/zalo_tools  <hermes-agent>/plugins/zalo_tools
+```
+
+Vì sao lại hai thư mục thay vì một: Hermes nạp mọi plugin `kind: platform` theo kiểu **lười** — chúng chỉ được import khi gateway thật sự chạm tới nền tảng đó, tức là *sau* khi Hermes đã chốt xong danh sách toolset. Công cụ đăng ký muộn như vậy bị coi là tên lạ và bị loại sạch, agent thì không báo lỗi mà chỉ lặng lẽ trả lời bằng chữ. Nên bộ công cụ phải nằm ở một plugin `kind: standalone` riêng, thứ được nạp ngay lúc khám phá.
+
+**Bước 2 — bật cả hai plugin:**
+
+```bash
+hermes plugins enable zalo-platform
+hermes plugins enable zalo-tools
+```
+
+**Bước 3 — khai báo toolset là "đã biết"** trong `config.yaml` của Hermes:
+
+```yaml
+known_plugin_toolsets:
+  zalo:
+    - zalo_owner
+    - zalo_public
+```
+
+Bước này bắt buộc, không phải tuỳ chọn. Hermes mặc định **bật** mọi toolset plugin mà nó chưa từng thấy; thiếu khai báo thì `zalo_owner` — bộ công cụ dành riêng chủ nhân — được cấp cho cả người lạ nhắn vào nhóm, dù adapter đã giới hạn.
+
+**Bước 4 — thêm UID** vào file `.env` **của Hermes** (`%LOCALAPPDATA%\hermes\.env` trên Windows, `~/.hermes/.env` trên Linux/macOS):
 
 ```env
 ZALO_BRIDGE_URL=ws://127.0.0.1:3873
@@ -175,7 +204,7 @@ ZALO_HOME_CHANNEL=<UID Zalo của bạn>
 ZALO_GROUP_REPLY_ONLY_TAGGED=true
 ```
 
-Rồi khởi động Hermes:
+**Bước 5 — khởi động Hermes:**
 
 ```bash
 hermes gateway run
