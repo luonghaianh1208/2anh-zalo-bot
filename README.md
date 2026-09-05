@@ -74,12 +74,17 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 | | Chủ nhân | Người khác trong nhóm |
 |---|---|---|
 | Toolset | `hermes-zalo` + `zalo_public` | chỉ `zalo_public` |
-| Số công cụ Zalo | 31 | 10 |
+| Số công cụ Zalo | 31 | 7 |
 | `terminal`, `read_file`, `write_file` | ✅ | ❌ |
 | `browser_*`, `web_search` | ✅ | ❌ |
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
+| Nhắn riêng với bot | ✅ | ❌ mặc định (`ZALO_DM_POLICY`) |
 
-**10 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · tạo bình chọn · xem kết quả bình chọn · ghim ghi chú · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm.
+**7 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm.
+
+Cả nhóm dùng được bot mà **không phải khai báo từng UID** — đặt `ZALO_ALLOW_ALL_USERS=true` để gateway mở cổng vào, rào chắn thật nằm ở tầng toolset. Cờ đó **không** phong ai làm chủ: `ZALO_ALLOWED_USERS` mới quyết định điều đó.
+
+Nhắn riêng vẫn chỉ dành cho chủ (`ZALO_DM_POLICY=owner-only`). Một tin nhắn riêng là hội thoại kín, không ai trong nhóm nhìn thấy để kiểm chứng — nên cửa đó đóng chặt hơn.
 
 Điểm cốt lõi: toolset mặc định của mọi nền tảng Hermes (`hermes-<tên>`) **luôn kèm** `terminal`, `read_file`, `write_file`, `browser_*`. Ai được dùng nó là chạy được lệnh shell và đọc được mọi tệp trên máy chủ — kể cả tệp chứa khoá API. Vì vậy người ngoài chỉ nhận `zalo_public`, một toolset riêng không chứa bộ lõi đó.
 

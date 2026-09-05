@@ -625,14 +625,14 @@ TOOLS = [
             "hide_preview": {"type": "boolean", "description": "Ẩn kết quả cho tới khi khoá."},
         },
         ["group_id", "question", "options"],
-    ), zalo_create_poll, TOOLSET_PUBLIC),
+    ), zalo_create_poll, TOOLSET_OWNER),
 
     ("zalo_poll_detail", "📊", _schema(
         "zalo_poll_detail",
         "Xem kết quả một cuộc bình chọn: ai chọn gì, bao nhiêu phiếu.",
         {"poll_id": {"type": "string", "description": "ID cuộc bình chọn."}},
         ["poll_id"],
-    ), zalo_poll_detail, TOOLSET_PUBLIC),
+    ), zalo_poll_detail, TOOLSET_OWNER),
 
     ("zalo_lock_poll", "🔒", _schema(
         "zalo_lock_poll",
@@ -650,7 +650,7 @@ TOOLS = [
             "pin": {"type": "boolean", "description": "Ghim lên đầu nhóm. Mặc định có."},
         },
         ["group_id", "title"],
-    ), zalo_create_note, TOOLSET_PUBLIC),
+    ), zalo_create_note, TOOLSET_OWNER),
 
     ("zalo_create_reminder", "⏰", _schema(
         "zalo_create_reminder",

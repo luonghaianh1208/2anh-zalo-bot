@@ -176,6 +176,15 @@ class ZaloAdapter(BasePlatformAdapter):
                       _get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "true")),
             default=True,
         )
+        # Ai được nhắn riêng với bot.
+        #   owner-only  chỉ người trong ZALO_ALLOWED_USERS  (mặc định)
+        #   open        bất kỳ ai
+        # Trong nhóm thì luôn mở: ai tag bot cũng được trả lời, nhưng chỉ với
+        # bộ công cụ công khai (xem toolsets_for_source).
+        self._dm_policy: str = str(
+            extra.get("dm_policy", _get_scoped_secret("ZALO_DM_POLICY", "owner-only"))
+        ).strip().lower()
+
         # Báo đã xem + thả cảm xúc khi nhận tin. Tắt được cho ai muốn bot
         # hoạt động kín tiếng.
         self._ack_gestures: bool = _truthy(
@@ -340,11 +349,17 @@ class ZaloAdapter(BasePlatformAdapter):
         sender_uid = str(frame.get("senderUid") or "")
         sender_name = frame.get("senderName") or "Zalo user"
 
-        # Group mention gating. The gateway's own allowlist still applies on
-        # top of this; this check only decides whether an untagged group
-        # message is worth waking the agent for at all.
+        # Trong nhóm: chỉ trả lời khi được gọi đúng tên.
         if is_group and self._reply_only_tagged and not self._is_mentioned(frame, text):
             logger.debug("[zalo] group message not addressed to the bot — skipping")
+            return
+
+        # Nhắn riêng: mặc định chỉ chủ nhân. Cửa vào nhóm mở cho tất cả, nhưng
+        # cửa nhắn riêng thì không — một tin nhắn riêng là hội thoại kín, không
+        # có ai khác trong nhóm nhìn thấy để mà kiểm chứng.
+        if not is_group and self._dm_policy != "open" and not self._is_owner(sender_uid):
+            logger.info("[zalo] bỏ qua tin nhắn riêng từ %s (%s) — không phải chủ nhân",
+                        sender_name, sender_uid)
             return
 
         source = self.build_source(
@@ -465,9 +480,14 @@ class ZaloAdapter(BasePlatformAdapter):
         return [TOOLSET_PUBLIC]
 
     def _is_owner(self, sender_uid: str) -> bool:
-        """Người này có nằm trong ZALO_ALLOWED_USERS không."""
-        if _truthy(_get_scoped_secret("ZALO_ALLOW_ALL_USERS", "false")):
-            return True
+        """Người này có nằm trong ZALO_ALLOWED_USERS không.
+
+        Cố tình KHÔNG xét ``ZALO_ALLOW_ALL_USERS``. Cờ đó chỉ nói với gateway
+        rằng "đừng chặn ai ở cổng vào" — để người trong nhóm nhắn được mà không
+        phải khai báo từng UID. Nó không nói ai là chủ. Trộn hai khái niệm lại
+        thì bật cờ đó lên là cả nhóm thành chủ nhân, và toàn bộ lớp phân quyền
+        toolset thành vô nghĩa.
+        """
         allowed = _split_ids(_get_scoped_secret("ZALO_ALLOWED_USERS", "") or "")
         return bool(allowed) and str(sender_uid) in allowed
 
