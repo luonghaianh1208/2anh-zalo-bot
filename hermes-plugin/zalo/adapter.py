@@ -492,11 +492,18 @@ class ZaloAdapter(BasePlatformAdapter):
         return bool(allowed) and str(sender_uid) in allowed
 
     def _may_greet(self, sender_uid: str) -> bool:
-        """Người này có nằm trong allowlist không.
+        """Có nên báo đã xem và thả cảm xúc cho tin nhắn này không.
 
-        Đọc cùng biến môi trường mà gateway dùng (``ZALO_ALLOWED_USERS``,
-        khai báo ở ``register_platform``), nên hai bên không lệch nhau.
+        Điều kiện là "người này sẽ được bot trả lời", không phải "người này là
+        chủ". Khi ``ZALO_ALLOW_ALL_USERS`` bật, cả nhóm dùng được bot — mà thả
+        cảm xúc cho người này rồi im lặng với người kia thì bot trông thiên vị
+        một cách khó hiểu.
+
+        Vẫn giữ nguyên mục đích ban đầu: người bị gateway chặn thì không được
+        chào hỏi, để bot không thả tim xong im bặt.
         """
+        if _truthy(_get_scoped_secret("ZALO_ALLOW_ALL_USERS", "false")):
+            return True
         return self._is_owner(sender_uid)
 
     def _is_duplicate(self, msg_id: str) -> bool:
