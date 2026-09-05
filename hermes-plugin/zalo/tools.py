@@ -472,6 +472,145 @@ async def zalo_set_active_status(args: Dict[str, Any], **_kw) -> str:
 
 
 # =====================================================================
+#  Nhóm 7 — Kho tài liệu tư vấn (chỉ đọc, giới hạn trong một thư mục)
+# =====================================================================
+#
+# Người trong nhóm không có `read_file` — nếu có thì họ đọc được mọi tệp
+# trên máy chủ, kể cả tệp chứa khoá API. Nhưng để tư vấn sản phẩm thì bot
+# vẫn cần đọc tài liệu. Hai công cụ dưới đây mở đúng một cánh cửa hẹp:
+# chỉ đọc, chỉ trong thư mục ZALO_KB_DIR, và mọi đường dẫn đều được ép về
+# đường dẫn thật rồi kiểm tra lại — nên `../` hay symlink không thoát ra
+# ngoài được.
+
+KB_MAX_BYTES = 60_000
+KB_TEXT_SUFFIXES = {
+    ".md", ".txt", ".html", ".htm", ".json", ".yaml", ".yml",
+    ".csv", ".xml", ".rst", ".ini", ".toml",
+}
+
+# Thư mục không bao giờ đọc tới, kể cả khi nằm trong kho.
+#
+# Kho tài liệu thường trỏ vào một thư mục dự án chứ không phải một thư mục
+# tài liệu thuần — và thư mục dự án thì lẫn cả mã nguồn, bản sao lưu đơn
+# hàng, biến môi trường. Chặn theo tên thư mục là lớp phòng thủ thứ hai, sau
+# lớp ép đường dẫn về trong kho.
+KB_SKIP_DIRS = {
+    "node_modules", "dist", "build", "out", "coverage", "__pycache__",
+    "venv", ".venv", "vendor", "tmp", "temp", "cache",
+}
+
+# Tên gợi ý dữ liệu riêng tư — bỏ qua dù nằm ở đâu.
+KB_SKIP_PATTERNS = (
+    "backup", "order", "customer", "khach", "don-hang", "donhang",
+    "secret", "credential", "password", "token", "private",
+)
+
+
+def _kb_allowed(rel_posix: str) -> bool:
+    """Đường dẫn tương đối này có nên lộ ra cho người hỏi không."""
+    parts = rel_posix.split("/")
+    for part in parts:
+        if part.startswith("."):          # .git, .env, .backup, .astro…
+            return False
+        if part.lower() in KB_SKIP_DIRS:
+            return False
+    low = rel_posix.lower()
+    return not any(p in low for p in KB_SKIP_PATTERNS)
+
+
+def _kb_root() -> Optional["Path"]:
+    from pathlib import Path
+    raw = (_kb_dir_setting() or "").strip()
+    if not raw:
+        return None
+    try:
+        root = Path(raw).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    return root if root.is_dir() else None
+
+
+def _kb_dir_setting() -> str:
+    import os
+    from agent.secret_scope import UnscopedSecretError, get_secret
+    try:
+        val = get_secret("ZALO_KB_DIR", "")
+    except UnscopedSecretError:
+        val = os.getenv("ZALO_KB_DIR", "")
+    return val or ""
+
+
+def _kb_resolve(root, relative: str):
+    """Ép một đường dẫn tương đối về trong ``root``. Trả None nếu thoát ra ngoài."""
+    from pathlib import Path
+    try:
+        target = (root / str(relative).lstrip("/\\")).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return None       # `../` hoặc symlink trỏ ra ngoài
+    return target
+
+
+async def zalo_kb_list(args: Dict[str, Any], **_kw) -> str:
+    root = _kb_root()
+    if root is None:
+        return _err("chưa cấu hình kho tài liệu (ZALO_KB_DIR)")
+
+    query = (args.get("query") or "").strip().lower()
+    files = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in KB_TEXT_SUFFIXES:
+            continue
+        rel = path.relative_to(root).as_posix()
+        if not _kb_allowed(rel):
+            continue
+        if query and query not in rel.lower():
+            continue
+        files.append({"path": rel, "size": path.stat().st_size})
+        if len(files) >= 200:
+            break
+    return _ok({"root": root.name, "files": files, "count": len(files)})
+
+
+async def zalo_kb_read(args: Dict[str, Any], **_kw) -> str:
+    root = _kb_root()
+    if root is None:
+        return _err("chưa cấu hình kho tài liệu (ZALO_KB_DIR)")
+
+    rel = (args.get("path") or "").strip()
+    if not rel:
+        return _err("cần `path` — dùng zalo_kb_list để xem có những tệp nào")
+
+    target = _kb_resolve(root, rel)
+    if target is None or not target.is_file():
+        return _err(f"không có tệp '{rel}' trong kho tài liệu")
+
+    # Áp cùng bộ lọc như khi liệt kê. Nếu chỉ lọc lúc liệt kê thì đoán đúng
+    # tên tệp là đọc được — che khỏi danh sách không phải là chặn.
+    if not _kb_allowed(target.relative_to(root).as_posix()):
+        return _err(f"không có tệp '{rel}' trong kho tài liệu")
+
+    if target.suffix.lower() not in KB_TEXT_SUFFIXES:
+        return _err(f"chỉ đọc được tệp văn bản, không đọc '{target.suffix}'")
+
+    try:
+        raw = target.read_bytes()[: KB_MAX_BYTES + 1]
+    except OSError as exc:
+        return _err(f"không đọc được tệp: {exc}")
+
+    truncated = len(raw) > KB_MAX_BYTES
+    text = raw[:KB_MAX_BYTES].decode("utf-8", errors="replace")
+    return _ok({
+        "path": target.relative_to(root).as_posix(),
+        "content": text,
+        "truncated": truncated,
+    })
+
+
+# =====================================================================
 #  Khai báo công cụ
 # =====================================================================
 
@@ -828,6 +967,27 @@ TOOLS = [
         {"active": {"type": "boolean", "description": "true là hiện, false là ẩn."}},
         ["active"],
     ), zalo_set_active_status, TOOLSET_OWNER),
+
+    # --- Nhóm 7: kho tài liệu tư vấn ---
+    ("zalo_kb_list", "📚", _schema(
+        "zalo_kb_list",
+        "Liệt kê tài liệu trong kho tri thức để tư vấn (sản phẩm, dịch vụ, "
+        "hướng dẫn). Gọi công cụ này trước để biết có những tệp nào, rồi mới "
+        "đọc tệp phù hợp bằng zalo_kb_read. Chỉ dùng khi câu hỏi thật sự cần "
+        "tra tài liệu — chuyện trò thông thường thì trả lời thẳng.",
+        {"query": {"type": "string",
+                   "description": "Lọc theo tên tệp, ví dụ 'gia' hay 'huong-dan'. Để trống là liệt kê tất cả."}},
+        [],
+    ), zalo_kb_list, TOOLSET_PUBLIC),
+
+    ("zalo_kb_read", "📖", _schema(
+        "zalo_kb_read",
+        "Đọc một tệp trong kho tài liệu tư vấn. Đường dẫn lấy từ zalo_kb_list. "
+        "Chỉ đọc được tệp văn bản nằm trong kho, không ra ngoài được.",
+        {"path": {"type": "string",
+                  "description": "Đường dẫn tương đối trong kho, ví dụ 'docs/bang-gia.md'."}},
+        ["path"],
+    ), zalo_kb_read, TOOLSET_PUBLIC),
 ]
 
 

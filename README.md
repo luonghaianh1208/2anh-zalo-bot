@@ -80,7 +80,26 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
 | Nhắn riêng với bot | ✅ | ❌ mặc định (`ZALO_DM_POLICY`) |
 
-**7 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm.
+**9 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm · **liệt kê kho tài liệu · đọc tài liệu**.
+
+### Kho tài liệu tư vấn
+
+Người trong nhóm không có `read_file`, nhưng bot vẫn cần đọc tài liệu để tư vấn sản phẩm. `ZALO_KB_DIR` mở đúng một cánh cửa hẹp: chỉ đọc, chỉ trong thư mục đó.
+
+Ba lớp chặn:
+1. Mọi đường dẫn được ép về đường dẫn thật rồi kiểm tra lại — `../`, `..\`, symlink đều không thoát ra ngoài
+2. Bỏ qua thư mục ẩn (`.git`, `.env`, `.backup`), `node_modules`, `dist`, `build`, và tệp có tên gợi ý dữ liệu riêng tư (`backup`, `order`, `customer`, `secret`…)
+3. Chỉ đọc tệp văn bản, tối đa 60 KB mỗi lần
+
+Bộ lọc áp cho **cả liệt kê lẫn đọc** — che khỏi danh sách không phải là chặn, đoán đúng tên tệp vẫn phải bị từ chối.
+
+> Nên trỏ vào một thư mục tài liệu thuần. Trỏ vào cả thư mục dự án thì bộ lọc vẫn giữ được, nhưng bạn đang dựa vào nó thay vì vào ranh giới rõ ràng.
+
+### Session tách theo nhóm
+
+Mỗi nhóm Zalo là một phiên riêng — chuyện ở nhóm này không lẫn sang nhóm khác. Trong cùng một nhóm thì mọi người **chung một phiên**, để bot nối được mạch hội thoại tập thể: A hỏi *"sản phẩm X giá bao nhiêu?"*, B hỏi tiếp *"còn hàng không?"* thì bot hiểu B đang nói về X.
+
+Đặt bằng `group_sessions_per_user: false` ở **cấp cao nhất** của `config.yaml` (Hermes ưu tiên cấp này hơn khoá cùng tên trong mục `gateway:`).
 
 Cả nhóm dùng được bot mà **không phải khai báo từng UID** — đặt `ZALO_ALLOW_ALL_USERS=true` để gateway mở cổng vào, rào chắn thật nằm ở tầng toolset. Cờ đó **không** phong ai làm chủ: `ZALO_ALLOWED_USERS` mới quyết định điều đó.
 
