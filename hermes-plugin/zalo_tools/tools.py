@@ -614,9 +614,18 @@ KB_TEXT_SUFFIXES = {
 # danh sách sẽ rỗng.
 KB_DOC_SUFFIXES = {".docx", ".xlsx", ".pdf", ".doc", ".pptx", ".ppt", ".rtf", ".epub", ".odt"}
 
+# Lối tắt tới tài liệu trên mây. Khi kho tài liệu là một ổ Google Drive gắn qua
+# RaiDrive/Drive for desktop, mọi tài liệu Google gốc (Docs, Sheets, Slides)
+# KHÔNG hiện thành .docx mà thành một tệp `.gdoc.URL` bé xíu chứa đúng một
+# dòng địa chỉ. Bỏ qua nhóm này là mù với một phần lớn kho: đo trên kho Đoàn
+# thật thì 553/5388 tệp (10%) thuộc dạng đó, trong đó có đúng tài liệu người
+# dùng đang hỏi.
+KB_LINK_SUFFIXES = {".url"}
+
 
 def _kb_readable(suffix: str) -> bool:
-    return suffix.lower() in KB_TEXT_SUFFIXES or suffix.lower() in KB_DOC_SUFFIXES
+    low = suffix.lower()
+    return low in KB_TEXT_SUFFIXES or low in KB_DOC_SUFFIXES or low in KB_LINK_SUFFIXES
 
 
 def _kb_extract(path) -> Optional[str]:
@@ -805,6 +814,43 @@ def _kb_walk(root, query: str, limit: int = 200):
     return files, skipped
 
 
+async def _kb_read_shortcut(target, rel_out: str) -> str:
+    """Đọc một lối tắt `.url` bằng cách tải chính tài liệu nó trỏ tới."""
+    try:
+        raw = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return _err(f"không đọc được lối tắt: {exc}")
+
+    url = ""
+    for line in raw.splitlines():
+        if line.strip().lower().startswith("url="):
+            url = line.split("=", 1)[1].strip()
+            break
+    if not url:
+        return _err(f"lối tắt '{rel_out}' không chứa địa chỉ nào")
+
+    # Bắt buộc kiểm tra: một tệp .url là nội dung do người khác đặt vào kho.
+    # Nếu ai đó thả vào một lối tắt trỏ tới http://127.0.0.1/... thì đây thành
+    # đường vòng đọc dữ liệu nội bộ, đi qua lưng cả bộ chặn của zalo_web_read.
+    if not _is_public_url(url):
+        return _err(f"lối tắt '{rel_out}' trỏ tới địa chỉ không công khai — bỏ qua")
+
+    fetched = await _core("web_extract", {"urls": [_google_export_url(url)]}, attempts=3)
+    try:
+        results = (json.loads(fetched).get("results") or [{}])[0]
+    except (ValueError, TypeError, AttributeError):
+        results = {}
+    content = (results.get("content") or "").strip()
+    if not content:
+        return _err(
+            f"'{rel_out}' là lối tắt tới {url} nhưng chưa tải được nội dung"
+            f"{' — ' + str(results.get('error'))[:80] if results.get('error') else ''}"
+        )
+    truncated = len(content) > KB_MAX_BYTES
+    return _ok({"path": rel_out, "source_url": url, "kind": "lối tắt tài liệu Google",
+                "content": content[:KB_MAX_BYTES], "truncated": truncated})
+
+
 async def zalo_kb_read(args: Dict[str, Any], **_kw) -> str:
     root = _kb_root()
     if root is None:
@@ -827,6 +873,11 @@ async def zalo_kb_read(args: Dict[str, Any], **_kw) -> str:
         return _err(f"không đọc được định dạng '{target.suffix}'")
 
     rel_out = target.relative_to(root).as_posix()
+
+    # Lối tắt tới tài liệu trên mây: đọc địa chỉ trong tệp rồi tải nội dung
+    # thật về. Không làm vậy thì agent chỉ nhận được ba dòng INI vô nghĩa.
+    if target.suffix.lower() in KB_LINK_SUFFIXES:
+        return await _kb_read_shortcut(target, rel_out)
 
     # Tài liệu nhị phân (.docx, .pdf…) đi qua bộ trích văn bản của Hermes.
     if target.suffix.lower() in KB_DOC_SUFFIXES:

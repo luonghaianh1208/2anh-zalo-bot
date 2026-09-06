@@ -363,3 +363,44 @@ không được chia sẻ"*. Tài liệu công khai vẫn đọc được bình 
 
 `_google_export_url()` đổi tự động. Đổi **sau** khi kiểm tra an toàn, không phải
 trước — để phép kiểm luôn nhìn đúng địa chỉ người dùng đưa vào.
+
+---
+
+## Kho tài liệu trên Google Drive: 10% số tệp vô hình
+
+Bot báo *"chưa có tờ trình cho năm học 26-27"* trong khi người dùng mở File
+Explorer ra thì thấy rõ. Soát thẳng ổ đĩa mới ra:
+
+```
+ĐOÀN CNT 26-27\...\01. Đội Thanh niên Xung kích\ĐỘI TNXK - TỜ TRÌNH CÔNG NHẬN BLĐ KHOÁ MỚI.gdoc.URL
+```
+
+Đuôi tệp là **`.gdoc.URL`**. Khi kho tài liệu là một ổ Google Drive gắn qua
+RaiDrive (hoặc Drive for desktop), mọi tài liệu Google **gốc** — Docs, Sheets,
+Slides — không hiện thành `.docx` mà thành một tệp lối tắt bé xíu:
+
+```ini
+[InternetShortcut]
+URL=https://docs.google.com/document/d/<id>/edit?usp=drivesdk
+```
+
+Bộ lọc định dạng chỉ nhận `.docx`, `.pdf`, `.txt`… nên toàn bộ nhóm này bị bỏ
+qua trong im lặng. Đếm trên kho thật: **553/5388 tệp (10,3%)** là `.url` —
+trong đó có đúng tài liệu người dùng đang hỏi.
+
+Bot không hề báo lỗi. Nó liệt kê những tệp nó *thấy được*, không tìm thấy thứ
+cần, rồi kết luận là "chưa có" — nghe rất thuyết phục và hoàn toàn sai.
+
+Bản vá: coi `.url` là một loại đọc được, đọc địa chỉ trong tệp rồi tải chính
+tài liệu đó về qua đường `/export`. Kết quả: số tệp khớp "xung kích" tăng từ 3
+lên 10, và tài liệu kia đọc ra đủ 922 ký tự.
+
+> **Bắt buộc kiểm địa chỉ trước khi tải.** Một tệp `.url` là nội dung do người
+> khác đặt vào kho. Thả vào một lối tắt trỏ tới `http://127.0.0.1/...` là có
+> ngay đường vòng đọc dữ liệu nội bộ, đi qua lưng bộ chặn của `zalo_web_read`.
+> Đã thử bốn dạng (loopback, metadata đám mây, `file://`, lối tắt rỗng) — chặn
+> hết.
+
+Bài học chung: **khi bot nói "không tìm thấy", hãy kiểm bộ lọc trước khi tin
+nó.** Một câu trả lời tự tin dựa trên dữ liệu bị lọc mất còn nguy hiểm hơn một
+lỗi rõ ràng, vì không ai nghĩ tới chuyện đi kiểm lại.
