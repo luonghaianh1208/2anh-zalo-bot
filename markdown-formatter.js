@@ -127,8 +127,12 @@ export function formatZaloMarkdown(input) {
       wholeLineStyle = ITALIC;
     }
 
-    // Gạch đầu dòng: -, * → •  (giữ nguyên thụt lề)
-    line = line.replace(/^(\s*)[-*]\s+/, '$1• ');
+    // Phân cấp danh sách đầu dòng chuẩn:
+    // - Cấp 1 (ngay sau tiêu đề/danh mục): dùng gạch đầu dòng '- '
+    // - Cấp 2 trở đi (mục con thụt lề >= 2 khoảng trắng): dùng dấu chấm tròn '• '
+    line = line.replace(/^(\s*)([-*•])\s+/, (match, indent) => {
+      return indent.length >= 2 ? `${indent}• ` : `${indent}- `;
+    });
 
     // Đầu chỉ mục số thứ tự (ví dụ: '1. ', '2. ', '1) '):
     // In Đậm (b) phần số thứ tự ở đầu dòng để mắt dễ bắt ý
