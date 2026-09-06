@@ -513,6 +513,7 @@ class ZaloAdapter(BasePlatformAdapter):
         # khoá phạm vi. Đặt ngay trước handle_message: gateway spawn task con
         # từ đây, và task con kế thừa context của cha.
         _zalo_tools().set_turn_context(
+            text=text,
             sender_uid=sender_uid,
             thread_id=thread_id,
             is_group=is_group,

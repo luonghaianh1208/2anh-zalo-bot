@@ -18,6 +18,7 @@ import contextvars
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -46,13 +47,22 @@ _TURN: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar
 )
 
 
-def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool, is_owner: bool) -> None:
-    """Adapter gọi trước khi đẩy tin vào agent."""
+def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool,
+                     is_owner: bool, text: str = "") -> None:
+    """Adapter gọi trước khi đẩy tin vào agent.
+
+    ``text`` là NGUYÊN VĂN tin nhắn người dùng vừa gõ, chưa qua tay mô hình.
+    Đây là thứ duy nhất trong cả lượt mà mô hình không tự sinh ra được, nên
+    những hành động cần người thật gật đầu (đăng bài lên Fanpage) đem mã duyệt
+    ra đối chiếu với chính chuỗi này. Một tài liệu bị cài chữ có dụ được mô
+    hình đến mấy cũng không đặt được chữ vào tin nhắn của chủ nhân.
+    """
     _TURN.set({
         "sender_uid": str(sender_uid),
         "thread_id": str(thread_id),
         "is_group": bool(is_group),
         "is_owner": bool(is_owner),
+        "text": str(text or ""),
     })
 
 
@@ -1161,7 +1171,209 @@ _THREAD_KIND = {
 }
 _GROUP_ID = {"type": "string", "description": "ID nhóm Zalo."}
 
+# =====================================================================
+#  Nhóm 10 — Fanpage Facebook
+# =====================================================================
+
+async def zalo_fb_pages(args: Dict[str, Any], **_kw) -> str:
+    from . import facebook as fb
+    pages = fb.load_pages()
+    if not pages:
+        return _err("chưa cấu hình Fanpage nào — chạy lay-token-facebook.py "
+                    "rồi đặt FB_PAGES_FILE trong .env")
+    return _ok({"count": len(pages), "pages": [
+        {"name": x.get("name"), "id": x.get("id"), "default": bool(x.get("default"))}
+        for x in pages]})
+
+
+async def zalo_fb_posts(args: Dict[str, Any], **_kw) -> str:
+    from . import facebook as fb
+    page, err = fb.resolve_page(args.get("page", ""))
+    if err:
+        return _err(err)
+    limit = max(1, min(int(args.get("limit", 5) or 5), 25))
+    r = fb.graph(f"{page['id']}/posts", access_token=page["token"], limit=limit,
+                 fields="id,message,created_time,permalink_url,"
+                        "comments.summary(true).limit(0),reactions.summary(true).limit(0)")
+    if "error" in r:
+        return _err(f"Facebook: {r['error'].get('message', '')[:160]}")
+    out = []
+    for x in r.get("data") or []:
+        out.append({
+            "id": x.get("id"),
+            "ngay": (x.get("created_time") or "")[:10],
+            "noi_dung": (x.get("message") or "")[:1500],
+            "link": x.get("permalink_url"),
+            "binh_luan": ((x.get("comments") or {}).get("summary") or {}).get("total_count"),
+            "cam_xuc": ((x.get("reactions") or {}).get("summary") or {}).get("total_count"),
+        })
+    return _ok({"page": page.get("name"), "count": len(out), "posts": out})
+
+
+async def zalo_fb_comments(args: Dict[str, Any], **_kw) -> str:
+    from . import facebook as fb
+    post_id = str(args.get("post_id") or "").strip()
+    if not post_id:
+        return _err("cần `post_id` — lấy từ zalo_fb_posts")
+    page, err = fb.resolve_page(args.get("page", ""))
+    if err:
+        return _err(err)
+    limit = max(1, min(int(args.get("limit", 25) or 25), 100))
+    r = fb.graph(f"{post_id}/comments", access_token=page["token"], limit=limit,
+                 order="reverse_chronological",
+                 fields="from,message,created_time,like_count")
+    if "error" in r:
+        return _err(f"Facebook: {r['error'].get('message', '')[:160]}")
+    out = [{
+        "nguoi": ((x.get("from") or {}).get("name")) or "(ẩn danh)",
+        "ngay": (x.get("created_time") or "")[:16].replace("T", " "),
+        "noi_dung": (x.get("message") or "")[:600],
+        "thich": x.get("like_count"),
+    } for x in (r.get("data") or [])]
+    return _ok({"post_id": post_id, "count": len(out), "comments": out})
+
+
+async def zalo_fb_draft(args: Dict[str, Any], **_kw) -> str:
+    """Soạn bài rồi CHỜ chủ nhân gõ mã duyệt. Không đăng gì ở bước này."""
+    from . import facebook as fb
+    message = str(args.get("message") or "").strip()
+    if not message:
+        return _err("cần `message` — nội dung bài đăng")
+    page, err = fb.resolve_page(args.get("page", ""))
+    if err:
+        return _err(err)
+
+    raw = args.get("photos") or ([args["photo"]] if args.get("photo") else [])
+    if isinstance(raw, str):
+        raw = [raw]
+    photos = [str(x).strip() for x in raw if str(x).strip()][:10]
+    for path in photos:
+        if not os.path.isfile(path):
+            return _err(f"không có tệp ảnh '{path}' — dùng zalo_kb_list để tìm đúng đường dẫn")
+
+    saved = fb.save_draft(page, message, photos)
+    return _ok({
+        **saved,
+        "huong_dan": (
+            f"Đã soạn xong nhưng CHƯA đăng. Hãy đưa TOÀN VĂN bài viết cho chủ "
+            f"nhân xem, kèm tên Fanpage '{page.get('name')}' và số ảnh, rồi nói "
+            f"rõ: muốn đăng thì nhắn lại mã {saved['code']}. Tuyệt đối không tự "
+            f"gọi zalo_fb_publish thay chủ nhân."
+        ),
+    })
+
+
+async def zalo_fb_publish(args: Dict[str, Any], **_kw) -> str:
+    """Đăng bản nháp. Chỉ chạy khi mã duyệt nằm trong tin nhắn chủ nhân vừa gõ."""
+    from . import facebook as fb
+    code = str(args.get("code") or "").strip().upper()
+    if not code:
+        return _err("cần `code` — mã duyệt chủ nhân vừa nhắn")
+
+    # Điểm chịu lực: đối chiếu với NGUYÊN VĂN tin nhắn người dùng, không phải
+    # với chuỗi mô hình truyền vào. Mô hình có thể bị dụ để truyền bất cứ thứ
+    # gì, nhưng không viết được tin nhắn thay chủ nhân.
+    human = _turn().get("text") or ""
+    if not fb.confirmed_in_message(code, human):
+        logger.warning("[fb] chặn đăng bài: mã %s không có trong tin nhắn chủ nhân", code)
+        return _err(
+            "chưa đăng. Mã duyệt phải do chính chủ nhân gõ trong tin nhắn của "
+            "họ. Hãy hỏi lại chủ nhân và chờ họ nhắn mã, đừng tự điền."
+        )
+
+    draft, err = fb.take_draft(code)
+    if err:
+        return _err(err)
+
+    page, message, photos = draft["page"], draft["message"], draft["photos"]
+
+    media_ids = []
+    for path in photos:
+        up = fb.upload_photo(page, path)
+        if "error" in up:
+            return _err(f"tải ảnh '{os.path.basename(path)}' thất bại: "
+                        f"{up['error'].get('message', '')[:120]}")
+        media_ids.append(up.get("id"))
+
+    params = {"access_token": page["token"], "message": message}
+    for i, mid in enumerate(media_ids):
+        params[f"attached_media[{i}]"] = json.dumps({"media_fbid": mid})
+
+    r = fb.graph(f"{page['id']}/feed", "POST", timeout=300, **params)
+    if "error" in r:
+        return _err(f"Facebook: {r['error'].get('message', '')[:160]}")
+
+    post_id = r.get("id")
+    info = fb.graph(post_id, access_token=page["token"], fields="permalink_url")
+    logger.info("[fb] đã đăng %s lên %s", post_id, page.get("name"))
+    return _ok({
+        "da_dang": True,
+        "page": page.get("name"),
+        "post_id": post_id,
+        "so_anh": len(media_ids),
+        "link": info.get("permalink_url"),
+    })
+
+
+
 TOOLS = [
+    # --- Nhóm 10: Fanpage Facebook ---
+    ("zalo_fb_pages", "📘", _schema(
+        "zalo_fb_pages",
+        "Liệt kê các Fanpage Facebook đã cấu hình, kèm Page nào là mặc định.",
+        {},
+        [],
+    ), zalo_fb_pages, TOOLSET_OWNER),
+
+    ("zalo_fb_posts", "📰", _schema(
+        "zalo_fb_posts",
+        "Đọc các bài đăng gần nhất của một Fanpage, kèm số bình luận và cảm xúc.",
+        {
+            "page": {"type": "string", "description":
+                     "Tên hoặc id Fanpage. Bỏ trống thì dùng Page mặc định."},
+            "limit": {"type": "integer", "description": "Số bài, tối đa 25 (mặc định 5)."},
+        },
+        [],
+    ), zalo_fb_posts, TOOLSET_OWNER),
+
+    ("zalo_fb_comments", "💬", _schema(
+        "zalo_fb_comments",
+        "Đọc bình luận dưới một bài đăng Fanpage, mới nhất trước. Dùng khi cần "
+        "nắm xem mọi người đang hỏi gì để tổng hợp lại.",
+        {
+            "post_id": {"type": "string", "description": "Mã bài, lấy từ zalo_fb_posts."},
+            "page": {"type": "string", "description": "Tên hoặc id Fanpage."},
+            "limit": {"type": "integer", "description": "Số bình luận, tối đa 100."},
+        },
+        ["post_id"],
+    ), zalo_fb_comments, TOOLSET_OWNER),
+
+    ("zalo_fb_draft", "📝", _schema(
+        "zalo_fb_draft",
+        "Soạn một bài đăng Fanpage và lấy mã duyệt. CHƯA đăng gì cả. Sau khi "
+        "gọi, phải đưa toàn văn bài viết cho chủ nhân xem và chờ họ nhắn lại mã.",
+        {
+            "message": {"type": "string", "description": "Toàn văn nội dung bài đăng."},
+            "page": {"type": "string", "description":
+                     "Tên hoặc id Fanpage. Bỏ trống thì dùng Page mặc định."},
+            "photo": {"type": "string", "description":
+                      "Đường dẫn một ảnh trên máy hoặc trong kho tài liệu."},
+            "photos": {"type": "array", "items": {"type": "string"},
+                       "description": "Nhiều ảnh, tối đa 10."},
+        },
+        ["message"],
+    ), zalo_fb_draft, TOOLSET_OWNER),
+
+    ("zalo_fb_publish", "🚀", _schema(
+        "zalo_fb_publish",
+        "Đăng bản nháp lên Fanpage. CHỈ gọi sau khi chính chủ nhân đã nhắn mã "
+        "duyệt trong tin nhắn của họ — không bao giờ tự điền mã thay họ.",
+        {
+            "code": {"type": "string", "description": "Mã duyệt chủ nhân vừa nhắn."},
+        },
+        ["code"],
+    ), zalo_fb_publish, TOOLSET_OWNER),
+
     # --- Nhóm 1: gửi nội dung ---
     ("zalo_send_file", "📎", _schema(
         "zalo_send_file",
@@ -1599,6 +1811,28 @@ TOOLS = [
 ]
 
 
+# Hai công cụ này chỉ chạy trong tin nhắn riêng. Trong nhóm, tin của mọi thành
+# viên cùng nằm trong ngữ cảnh một phiên — ai đó thả vào nhóm một đoạn chữ soạn
+# sẵn là có thể lái mô hình mà chủ nhân không hề biết. Nhắn riêng thì ngữ cảnh
+# chỉ có lời chủ nhân.
+DM_ONLY_TOOLS = frozenset({"zalo_fb_draft", "zalo_fb_publish"})
+
+
+def _dm_only(handler, tool_name: str):
+    async def guarded(args: Dict[str, Any], **kw) -> str:
+        turn = _turn()
+        if turn and turn.get("is_group"):
+            logger.info("[zalo] chặn %s — chỉ dùng được khi nhắn riêng", tool_name)
+            return _err("việc này chỉ làm được khi nhắn riêng với mình, "
+                        "không làm trong nhóm")
+        return await handler(args, **kw)
+
+    guarded.__name__ = getattr(handler, "__name__", tool_name)
+    guarded.__doc__ = getattr(handler, "__doc__", None)
+    return guarded
+
+
+
 def _owner_only(handler, tool_name: str):
     """Bọc một công cụ để chỉ chủ nhân gọi được.
 
@@ -1673,7 +1907,10 @@ def register_tools(ctx) -> None:
                 name=name,
                 toolset=toolset,
                 schema=schema,
-                handler=handler if toolset == TOOLSET_PUBLIC else _owner_only(handler, name),
+                handler=(handler if toolset == TOOLSET_PUBLIC
+                         else _owner_only(
+                             _dm_only(handler, name) if name in DM_ONLY_TOOLS else handler,
+                             name)),
                 is_async=True,
                 description=schema["description"],
                 emoji=emoji,
