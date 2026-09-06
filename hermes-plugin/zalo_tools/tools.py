@@ -162,6 +162,32 @@ async def zalo_send_file(args: Dict[str, Any], **_kw) -> str:
     thread_id, kind, err = _scoped_thread(args)
     if err:
         return err
+
+    # Đây là công cụ công khai và nó nhận đường dẫn tệp trên máy chủ. Nếu để
+    # nguyên thì bất kỳ ai trong nhóm cũng chỉ cần nhờ "gửi giúp mình tệp
+    # E:\\Hermes\\.env" là bot ngoan ngoãn tải khoá API lên nhóm. Việc lọc bí
+    # mật của Hermes không cứu được: nó soát văn bản, còn đây là tệp nhị phân
+    # đi thẳng lên máy chủ Zalo.
+    #
+    # Nên người ngoài chỉ gửi được tệp NẰM TRONG kho tài liệu — đúng phạm vi
+    # mà zalo_kb_read đã mở, không rộng thêm một tấc nào. Chủ nhân giữ nguyên
+    # quyền gửi tệp bất kỳ.
+    turn = _turn()
+    if turn and not turn.get("is_owner"):
+        root = _kb_root()
+        if root is None:
+            return _err("chưa cấu hình kho tài liệu nên chưa gửi tệp được")
+        safe = []
+        for p in paths:
+            target = _kb_resolve(root, p)
+            if target is None or not target.is_file():
+                return _err(f"chỉ gửi được tệp trong kho tài liệu, không gửi được '{p}'")
+            rel = target.relative_to(root).as_posix()
+            if not _kb_allowed(rel):
+                return _err(f"tệp '{rel}' nằm ngoài phạm vi được phép chia sẻ")
+            safe.append(str(target))
+        paths = safe
+
     return await _invoke("uploadAttachment", [paths, thread_id, _thread_type(kind)])
 
 

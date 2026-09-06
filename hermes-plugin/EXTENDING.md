@@ -182,13 +182,13 @@ sticker, tệp, liên kết, thoại, chuyển tiếp), bình chọn, lời nh�
 link nhóm, tắt thông báo, ghim, hồ sơ bot, sổ người quen, kho tài liệu, đọc
 trang web.
 
-**Hỏng — 3 công cụ:**
+**Hỏng hoặc không ổn định — 3 công cụ:**
 
 | Công cụ | Triệu chứng | Nguyên nhân |
 |---|---|---|
 | `zalo_read_history` | HTTP 404 | Giới hạn zca-js 2.1.2, gọi đúng chữ ký vẫn hỏng |
 | `zalo_undo` | Không dùng được | `sendMessage` chỉ trả `{msgId}`, còn `undo` đòi cả `cliMsgId` — không có đường lấy |
-| `zalo_web_search` | Backend từ chối | Chưa đặt `EXA_API_KEY` hoặc backend tìm kiếm khác cho Hermes |
+| `zalo_web_search` | **Chập chờn** — cùng lúc có truy vấn được, có truy vấn lỗi | Đang dùng chế độ không khoá của Exa. Đặt `EXA_API_KEY` cho ổn định |
 
 `zalo_undo` sửa được: listener vẫn nhận lại tin bot tự gửi (kèm `cliMsgId`), nên
 có thể đệm một bảng `msgId → cliMsgId` ngắn hạn rồi tra khi thu hồi.
@@ -215,3 +215,22 @@ nhóm vĩnh viễn, phải nhờ người vào Zalo xoá tay. Đã thêm `zalo_r
 Bài học chung: một công cụ "gọi không lỗi" chưa chắc dùng được. Phải nhìn vào
 thứ nó trả về và hỏi *agent làm gì được với cái này*, và mỗi hành động tạo ra
 thứ gì đó phải có đường dọn tương ứng.
+
+
+## Một lỗ hổng phát hiện khi rà lại quyền trong nhóm
+
+`zalo_send_file` là công cụ **công khai** và nó nhận đường dẫn tệp trên máy chủ.
+Không giới hạn thư mục, nên bất kỳ ai trong nhóm chỉ cần nhờ *"gửi giúp mình
+tệp E:\Hermes\.env"* là bot tải khoá API lên nhóm.
+
+Việc lọc bí mật của Hermes không cứu được: nó soát **văn bản** đầu ra, còn đây
+là tệp nhị phân đi thẳng lên máy chủ Zalo. Nhắc trong prompt cũng không phải là
+ranh giới.
+
+Đã vá: người ngoài chỉ gửi được tệp **nằm trong kho tài liệu** — đúng phạm vi
+`zalo_kb_read` đã mở, không rộng thêm một tấc. Chủ nhân giữ nguyên quyền gửi tệp
+bất kỳ.
+
+Bài học rộng hơn: **mỗi công cụ công khai nhận đường dẫn, URL hay ID đều phải
+được hỏi lại là "người ngoài truyền giá trị xấu nhất vào đây thì sao"**. Lần rà
+đầu chỉ chia công cụ theo mức nguy hiểm mà quên soi từng tham số một.
