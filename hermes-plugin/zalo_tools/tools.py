@@ -238,7 +238,9 @@ async def zalo_read_history(args: Dict[str, Any], **_kw) -> str:
     if not thread_id:
         return _err("cần `thread_id`")
     count = min(int(args.get("count", 30)), 100)
-    return await _invoke("getGroupChatHistory", [thread_id, None, count])
+    # Chữ ký là (groupId, count?) — chỉ hai tham số. Truyền ba thì `None` rơi
+    # vào chỗ count và số tin agent xin bị bỏ qua trong im lặng.
+    return await _invoke("getGroupChatHistory", [thread_id, count])
 
 
 async def zalo_list_groups(args: Dict[str, Any], **_kw) -> str:
