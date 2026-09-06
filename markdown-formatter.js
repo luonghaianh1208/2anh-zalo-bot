@@ -220,8 +220,8 @@ export function formatAndChunkZaloMarkdown(input) {
   if (!input) return [];
 
   const raw = String(input).trim();
-  // Tách theo ranh giới tiêu đề hoặc dòng phân đoạn Markdown
-  const blocks = raw.split(/(?=\n\s*(?:#{1,6}\s+|---+\s*\n))/);
+  // Tách theo ranh giới tiêu đề lớn (h1 - h4)
+  const blocks = raw.split(/(?=\n\s*#{1,4}\s+)/);
 
   const subBlocks = [];
   for (const b of blocks) {
@@ -237,9 +237,9 @@ export function formatAndChunkZaloMarkdown(input) {
     const f = formatZaloMarkdown(candidate);
     const jsonLen = JSON.stringify(f.styles).length;
 
-    // Ngưỡng: Nếu thêm b mà làm styles vượt quá ngân sách (220 bytes) hoặc vượt 1600 ký tự
-    // Thì tách tin ngay để giữ trọn vẹn cả ĐẬM + PHÓNG TO cho mọi tiêu đề!
-    if ((jsonLen > 220 || f.msg.length > 1600) && currentBlock.length > 0) {
+    // Ngưỡng an toàn Zalo: styles JSON <= 235 bytes VÀ độ dài ký tự <= 2200
+    // Gom tối đa các mục lại cùng 1 tin nhắn để tin nhắn dài đẹp, liền mạch
+    if ((jsonLen > 235 || f.msg.length > 2200) && currentBlock.length > 0) {
       const ready = formatZaloMarkdown(currentBlock.join('\n\n'));
       if (ready.msg.trim()) results.push(ready);
       currentBlock = [b];
