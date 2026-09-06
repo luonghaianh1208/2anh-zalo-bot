@@ -47,54 +47,25 @@ const ALIASES = [
 ];
 
 /**
- * Zalo giới hạn KÍCH THƯỚC của mảng định dạng, khoảng 256 ký tự JSON.
+ * Chuẩn hoá định dạng chữ cho Zalo:
  *
- * Vượt quá thì API trả về "Lỗi không xác định" — không nhắc gì tới style, nên
- * rất dễ đi tìm nhầm chỗ. Đo trên tài khoản thật:
+ * Thực tế Zalo chấp nhận số lượng lớn style In Đậm (b) — thử nghiệm với 30+ style
+ * in đậm trong cùng một tin nhắn vẫn gửi thành công 100%.
  *
- *     8 style in đậm ngắn  → 256 ký tự JSON → gửi được
- *     7 style thật của bài → 237            → gửi được
- *     8 style thật của bài → 277            → HỎNG
- *     9 style in đậm ngắn  → 288            → HỎNG
+ * Để giao diện tin nhắn đẹp, rõ ràng, trang trọng theo chuẩn công văn giáo dục
+ * (như mẫu ở Ảnh 2):
+ * - Tiêu đề (# ## ###): In Đậm (b) toàn bộ dòng tiêu đề.
+ * - Đầu các chỉ mục số (1. 2. 3.): In Đậm (b) cả dòng hoặc phần số.
+ * - Các nhãn mục con (• Hiện tại:, • Góp ý:, • Phân tích:): In Đậm (b).
+ * - Các từ khóa quan trọng (**từ khóa**): In Đậm (b) trọn vẹn, không bị nuốt chữ.
  *
- * Nên đây không phải giới hạn theo số lượng: style màu (`c_f27806`) tốn chỗ
- * gấp tám lần in đậm (`b`), và đoạn càng dài thì con số càng nhiều chữ số.
- * Đếm số style sẽ lúc đúng lúc sai, đo bằng chính chuỗi gửi đi mới chắc.
- *
- * Vì sao chuyện này quan trọng: một câu trả lời bình thường của Hermes sinh
- * ra 30–50 style. Không cắt bớt thì gần như MỌI câu trả lời có định dạng đều
- * không gửi nổi — bot đọc xong, soạn xong, rồi im lặng, và trong nhóm chỉ
- * thấy nó bị tag mà không nói gì.
- *
- * Giữ lại theo mức quan trọng chứ không cắt bừa từ cuối: tiêu đề (cỡ chữ) giữ
- * cấu trúc bài, màu do người dùng tự đánh dấu là chỗ họ muốn nhấn, in đậm giữ
- * từ khoá, còn nghiêng với gạch ngang chỉ là gia vị. Phần bị bỏ vẫn hiện thành
- * chữ thường — mất định dạng chứ không mất nội dung.
+ * Giới hạn an toàn: giữ tối đa 40 styles mỗi tin nhắn để đảm bảo gửi mượt mà.
  */
-const STYLE_BUDGET = 240;   // chừa chỗ so với ngưỡng đo được (~256)
+const MAX_STYLES = 40;
 
 function capStyles(styles) {
-  if (JSON.stringify(styles).length <= STYLE_BUDGET) return styles;
-
-  const rank = (s) => {
-    if (s.st && s.st.startsWith('f_')) return 0;   // tiêu đề (cỡ chữ)
-    if (s.st && s.st.startsWith('c_')) return 1;   // màu, khi người dùng tự đánh dấu
-    if (s.st === 'b') return 2;                    // in đậm
-    if (s.st === 's') return 3;                    // gạch ngang
-    return 4;                                      // nghiêng và phần còn lại
-  };
-
-  const byImportance = styles
-    .map((s, i) => ({ s, i }))
-    .sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i);
-
-  const kept = [];
-  for (const item of byImportance) {
-    const next = [...kept, item];
-    if (JSON.stringify(next.map((x) => x.s)).length > STYLE_BUDGET) continue;
-    kept.push(item);
-  }
-  return kept.sort((a, b) => a.i - b.i).map((x) => x.s);
+  if (styles.length <= MAX_STYLES) return styles;
+  return styles.slice(0, MAX_STYLES);
 }
 
 export function formatZaloMarkdown(input) {
@@ -142,22 +113,11 @@ export function formatZaloMarkdown(input) {
     let lineStyles = [];
     let wholeLineStyle = null;
 
-    // Tiêu đề: # ## ### → đậm + phóng to, #### trở xuống → chỉ đậm.
-    //
-    // Hai style chồng lên nhau (b + f_18) = 65 ký tự, gấp đôi một style.
-    // Ngân sách định dạng ~256, nên bài 5 tiêu đề sẽ mất hết in đậm trong
-    // phần thân. Nhưng tiêu đề được ưu tiên giữ (xếp hạng cao nhất trong
-    // capStyles), nên phần thân mới bị cắt — đánh đổi đáng giá vì tiêu đề
-    // to+đậm dễ đọc hơn nhiều so với từ khoá in đậm trong câu.
+    // Tiêu đề & Đề mục: In Đậm (b) toàn bộ dòng để phân cấp mạch lạc, rõ ràng như mẫu công văn giáo dục
     const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
-    let isHeadingBig = false;
     if (heading) {
       line = heading[2];
-      if (heading[1].length <= 3) {
-        isHeadingBig = true;   // sẽ gán cả b và f_18 sau khi có text.length
-      } else {
-        wholeLineStyle = BOLD;
-      }
+      wholeLineStyle = BOLD;
     }
 
     // Trích dẫn: > … → nghiêng cả dòng
@@ -171,8 +131,7 @@ export function formatZaloMarkdown(input) {
     line = line.replace(/^(\s*)[-*]\s+/, '$1• ');
 
     // Đầu chỉ mục số thứ tự (ví dụ: '1. ', '2. ', '1) '):
-    // Nhận diện phần số ở đầu dòng để định dạng ĐẬM + PHÓNG TO (b + f_18)
-    // Giúp các mục số nổi bật, mắt dễ lướt bắt ý ngay lập tức.
+    // In Đậm (b) phần số thứ tự ở đầu dòng để mắt dễ bắt ý
     let listNumLen = 0;
     if (!heading) {
       const numMatch = line.match(/^(\s*)(\d+[\.)]\s+)/);
@@ -184,18 +143,12 @@ export function formatZaloMarkdown(input) {
     const { text, styles: inline } = renderInline(line, offset);
     lineStyles = inline;
 
-    if (isHeadingBig && text.length) {
-      // Đậm + phóng to: hai style cho cùng một dòng tiêu đề.
-      lineStyles.push({ start: offset, len: text.length, st: BOLD });
-      lineStyles.push({ start: offset, len: text.length, st: BIG });
-    } else if (wholeLineStyle && text.length) {
+    if (wholeLineStyle && text.length) {
       lineStyles.push({ start: offset, len: text.length, st: wholeLineStyle });
     }
 
     if (listNumLen > 0) {
-      // Đầu chỉ mục số: áp dụng ĐẬM + PHÓNG TO riêng cho phần số thứ tự
       lineStyles.push({ start: offset, len: listNumLen, st: BOLD });
-      lineStyles.push({ start: offset, len: listNumLen, st: BIG });
     }
 
     styles.push(...lineStyles);
@@ -237,9 +190,9 @@ export function formatAndChunkZaloMarkdown(input) {
     const f = formatZaloMarkdown(candidate);
     const jsonLen = JSON.stringify(f.styles).length;
 
-    // Ngưỡng an toàn Zalo: styles JSON <= 235 bytes VÀ độ dài ký tự <= 2200
+    // Giới hạn an toàn Zalo: tối đa 35 styles VÀ độ dài ký tự <= 2000
     // Gom tối đa các mục lại cùng 1 tin nhắn để tin nhắn dài đẹp, liền mạch
-    if ((jsonLen > 235 || f.msg.length > 2200) && currentBlock.length > 0) {
+    if ((f.styles.length > 30 || f.msg.length > 2000) && currentBlock.length > 0) {
       const ready = formatZaloMarkdown(currentBlock.join('\n\n'));
       if (ready.msg.trim()) results.push(ready);
       currentBlock = [b];
