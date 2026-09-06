@@ -137,6 +137,27 @@ Công cụ công khai còn bị **khoá phạm vi**: người ngoài truyền `t
 
 **Trang quét QR** tại `http://127.0.0.1:3872` — chỉ dùng lúc đăng nhập lần đầu và khi phiên hết hạn. Không có trang quản trị: mọi thao tác đều ra lệnh cho agent.
 
+### Giữ tài khoản không bị khoá
+
+Hai lớp riêng biệt, bảo vệ hai thứ khác nhau.
+
+**Giãn nhịp gửi (`rate-limiter.js`)** bảo vệ tài khoản Zalo. Hermes trả lời xong thường bắn liền mấy thứ sát nhau — đoạn văn bản, sticker, có khi cả tệp — mà Zalo thì quét hành vi spam trên tài khoản cá nhân, và mất tài khoản là mất luôn cả kênh.
+
+Dùng token bucket chứ không phải "ngủ 3 giây sau mỗi tin", vì ngủ cố định làm chậm cả những lượt trả lời bình thường. Bucket có sẵn 5 token nên **một lượt trả lời thông thường đi ra ngay, không trễ mili giây nào**; chỉ khi gửi dồn kéo dài mới bị giãn về 20 tin/phút. Câu trả lời chỉ bị tách khi dài hơn 4000 ký tự, nên phải viết hơn 20.000 ký tự mới chạm hạn mức.
+
+Hai chi tiết để không hỏng trải nghiệm:
+
+- **Ưu tiên** — tin trả lời trong hội thoại xếp trước thao tác hàng loạt. Chủ nhân bảo bot chuyển tiếp tới 20 nhóm thì việc đó không làm người đang nói chuyện phải chờ.
+- **Từ chối sớm** — adapter chờ ack tối đa 30 giây; giữ lâu hơn thì agent tưởng gửi hỏng và thử lại, thành ra càng spam. Nên khi hàng quá dài, bridge báo lỗi rõ ràng để agent biết dừng.
+
+Chỉ áp cho thứ người khác nhìn thấy được (nhắn tin, sticker, tệp, chuyển tiếp, bình chọn, mời nhóm). Gõ phím, đã xem, thả cảm xúc, đọc dữ liệu đều không bị bóp — bóp chúng chỉ làm bot có vẻ chậm chạp chứ không giảm rủi ro gì.
+
+**Chống nhắn dồn dập (`hermes-plugin/zalo/flood.py`)** bảo vệ ví tiền và nhóm. Bot chỉ trả lời khi bị tag, nhưng mỗi lần tag là một lượt gọi mô hình tính phí — ai đó tag hai mươi lần trong một phút là hai mươi lượt.
+
+Ngưỡng để rộng tay có chủ đích: 6 tin trong 15 giây nhanh hơn nhịp hỏi của người thật khá nhiều. Quá ngưỡng thì bot **nói đúng một câu rồi im** trong 90 giây — im lặng đột ngột trông như bot hỏng và người ta sẽ tag thêm nữa, đúng thứ ta đang muốn tránh. Chủ nhân được miễn trừ, và một người bị chặn không ảnh hưởng ai khác trong nhóm.
+
+Cả hai đều chỉnh được qua `.env` (xem `.env.example`).
+
 ---
 
 ## Yêu cầu

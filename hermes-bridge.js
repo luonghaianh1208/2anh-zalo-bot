@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 import { ThreadType, Reactions } from 'zca-js';
 import { formatZaloMarkdown } from './markdown-formatter.js';
 import { pickSmartReaction } from './smart-reaction.js';
+import { RateLimiter, RateLimitedError, THROTTLED_METHODS } from './rate-limiter.js';
 
 /**
  * Cầu nối Zalo ↔ Hermes Agent.
@@ -72,6 +73,19 @@ const ALLOWED_METHODS = new Set([
   // Lịch sự
   'sendSeenEvent', 'sendTypingEvent', 'sendDeliveredEvent', 'addReaction',
 ]);
+
+/**
+ * Nhịp gửi mặc định: bắn liền tối đa 5 tin, sau đó giãn về 20 tin/phút.
+ *
+ * Con số 5 chọn theo lượt trả lời thực tế — một câu trả lời của Hermes hiếm
+ * khi vượt quá 2–3 tin kể cả khi kèm sticker, nên hạn mức này không bao giờ
+ * chạm tới trong hội thoại bình thường.
+ */
+const limiter = new RateLimiter({
+  capacity: Number(process.env.ZALO_RATE_BURST || 5),
+  refillMs: Number(process.env.ZALO_RATE_INTERVAL_MS || 3000),
+  maxWaitMs: Number(process.env.ZALO_RATE_MAX_WAIT_MS || 20000),
+});
 
 let wss = null;
 let clients = new Set();
@@ -176,6 +190,30 @@ async function handleCommand(ws, cmd) {
   }
 
   const threadType = cmd.threadType === 1 ? ThreadType.Group : ThreadType.User;
+
+  // Giãn nhịp trước khi gửi bất cứ thứ gì người khác nhìn thấy được.
+  //
+  // Đặt ở đây chứ không đặt trong từng case: một chỗ duy nhất thì không thể
+  // quên khi thêm lệnh mới, và cũng không có đường vòng nào lách qua.
+  //
+  // Ưu tiên cao cho `send` — đó là câu trả lời cho người đang nói chuyện. Các
+  // lệnh khác (chuyển tiếp hàng loạt, mời vào nhóm) đi mức thường, nên chúng
+  // không bao giờ chen trước một lượt trả lời.
+  const needsQuota =
+    cmd.type === 'send' ||
+    (cmd.type === 'invoke' && THROTTLED_METHODS.has(String(cmd.method || '')));
+  if (needsQuota) {
+    try {
+      await limiter.acquire(cmd.type === 'send' ? 'high' : 'normal');
+    } catch (err) {
+      if (err instanceof RateLimitedError) {
+        console.warn(`[bridge] ⏳ chặn nhịp ${cmd.type}/${cmd.method || ''}: ${err.message}`);
+        if (cmd.reqId) send(ws, { type: 'ack', reqId: cmd.reqId, ok: false, error: err.message });
+        return;
+      }
+      throw err;
+    }
+  }
 
   switch (cmd.type) {
     case 'send': {

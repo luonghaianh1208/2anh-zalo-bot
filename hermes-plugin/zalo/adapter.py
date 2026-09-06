@@ -82,6 +82,10 @@ from agent.secret_scope import get_secret as _scoped_get_secret
 # plugin theo kiểu lười.
 from plugins.zalo_tools.tools import TOOLSET_OWNER, TOOLSET_PUBLIC
 
+from .flood import JUST_MUTED as FLOOD_JUST_MUTED
+from .flood import MUTED as FLOOD_MUTED
+from .flood import FloodGuard
+
 
 def _zalo_tools():
     """Trả về đúng bản module công cụ mà Hermes đã nạp.
@@ -220,6 +224,15 @@ class ZaloAdapter(BasePlatformAdapter):
         self._auto_react: bool = _truthy(
             extra.get("auto_react", _get_scoped_secret("ZALO_AUTO_REACT", "true")),
             default=True,
+        )
+
+        # Ngưỡng đặt rộng tay có chủ đích: sáu tin trong mười lăm giây nhanh
+        # hơn nhịp hỏi của người thật khá nhiều, nên người dùng bình thường
+        # gần như không bao giờ chạm tới.
+        self._flood = FloodGuard(
+            threshold=int(_get_scoped_secret("ZALO_FLOOD_THRESHOLD", "6") or 6),
+            window_s=float(_get_scoped_secret("ZALO_FLOOD_WINDOW_S", "15") or 15),
+            mute_s=float(_get_scoped_secret("ZALO_FLOOD_MUTE_S", "90") or 90),
         )
 
         self._ws = None
@@ -394,6 +407,31 @@ class ZaloAdapter(BasePlatformAdapter):
             logger.info("[zalo] bỏ qua tin nhắn riêng từ %s (%s) — không phải chủ nhân",
                         sender_name, sender_uid)
             return
+
+        # Chặn nhắn dồn dập. Đặt sau cổng kiểm quyền (chỉ đếm tin thật sự
+        # dành cho bot) nhưng TRƯỚC cả thả cảm xúc lẫn gọi mô hình — người
+        # đang spam không đáng được phản hồi gì, kể cả một trái tim.
+        #
+        # Chủ nhân miễn trừ: anh ấy có thể cần bắn liên tiếp mấy việc một lúc,
+        # và cũng chính là người trả tiền cho các lượt gọi mô hình.
+        if not self._is_owner(sender_uid):
+            verdict = self._flood.check(sender_uid)
+            if verdict == FLOOD_MUTED:
+                logger.debug("[zalo] %s đang trong thời gian nghỉ — bỏ qua", sender_uid)
+                return
+            if verdict == FLOOD_JUST_MUTED:
+                secs = self._flood.remaining(sender_uid)
+                logger.info("[zalo] tạm nghỉ %s (%s) trong %ss vì nhắn dồn",
+                            sender_name, sender_uid, secs)
+                # Nói đúng một câu rồi im. Im lặng đột ngột trông như bot hỏng
+                # và người ta sẽ tag thêm nữa — đúng thứ ta đang muốn tránh.
+                await self.send(
+                    thread_id,
+                    f"Mình nhận nhiều tin quá nên xử lý chưa kịp 😅 "
+                    f"Bạn chờ mình khoảng {secs} giây rồi nhắn lại nhé!",
+                    metadata={"chat_type": "group" if is_group else "dm"},
+                )
+                return
 
         source = self.build_source(
             chat_id=thread_id,
