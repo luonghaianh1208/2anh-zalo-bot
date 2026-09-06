@@ -260,23 +260,50 @@ Sidecar không còn tệp cấu hình nào. Ai được dùng bot, trả lời k
 
 ## Định dạng tin nhắn
 
-Hermes cứ viết Markdown như bình thường; cầu nối dịch sang style gốc của Zalo trước khi gửi:
+Hermes cứ viết Markdown như bình thường; cầu nối dịch sang định dạng gốc của Zalo trước khi gửi:
 
 | Markdown | Hiển thị trên Zalo |
 |---|---|
-| `# H1`, `## H2` | **đậm + đỏ** |
-| `### H3` | **đậm + cam** |
-| `**text**` | **đậm** |
-| `*text*` | *nghiêng* |
-| `` `code` `` | **đậm** |
-| `~~text~~` | ~~gạch ngang~~ |
-| `> quote` | *nghiêng* |
-| `- item` | • item |
-| `[chữ](url)` | **chữ** (url) |
-| `[green]…[/green]` | **xanh lá** |
-| `[red]` `[orange]` `[yellow]` | các màu tương ứng |
+| `# ## ###` tiêu đề | chữ **phóng to** |
+| `####` trở xuống | in đậm |
+| `**đậm**` `__đậm__` | in đậm |
+| `` `mã` `` | in đậm (Zalo không có chữ đơn cách) |
+| `*nghiêng*` `> trích dẫn` | in nghiêng |
+| `~~gạch~~` | gạch ngang |
+| `- mục` | • mục |
+| `[chữ](link)` | chữ (link) |
+| `[đỏ]…[/đỏ]` · `[xanh]` `[cam]` `[vàng]` | đổi màu chữ |
 
-Emoji hiển thị gốc, dùng thoải mái.
+### Hai giới hạn của Zalo phải biết
+
+Cả hai đều **không báo lỗi rõ ràng**, nên rất dễ đi tìm nhầm chỗ.
+
+**Độ dài tối đa 3000 ký tự.** Quá thì Zalo trả `"Nội dung quá dài"`. Đo trên tài khoản thật: ASCII, tiếng Việt có dấu và emoji đều dừng ở đúng 3000 — là số **đơn vị mã UTF-16**, không phải byte. Adapter cắt ở 2800 và đếm theo UTF-16, vì mỗi emoji là 1 với `len()` của Python nhưng 2 với Zalo.
+
+Câu trả lời dài được cắt ở chỗ đọc được: hết đoạn, rồi hết câu, cuối cùng mới cắt cứng.
+
+**Mảng định dạng bị giới hạn theo kích thước, khoảng 256 ký tự JSON.** Quá thì Zalo chỉ nói `"Lỗi không xác định"`, không nhắc gì tới định dạng.
+
+| Bộ style | Kích thước | |
+|---|---|---|
+| 8 style in đậm ngắn | 256 | ✅ |
+| 7 style thật của bài | 237 | ✅ |
+| 8 style thật (có màu) | 277 | ❌ |
+| 9 style in đậm ngắn | 288 | ❌ |
+
+Đây **không** phải giới hạn theo số lượng — một style màu tốn 38 ký tự còn in đậm chỉ 31, nên đếm số style sẽ lúc đúng lúc sai.
+
+Vì thế tiêu đề dùng **một** style cỡ chữ thay vì chồng đậm + màu:
+
+| Cách | Chi phí | Số style |
+|---|---|---|
+| Đậm + màu (cũ) | 69 | 2 |
+| Đậm + phóng to | 65 | 2 |
+| **Chỉ phóng to** | **34** | **1** |
+
+Chỗ tốn không nằm ở màu mà ở việc chồng hai style lên cùng một dòng. Một câu trả lời bình thường sinh 30–50 style, nên nếu không tiết chế thì gần như **mọi** câu trả lời có định dạng đều không gửi nổi — bot đọc xong, soạn xong, rồi im lặng.
+
+Khi vẫn quá ngân sách, `capStyles` giữ lại theo mức quan trọng: tiêu đề → màu người dùng tự đánh dấu → in đậm → nghiêng. Phần bị bỏ hiện thành chữ thường, **mất định dạng chứ không mất nội dung**.
 
 ---
 

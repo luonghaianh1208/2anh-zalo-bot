@@ -9,8 +9,8 @@ import { TextStyle } from 'zca-js';
  * Markdown bình thường như khi trả lời trên Telegram.
  *
  * Bảng quy đổi
- *   # H1, ## H2         → đậm + đỏ      (tiêu đề chính)
- *   ### H3 trở xuống    → đậm + cam     (tiêu đề phụ)
+ *   # ## ###            → phóng to      (tiêu đề)
+ *   #### trở xuống      → đậm           (tiêu đề phụ, hiếm dùng)
  *   **đậm**, __đậm__    → đậm           (từ khoá, con số)
  *   *nghiêng*, _nghiêng_→ nghiêng
  *   ~~gạch ngang~~      → gạch ngang
@@ -19,7 +19,7 @@ import { TextStyle } from 'zca-js';
  *   > trích dẫn         → nghiêng
  *   - mục, * mục        → •
  *   [chữ](liên-kết)     → chữ (liên-kết)
- *   [red]…[/red]        → đậm + đỏ      (khi cần chỉ định màu tay)
+ *   [red]…[/red]        → đỏ            (khi cần chỉ định màu tay)
  *   [green] [orange] [yellow] và bí danh tiếng Việt [do] [xanh] [cam] [vang]
  *
  * Trả về { msg, styles } đúng dạng api.sendMessage của zca-js.
@@ -32,6 +32,10 @@ const COLORS = {
   yellow: TextStyle.Yellow || 'c_f7b503',
 };
 const BOLD = TextStyle.Bold || 'b';
+// Cỡ chữ lớn. Dùng cho tiêu đề thay vì "đậm + màu": một mình nó đã đủ tách
+// tiêu đề khỏi thân bài, mà chỉ tốn 34 ký tự thay vì 69, và chiếm một suất
+// thay vì hai trong ngân sách định dạng vốn rất chật.
+const BIG = TextStyle.Big || 'f_18';
 const ITALIC = TextStyle.Italic || 'i';
 const STRIKE = TextStyle.StrikeThrough || 's';
 
@@ -62,9 +66,10 @@ const ALIASES = [
  * không gửi nổi — bot đọc xong, soạn xong, rồi im lặng, và trong nhóm chỉ
  * thấy nó bị tag mà không nói gì.
  *
- * Giữ lại theo mức quan trọng chứ không cắt bừa từ cuối: tiêu đề có màu giữ
- * cấu trúc bài, in đậm giữ từ khoá, nghiêng và gạch ngang chỉ là gia vị. Phần
- * bị bỏ vẫn hiện thành chữ thường — mất định dạng chứ không mất nội dung.
+ * Giữ lại theo mức quan trọng chứ không cắt bừa từ cuối: tiêu đề (cỡ chữ) giữ
+ * cấu trúc bài, màu do người dùng tự đánh dấu là chỗ họ muốn nhấn, in đậm giữ
+ * từ khoá, còn nghiêng với gạch ngang chỉ là gia vị. Phần bị bỏ vẫn hiện thành
+ * chữ thường — mất định dạng chứ không mất nội dung.
  */
 const STYLE_BUDGET = 240;   // chừa chỗ so với ngưỡng đo được (~256)
 
@@ -72,10 +77,11 @@ function capStyles(styles) {
   if (JSON.stringify(styles).length <= STYLE_BUDGET) return styles;
 
   const rank = (s) => {
-    if (s.st && s.st.startsWith('c_')) return 0;   // tiêu đề có màu
-    if (s.st === 'b') return 1;                    // in đậm
-    if (s.st === 's') return 2;                    // gạch ngang
-    return 3;                                      // nghiêng và phần còn lại
+    if (s.st && s.st.startsWith('f_')) return 0;   // tiêu đề (cỡ chữ)
+    if (s.st && s.st.startsWith('c_')) return 1;   // màu, khi người dùng tự đánh dấu
+    if (s.st === 'b') return 2;                    // in đậm
+    if (s.st === 's') return 3;                    // gạch ngang
+    return 4;                                      // nghiêng và phần còn lại
   };
 
   const byImportance = styles
@@ -120,11 +126,18 @@ export function formatZaloMarkdown(input) {
     let lineStyles = [];
     let wholeLineStyle = null;
 
-    // Tiêu đề: # ## → đỏ đậm, ### trở xuống → cam đậm
+    // Tiêu đề: # ## → phóng to, ### trở xuống → in đậm.
+    //
+    // Trước đây mỗi tiêu đề tốn hai style chồng lên nhau (đậm + màu) = 69 ký
+    // tự. Ngân sách định dạng của Zalo chỉ khoảng 256, nên ba tiêu đề là hết
+    // chỗ và mọi thứ còn lại trong bài mất định dạng. Một style cho một tiêu
+    // đề thì vừa rẻ hơn một nửa, vừa đọc ra ngay là tiêu đề.
     const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
     if (heading) {
       line = heading[2];
-      wholeLineStyle = heading[1].length <= 2 ? COLORS.red : COLORS.orange;
+      // Tới cấp 3 vẫn phóng to: Hermes hay dùng ### cho các mục chính, mà
+      // để in đậm thì lẫn với từ khoá in đậm nằm trong câu.
+      wholeLineStyle = heading[1].length <= 3 ? BIG : BOLD;
     }
 
     // Trích dẫn: > … → nghiêng cả dòng
@@ -148,13 +161,9 @@ export function formatZaloMarkdown(input) {
     lineStyles = inline;
 
     if (wholeLineStyle && text.length) {
-      // Tiêu đề: đậm + màu. Trích dẫn: chỉ nghiêng.
-      if (wholeLineStyle === ITALIC) {
-        lineStyles.push({ start: offset, len: text.length, st: ITALIC });
-      } else {
-        lineStyles.push({ start: offset, len: text.length, st: BOLD });
-        lineStyles.push({ start: offset, len: text.length, st: wholeLineStyle });
-      }
+      // Một style cho cả dòng, không chồng thêm gì — xem ghi chú ở chỗ nhận
+      // diện tiêu đề về ngân sách định dạng.
+      lineStyles.push({ start: offset, len: text.length, st: wholeLineStyle });
     }
 
     styles.push(...lineStyles);
@@ -188,7 +197,8 @@ function renderInline(line, base) {
       const start = out.length;
       out += inner.text;
       styles.push(...inner.styles);
-      push(start, inner.text.length, BOLD);
+      // Chỉ màu, không kèm đậm: chồng hai style lên cùng một đoạn tốn 69 ký
+      // tự trong ngân sách 256, mà màu một mình đã đủ nổi.
       push(start, inner.text.length, COLORS[color.name]);
       i += color.consumed;
       continue;
