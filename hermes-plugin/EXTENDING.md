@@ -234,3 +234,63 @@ bất kỳ.
 Bài học rộng hơn: **mỗi công cụ công khai nhận đường dẫn, URL hay ID đều phải
 được hỏi lại là "người ngoài truyền giá trị xấu nhất vào đây thì sao"**. Lần rà
 đầu chỉ chia công cụ theo mức nguy hiểm mà quên soi từng tham số một.
+
+---
+
+## Ba lỗi tìm ra khi chạy thật trong nhóm
+
+Cả ba đều không lộ ra ở bất kỳ phép thử tầng dưới nào.
+
+### `uploadAttachment` báo thành công nhưng không gửi gì
+
+Agent nói *"em đã gửi đính kèm 2 file"*, lịch sử phiên xác nhận nó **đã gọi**
+`zalo_send_file` hai lần và cả hai trả `success: true` — nhưng trong nhóm không
+có tệp nào.
+
+`uploadAttachment` chỉ đẩy tệp lên CDN của Zalo và trả về `fileUrl`/`fileId`.
+Nó **không** đăng tệp thành tin nhắn. Muốn gửi thật phải dùng
+`sendMessage({msg, attachments}, threadId, type)`.
+
+Dấu hiệu phân biệt nằm ngay ở giá trị trả về:
+
+| Cách gọi | Trả về | Thành tin nhắn? |
+|---|---|---|
+| `uploadAttachment` | `{fileUrl, fileId, totalSize…}` | ❌ |
+| `sendMessage` + `attachments` | `{message:{msgId}, attachment:[{msgId}]}` | ✅ |
+
+**Quy tắc rút ra: mọi API gửi nội dung phải trả về `msgId`. Không có `msgId`
+thì chưa có tin nhắn nào cả, dù `success: true`.**
+
+### Tin nhắn kèm link bị vứt trong im lặng
+
+`msg.data.content` không phải lúc nào cũng là chuỗi. Dán một đường link, gửi
+ảnh hay tệp thì Zalo đổi nó thành object `{title, description, href, thumb…}`.
+Code cũ chỉ nhận chuỗi nên tin có link thành rỗng, và bị bỏ ngay ở dòng
+`if not text: return` — **không một dòng log nào**, nên nhìn từ ngoài y như bot
+cố tình phớt lờ.
+
+Cách phát hiện: đối chiếu tin nhắn thấy trên điện thoại với log. Tin không kèm
+link đều có log, tin kèm link không có dòng nào — chênh lệch đó chỉ ra chỗ hỏng.
+
+### Tiến trình nội bộ nhảy vào nhóm
+
+`⌛ Working — 3 min — iteration 3/500, zalo_kb_list` hiện giữa cuộc trò chuyện.
+
+Hermes có mặc định hiển thị riêng cho từng nền tảng (`_PLATFORM_DEFAULTS`),
+nhưng **plugin platform không có mặc định nào** nên rơi vào cấu hình toàn cục
+vốn dành cho terminal. Nhóm chat giống kênh Slack chứ không giống terminal: mỗi
+dòng là một tin vĩnh viễn ai cũng thấy, không sửa lại được.
+
+Khai trong `config.yaml`:
+
+```yaml
+display:
+  platforms:
+    zalo:
+      tool_progress: "off"
+      long_running_notifications: false
+      busy_ack_detail: false
+```
+
+> Bất kỳ plugin platform nào cũng nên khai khối này ngay khi dựng, đừng đợi tới
+> lúc tiến trình nội bộ rơi vào mặt khách hàng.

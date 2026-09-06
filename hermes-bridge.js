@@ -150,6 +150,46 @@ export function stopHermesBridge() {
   }
 }
 
+/**
+ * Rút phần chữ đọc được ra khỏi một tin nhắn Zalo.
+ *
+ * `msg.data.content` KHÔNG phải lúc nào cũng là chuỗi. Khi người ta dán một
+ * đường link, gửi ảnh hay tệp, Zalo đổi nó thành object
+ * `{title, description, href, thumb, …}`. Trước đây chỗ này chỉ nhận chuỗi, nên
+ * mọi tin có link đều thành rỗng — và adapter bỏ tin rỗng ngay từ dòng đầu.
+ * Kết quả: tag bot kèm một đường link thì bot im như không nghe thấy, không có
+ * lấy một dòng log để lần ra.
+ */
+export function extractText(msg) {
+  const c = msg?.data?.content;
+  if (typeof c === 'string') return c;
+  if (!c || typeof c !== 'object') return '';
+
+  const parts = [];
+  const push = (v) => {
+    const s = String(v ?? '').trim();
+    if (s && !parts.includes(s)) parts.push(s);
+  };
+  push(c.title);
+  push(c.description);
+  push(c.href);
+  if (!parts.length) {
+    // Dạng lạ: giữ lại vài trường chuỗi đầu tiên còn hơn trả về rỗng rồi bị
+    // vứt bỏ trong im lặng.
+    for (const [k, v] of Object.entries(c)) {
+      if (typeof v === 'string' && v.trim() && !/^(thumb|action|params)$/i.test(k)) {
+        push(v);
+        if (parts.length >= 3) break;
+      }
+    }
+  }
+  if (!parts.length) {
+    console.warn('[bridge] tin nhắn không rút được chữ, msgType=%s, khoá=%s',
+      msg?.data?.msgType, Object.keys(c).join(','));
+  }
+  return parts.join('\n');
+}
+
 /** Đẩy một tin nhắn Zalo sang Hermes. Trả về true nếu có ai đó nhận. */
 export function forwardToHermes(msg) {
   if (!isHermesAttached()) return false;
@@ -162,7 +202,10 @@ export function forwardToHermes(msg) {
     threadType: msg.type === ThreadType.Group ? 1 : 0,
     senderUid: String(msg.data?.uidFrom ?? ''),
     senderName: msg.data?.dName || '',
-    text: typeof msg.data?.content === 'string' ? msg.data.content : '',
+    text: extractText(msg),
+    // Kiểu tin của Zalo (webchat, chat.photo, chat.recommended…) — adapter cần
+    // để biết đây là tin chữ hay tin đính kèm.
+    msgType: msg.data?.msgType || '',
     mentions: Array.isArray(msg.data?.mentions) ? msg.data.mentions : [],
     ts: msg.data?.ts ?? Date.now(),
     // Giữ nguyên gói gốc để adapter trích thêm khi cần (quote, đính kèm…)

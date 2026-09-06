@@ -1,4 +1,4 @@
-import { isHermesAttached, forwardToHermes } from './hermes-bridge.js';
+import { isHermesAttached, forwardToHermes, extractText } from './hermes-bridge.js';
 import { ThreadType } from 'zca-js';
 
 /**
@@ -70,7 +70,10 @@ function isAddressedToBot(msg, isGroup, senderUid) {
 async function handleIncomingMessage(api, msg) {
   if (msg.isSelf) return;
 
-  const content = typeof msg.data?.content === 'string' ? msg.data.content.trim() : '';
+  // Dùng chung bộ rút chữ với cầu nối: tin có link hay tệp thì content là
+  // object chứ không phải chuỗi, lọc theo chuỗi ở đây là vứt mất tin trước
+  // cả khi Hermes kịp nhìn thấy.
+  const content = extractText(msg).trim();
   if (!content) return;
 
   // zca-js đã tính sẵn msg.threadId và msg.type cho cả hai loại hội thoại.

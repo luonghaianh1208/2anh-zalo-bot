@@ -188,7 +188,20 @@ async def zalo_send_file(args: Dict[str, Any], **_kw) -> str:
             safe.append(str(target))
         paths = safe
 
-    return await _invoke("uploadAttachment", [paths, thread_id, _thread_type(kind)])
+    # Gửi qua sendMessage chứ KHÔNG qua uploadAttachment.
+    #
+    # `uploadAttachment` chỉ đẩy tệp lên CDN của Zalo rồi trả về fileUrl —
+    # nó không đăng tệp thành tin nhắn. API báo thành công, agent tin là đã
+    # gửi và nói với người dùng như vậy, nhưng trong nhóm chẳng có gì. Không
+    # có dấu hiệu nào để lần ra, vì mọi thứ đều "thành công".
+    #
+    # Dấu hiệu phân biệt: uploadAttachment trả về fileUrl/fileId, còn
+    # sendMessage trả về `attachment: [{msgId}]` — có msgId mới là tin thật.
+    caption = str(args.get("caption") or "").strip()
+    return await _invoke("sendMessage", [
+        {"msg": caption, "attachments": paths},
+        thread_id, _thread_type(kind),
+    ])
 
 
 async def zalo_send_voice(args: Dict[str, Any], **_kw) -> str:
@@ -982,9 +995,13 @@ TOOLS = [
         {
             "thread_id": _THREAD_ID,
             "thread_kind": _THREAD_KIND,
-            "path": {"type": "string", "description": "Đường dẫn tuyệt đối tới tệp."},
+            "path": {"type": "string", "description":
+                     "Đường dẫn tệp. Người trong nhóm chỉ gửi được tệp thuộc kho "
+                     "tài liệu — dùng đúng đường dẫn mà zalo_kb_list trả về."},
             "paths": {"type": "array", "items": {"type": "string"},
                       "description": "Nhiều tệp cùng lúc."},
+            "caption": {"type": "string", "description":
+                        "Lời nhắn đi kèm tệp, ví dụ tên tài liệu."},
         },
         ["thread_id"],
     ), zalo_send_file, TOOLSET_PUBLIC),
