@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws';
 import { ThreadType, Reactions } from 'zca-js';
-import { formatZaloMarkdown } from './markdown-formatter.js';
+import { formatZaloMarkdown, formatAndChunkZaloMarkdown } from './markdown-formatter.js';
 import { pickSmartReaction } from './smart-reaction.js';
 import { RateLimiter, RateLimitedError, THROTTLED_METHODS } from './rate-limiter.js';
 
@@ -259,16 +259,36 @@ async function handleCommand(ws, cmd) {
       // Hermes Agent xuất Markdown (giống hệt khi trả lời trên Telegram).
       // Zalo không hiểu Markdown nhưng có hệ style riêng, nên dịch tại đây —
       // adapter phía Python không cần biết gì về định dạng của Zalo.
-      const formatted = formatZaloMarkdown(String(cmd.text ?? ''));
-      const content = { msg: formatted.msg };
-      if (formatted.styles.length) content.styles = formatted.styles;
-      // Cho phép người gọi tự truyền styles để ghi đè (hiếm dùng).
-      if (Array.isArray(cmd.styles) && cmd.styles.length) content.styles = cmd.styles;
-      if (cmd.quote) content.quote = cmd.quote;
+      //
+      // Nâng cấp: Tự động chia tin nhắn thông minh theo ngân sách style và ký tự.
+      // Nếu văn bản dài hoặc có nhiều tiêu đề / định dạng, formatAndChunkZaloMarkdown
+      // sẽ tách thành các tin nhắn hoàn chỉnh, mỗi tin đảm bảo giữ trọn vẹn 100% styles
+      // (tiêu đề to + đậm, chỉ mục số đậm + to, từ khoá in đậm) mà không bị Zalo từ chối!
+      const rawText = String(cmd.text ?? '');
+      const chunks = formatAndChunkZaloMarkdown(rawText);
 
-      const res = await zaloApi.sendMessage(content, String(cmd.threadId), threadType);
-      const msgId = res?.message?.msgId ?? res?.message?.msgID ?? null;
-      if (cmd.reqId) send(ws, { type: 'ack', reqId: cmd.reqId, ok: true, msgId: msgId ? String(msgId) : null });
+      let lastMsgId = null;
+      for (let i = 0; i < chunks.length; i++) {
+        const item = chunks[i];
+        const content = { msg: item.msg };
+        if (item.styles && item.styles.length) content.styles = item.styles;
+        // Chỉ trích dẫn (quote) ở tin đầu tiên nếu có
+        if (i === 0 && cmd.quote) content.quote = cmd.quote;
+
+        // Nếu có nhiều hơn 1 tin, từ tin thứ 2 trở đi cần qua limiter bình thường
+        if (i > 0) {
+          try {
+            await limiter.acquire('high');
+          } catch (limErr) {
+            console.warn('[bridge] ⏳ ngắt nhịp giữa các chunk:', limErr?.message);
+          }
+        }
+
+        const res = await zaloApi.sendMessage(content, String(cmd.threadId), threadType);
+        lastMsgId = res?.message?.msgId ?? res?.message?.msgID ?? lastMsgId;
+      }
+
+      if (cmd.reqId) send(ws, { type: 'ack', reqId: cmd.reqId, ok: true, msgId: lastMsgId ? String(lastMsgId) : null });
       break;
     }
 

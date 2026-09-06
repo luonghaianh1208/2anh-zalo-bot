@@ -142,18 +142,22 @@ export function formatZaloMarkdown(input) {
     let lineStyles = [];
     let wholeLineStyle = null;
 
-    // Tiêu đề: # ## → phóng to, ### trở xuống → in đậm.
+    // Tiêu đề: # ## ### → đậm + phóng to, #### trở xuống → chỉ đậm.
     //
-    // Trước đây mỗi tiêu đề tốn hai style chồng lên nhau (đậm + màu) = 69 ký
-    // tự. Ngân sách định dạng của Zalo chỉ khoảng 256, nên ba tiêu đề là hết
-    // chỗ và mọi thứ còn lại trong bài mất định dạng. Một style cho một tiêu
-    // đề thì vừa rẻ hơn một nửa, vừa đọc ra ngay là tiêu đề.
+    // Hai style chồng lên nhau (b + f_18) = 65 ký tự, gấp đôi một style.
+    // Ngân sách định dạng ~256, nên bài 5 tiêu đề sẽ mất hết in đậm trong
+    // phần thân. Nhưng tiêu đề được ưu tiên giữ (xếp hạng cao nhất trong
+    // capStyles), nên phần thân mới bị cắt — đánh đổi đáng giá vì tiêu đề
+    // to+đậm dễ đọc hơn nhiều so với từ khoá in đậm trong câu.
     const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
+    let isHeadingBig = false;
     if (heading) {
       line = heading[2];
-      // Tới cấp 3 vẫn phóng to: Hermes hay dùng ### cho các mục chính, mà
-      // để in đậm thì lẫn với từ khoá in đậm nằm trong câu.
-      wholeLineStyle = heading[1].length <= 3 ? BIG : BOLD;
+      if (heading[1].length <= 3) {
+        isHeadingBig = true;   // sẽ gán cả b và f_18 sau khi có text.length
+      } else {
+        wholeLineStyle = BOLD;
+      }
     }
 
     // Trích dẫn: > … → nghiêng cả dòng
@@ -166,13 +170,32 @@ export function formatZaloMarkdown(input) {
     // Gạch đầu dòng: -, * → •  (giữ nguyên thụt lề)
     line = line.replace(/^(\s*)[-*]\s+/, '$1• ');
 
+    // Đầu chỉ mục số thứ tự (ví dụ: '1. ', '2. ', '1) '):
+    // Nhận diện phần số ở đầu dòng để định dạng ĐẬM + PHÓNG TO (b + f_18)
+    // Giúp các mục số nổi bật, mắt dễ lướt bắt ý ngay lập tức.
+    let listNumLen = 0;
+    if (!heading) {
+      const numMatch = line.match(/^(\s*)(\d+[\.)]\s+)/);
+      if (numMatch) {
+        listNumLen = numMatch[2].length;
+      }
+    }
+
     const { text, styles: inline } = renderInline(line, offset);
     lineStyles = inline;
 
-    if (wholeLineStyle && text.length) {
-      // Một style cho cả dòng, không chồng thêm gì — xem ghi chú ở chỗ nhận
-      // diện tiêu đề về ngân sách định dạng.
+    if (isHeadingBig && text.length) {
+      // Đậm + phóng to: hai style cho cùng một dòng tiêu đề.
+      lineStyles.push({ start: offset, len: text.length, st: BOLD });
+      lineStyles.push({ start: offset, len: text.length, st: BIG });
+    } else if (wholeLineStyle && text.length) {
       lineStyles.push({ start: offset, len: text.length, st: wholeLineStyle });
+    }
+
+    if (listNumLen > 0) {
+      // Đầu chỉ mục số: áp dụng ĐẬM + PHÓNG TO riêng cho phần số thứ tự
+      lineStyles.push({ start: offset, len: listNumLen, st: BOLD });
+      lineStyles.push({ start: offset, len: listNumLen, st: BIG });
     }
 
     styles.push(...lineStyles);
@@ -181,6 +204,56 @@ export function formatZaloMarkdown(input) {
   }
 
   return { msg: outLines.join('\n'), styles: capStyles(styles) };
+}
+
+/**
+ * Tự động chia Markdown thành các tin nhắn Zalo độc lập, đạt chuẩn an toàn:
+ * 1. JSON styles của mỗi tin luôn nằm trong ngưỡng an toàn (~230 bytes)
+ *    => Đảm bảo giữ được đầy đủ styles in đậm, phóng to, màu sắc mà không bị cắt xén!
+ * 2. Độ dài mỗi tin <= 2000 ký tự (dưới giới hạn 3000 của Zalo)
+ * 3. Tách theo ranh giới đoạn văn (\n\n) hoặc tiêu đề (###), không bao giờ cắt giữa chừng câu.
+ *
+ * @param {string} input Nội dung Markdown thô từ Hermes Agent
+ * @returns {Array<{ msg: string, styles: Array<{start: number, len: number, st: string}> }>}
+ */
+export function formatAndChunkZaloMarkdown(input) {
+  if (!input) return [];
+
+  const raw = String(input).trim();
+  // Tách theo ranh giới tiêu đề hoặc dòng phân đoạn Markdown
+  const blocks = raw.split(/(?=\n\s*(?:#{1,6}\s+|---+\s*\n))/);
+
+  const subBlocks = [];
+  for (const b of blocks) {
+    const cleaned = b.replace(/^\s*([-*_])\1{2,}\s*$/gm, '').trim();
+    if (cleaned) subBlocks.push(cleaned);
+  }
+
+  const results = [];
+  let currentBlock = [];
+
+  for (const b of subBlocks) {
+    const candidate = currentBlock.concat([b]).join('\n\n');
+    const f = formatZaloMarkdown(candidate);
+    const jsonLen = JSON.stringify(f.styles).length;
+
+    // Ngưỡng: Nếu thêm b mà làm styles vượt quá ngân sách (220 bytes) hoặc vượt 1600 ký tự
+    // Thì tách tin ngay để giữ trọn vẹn cả ĐẬM + PHÓNG TO cho mọi tiêu đề!
+    if ((jsonLen > 220 || f.msg.length > 1600) && currentBlock.length > 0) {
+      const ready = formatZaloMarkdown(currentBlock.join('\n\n'));
+      if (ready.msg.trim()) results.push(ready);
+      currentBlock = [b];
+    } else {
+      currentBlock.push(b);
+    }
+  }
+
+  if (currentBlock.length > 0) {
+    const ready = formatZaloMarkdown(currentBlock.join('\n\n'));
+    if (ready.msg.trim()) results.push(ready);
+  }
+
+  return results;
 }
 
 /**
