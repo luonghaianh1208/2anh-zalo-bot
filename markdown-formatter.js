@@ -109,6 +109,7 @@ export function formatZaloMarkdown(input) {
 
   const lines = raw.split(/\r?\n/);
   let inCodeBlock = false;
+  let prevBlank = false; // để gộp các dòng trống liên tiếp
 
   for (let line of lines) {
     // ``` mở/đóng khối mã — bỏ dấu rào, giữ nội dung bên trong nguyên vẹn
@@ -120,8 +121,23 @@ export function formatZaloMarkdown(input) {
     if (inCodeBlock) {
       outLines.push(line);
       offset += line.length + 1;
+      prevBlank = false;
       continue;
     }
+
+    // Đường kẻ ngang --- → bỏ hẳn, Zalo không có.
+    // Không động tới prevBlank: dòng --- vô hình, nên dòng trống trước và
+    // sau nó phải được gộp lại với nhau thành một.
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+      continue;
+    }
+
+    // Gộp các dòng trống liên tiếp thành một. Markdown thường để dòng trống
+    // trước và sau dấu --- hay giữa các đoạn; giữ nguyên thì trên Zalo thành
+    // hai ba dòng trắng liên tiếp, trông như một khoảng trống lớn.
+    const isBlank = line.trim() === '';
+    if (isBlank && prevBlank) continue;
+    prevBlank = isBlank;
 
     let lineStyles = [];
     let wholeLineStyle = null;
@@ -149,13 +165,6 @@ export function formatZaloMarkdown(input) {
 
     // Gạch đầu dòng: -, * → •  (giữ nguyên thụt lề)
     line = line.replace(/^(\s*)[-*]\s+/, '$1• ');
-
-    // Đường kẻ ngang --- → bỏ, Zalo không có
-    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
-      outLines.push('');
-      offset += 1;
-      continue;
-    }
 
     const { text, styles: inline } = renderInline(line, offset);
     lineStyles = inline;
