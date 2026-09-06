@@ -53,6 +53,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -79,13 +80,35 @@ from agent.secret_scope import get_secret as _scoped_get_secret
 # Công cụ nằm ở plugin standalone `zalo_tools`, không phải ở đây — xem
 # ghi chú trong plugins/zalo_tools/__init__.py về việc Hermes nạp platform
 # plugin theo kiểu lười.
-from plugins.zalo_tools.tools import (
-    TOOLSET_OWNER,
-    set_active_adapter,
-    clear_active_adapter,
-    set_turn_context,
-    TOOLSET_PUBLIC,
-)
+from plugins.zalo_tools.tools import TOOLSET_OWNER, TOOLSET_PUBLIC
+
+
+def _zalo_tools():
+    """Trả về đúng bản module công cụ mà Hermes đã nạp.
+
+    Hermes nạp plugin dưới namespace riêng ``hermes_plugins.<slug>``. Nếu
+    adapter cứ ``from plugins.zalo_tools.tools import ...`` thì Python dựng ra
+    một đối tượng module THỨ HAI, mang ``_ACTIVE_ADAPTER`` riêng của nó. Hậu
+    quả rất khó lần: adapter gắn cầu nối vào bản của mình, còn công cụ agent
+    gọi lại đọc bản Hermes nạp và thấy ``None``, nên bot trả lời "Zalo chưa
+    kết nối" trong khi cầu vẫn thông và log vẫn báo đã nối.
+
+    Hằng số toolset ở trên là chuỗi nên trùng lặp không sao; chỉ phần **trạng
+    thái** mới bắt buộc phải dùng chung một bản.
+    """
+    mod = sys.modules.get("hermes_plugins.zalo_tools.tools")
+    if mod is not None:
+        return mod
+    # Tên slug do Hermes đặt, không cam kết cố định — dò theo đặc điểm module
+    # thay vì đoán tên.
+    for name, candidate in list(sys.modules.items()):
+        if (name.startswith("hermes_plugins.")
+                and name.endswith(".tools")
+                and hasattr(candidate, "set_active_adapter")
+                and hasattr(candidate, "TOOLSET_OWNER")):
+            return candidate
+    from plugins.zalo_tools import tools as fallback
+    return fallback
 
 
 def _get_scoped_secret(name, default=None):
@@ -232,8 +255,14 @@ class ZaloAdapter(BasePlatformAdapter):
             return False
 
         self._reader_task = asyncio.create_task(self._read_loop())
-        set_active_adapter(self)   # để các tool zalo_* tìm được đường ra cầu nối
-        logger.info("[zalo] connected to sidecar at %s", self._bridge_url)
+        # Gắn cầu nối vào ĐÚNG bản module công cụ mà Hermes đã nạp — xem
+        # _zalo_tools(). Ghi luôn tên module vào log: nếu sau này nó lại trỏ
+        # nhầm bản, đây là dòng duy nhất cho biết, vì triệu chứng bên ngoài
+        # chỉ là bot bảo "Zalo chưa kết nối".
+        _tools_mod = _zalo_tools()
+        _tools_mod.set_active_adapter(self)
+        logger.info("[zalo] connected to sidecar at %s (công cụ: %s)",
+                    self._bridge_url, _tools_mod.__name__)
         return True
 
     async def invoke(self, method: str, args: list) -> Optional[Dict[str, Any]]:
@@ -242,7 +271,7 @@ class ZaloAdapter(BasePlatformAdapter):
 
     async def disconnect(self) -> None:
         self._closing = True
-        clear_active_adapter(self)
+        _zalo_tools().clear_active_adapter(self)
 
         if self._reader_task:
             self._reader_task.cancel()
@@ -436,7 +465,7 @@ class ZaloAdapter(BasePlatformAdapter):
         # Ghi lại ai đang hỏi và ở đâu, để các công cụ công khai biết đường
         # khoá phạm vi. Đặt ngay trước handle_message: gateway spawn task con
         # từ đây, và task con kế thừa context của cha.
-        set_turn_context(
+        _zalo_tools().set_turn_context(
             sender_uid=sender_uid,
             thread_id=thread_id,
             is_group=is_group,
