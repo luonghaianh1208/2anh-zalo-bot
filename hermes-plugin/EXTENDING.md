@@ -3,7 +3,7 @@
 Tài liệu này không mô tả kiến trúc (xem README). Nó ghi lại **những chỗ hỏng mà
 không báo lỗi** — loại lỗi tốn nhiều giờ nhất, vì mọi thứ trông vẫn chạy đúng.
 
-Điểm chung của cả năm bẫy dưới đây: hệ thống không hề gãy. Log vẫn xanh, bot vẫn
+Điểm chung của sáu cái bẫy dưới đây: hệ thống không hề gãy. Log vẫn xanh, bot vẫn
 trả lời, chỉ là trả lời sai thứ. Nên nguyên tắc bao trùm là **đo ở nơi người dùng
 thật chạm tới**, không đo ở tầng gần mình nhất.
 
@@ -75,6 +75,28 @@ Nên rào chắn thật phải nằm ở **tầng thực thi**: mỗi công cụ
 bọc một lớp kiểm tra danh tính người gửi (`_owner_only` trong `tools.py`). Dù công
 cụ có lọt vào danh sách vì cấu hình sai, người ngoài gọi vẫn bị từ chối.
 
+## 6. Composite `hermes-<platform>` tự sinh kéo theo cả kanban
+
+Bẫy này ảnh hưởng **mọi** plugin platform, không riêng Zalo.
+
+`hermes-zalo` không có trong `TOOLSETS`. Khi thiếu, `resolve_toolset()` tự sinh nó
+bằng `_HERMES_CORE_TOOLS` — và bộ lõi ấy chứa sẵn 14 công cụ `kanban_*`. Khối
+"recover non-configurable toolsets" trong `tools_config.py` thấy
+`kanban ⊆ universe` nên bật kanban cho **mọi** người nhắn vào nền tảng, đi vòng
+qua `toolsets_for_source()`. Không cấu hình nào cản được:
+`known_builtin_toolsets` không ăn thua (kanban không phải "recently shipped"),
+còn `agent.disabled_toolsets` thì áp dụng toàn cục cho mọi nền tảng.
+
+Cách xử lý ở đây (`define_platform_composite()` trong `tools.py`): **định nghĩa
+tường minh** `hermes-zalo` để nhánh tự sinh không chạy nữa, lấy
+`_HERMES_CORE_TOOLS` làm gốc (để bám theo Hermes khi nâng cấp) và trừ đi đúng
+phần kanban. Chủ nhân vẫn dùng kanban qua Zalo được vì adapter liệt kê thẳng
+`kanban` trong override dành riêng cho họ.
+
+> Nhớ dọn `toolsets._resolve_toolset_memo` sau khi định nghĩa: bộ đệm khoá theo
+> registry chứ không theo `TOOLSETS`, nên định nghĩa đến muộn có thể bị kết quả
+> đã đệm che mất.
+
 ---
 
 ## Ghép API zca-js: đọc `.d.ts`, đừng tin trí nhớ
@@ -130,13 +152,29 @@ Chỉ bước 4 mới là bằng chứng. Ba bước trên chỉ giúp thu hẹp
 
 ---
 
+## Log lúc đăng ký plugin KHÔNG tới được tệp
+
+Plugin nạp trước khi handler ghi log gắn vào, nên mọi `logger.info` trong
+`register()` biến mất — kể cả khi đăng ký thành công. Đừng dùng nó để xác minh.
+
+Chỗ đo được thật là **trong adapter lúc `connect()`**: logger ở đó đã hoạt động,
+và nó nằm trong đúng tiến trình gateway đang chạy. Xem
+`_log_permission_selfcheck()` — mỗi lần khởi động ghi đúng hai dòng:
+
+```
+[zalo] tự kiểm quyền — chủ nhân: 92 công cụ (39 Zalo), nhạy cảm: [...]
+[zalo] tự kiểm quyền — người trong nhóm: 13 công cụ (13 Zalo), không có công cụ nhạy cảm
+```
+
+Nếu dòng thứ hai có bất kỳ công cụ nhạy cảm nào, phân quyền đã hỏng — biết ngay
+lúc khởi động thay vì đợi ai đó phát hiện trong nhóm.
+
+
+---
+
 ## Hạn chế đã biết
 
 - **`zalo_read_history` không dùng được.** `getGroupChatHistory` trả HTTP 404 với
   zca-js 2.1.2 (bản mới nhất trên npm tại thời điểm ghi), cả khi gọi đúng chữ ký.
   Đây là giới hạn phía thư viện, không phải lỗi cấu hình. Công cụ vẫn đăng ký
   nhưng sẽ báo lỗi khi gọi.
-- **Toolset `kanban` lọt cho người trong nhóm.** Hermes có một khối "recover" luôn
-  lấy trọn universe của `hermes-<platform>` bất kể override, nên không config nào
-  chặn riêng cho Zalo được. Lối duy nhất là `agent.disabled_toolsets`, mà nó áp
-  dụng toàn cục cho mọi nền tảng.

@@ -263,6 +263,7 @@ class ZaloAdapter(BasePlatformAdapter):
         _tools_mod.set_active_adapter(self)
         logger.info("[zalo] connected to sidecar at %s (công cụ: %s)",
                     self._bridge_url, _tools_mod.__name__)
+        self._log_permission_selfcheck()
         return True
 
     async def invoke(self, method: str, args: list) -> Optional[Dict[str, Any]]:
@@ -505,6 +506,49 @@ class ZaloAdapter(BasePlatformAdapter):
             cleaned = re.sub(rf"@{re.escape(name)}", "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip() or text
 
+    def _log_permission_selfcheck(self) -> None:
+        """Ghi một lần lúc khởi động: người trong nhóm thật sự cầm được gì.
+
+        Vì sao phải đo ở đây chứ không đo bằng script riêng: log lúc đăng ký
+        plugin không bao giờ tới được tệp (plugin nạp trước khi handler ghi
+        log gắn vào), còn script chạy ngoài thì dựng lại môi trường theo cách
+        của mình chứ không phải môi trường gateway đang chạy. Đây là chỗ duy
+        nhất đo được đúng tiến trình thật, và nó chạy đúng một lần mỗi lần
+        khởi động nên không tốn gì.
+        """
+        try:
+            import yaml
+            from hermes_cli.tools_config import _get_platform_tools
+            from toolsets import resolve_toolset
+
+            cfg_path = os.path.join(os.getenv("HERMES_HOME", ""), "config.yaml")
+            with open(cfg_path, encoding="utf-8") as fh:
+                cfg = yaml.safe_load(fh) or {}
+
+            platform_key = str(self.platform.value)
+            for label, override in (
+                ("chủ nhân", [f"hermes-{platform_key}", "kanban",
+                              TOOLSET_OWNER, TOOLSET_PUBLIC]),
+                ("người trong nhóm", [TOOLSET_PUBLIC]),
+            ):
+                probe = dict(cfg)
+                pts = dict(probe.get("platform_toolsets") or {})
+                pts[platform_key] = override
+                probe["platform_toolsets"] = pts
+                toolsets = sorted(_get_platform_tools(probe, platform_key))
+                tools = {t for ts in toolsets for t in resolve_toolset(ts)}
+                leaks = sorted(t for t in ("terminal", "read_file", "write_file",
+                                           "kanban_create", "zalo_forward")
+                               if t in tools)
+                logger.info(
+                    "[zalo] tự kiểm quyền — %s: %d công cụ (%d Zalo)%s",
+                    label, len(tools),
+                    len([t for t in tools if t.startswith("zalo_")]),
+                    f", nhạy cảm: {leaks}" if leaks else ", không có công cụ nhạy cảm",
+                )
+        except Exception as exc:
+            logger.warning("[zalo] không tự kiểm được quyền: %s", exc)
+
     def toolsets_for_source(self, source) -> Optional[List[str]]:
         """Quyết định người này được dùng bộ công cụ nào.
 
@@ -525,7 +569,11 @@ class ZaloAdapter(BasePlatformAdapter):
         # công cụ. Đúng loại lỗi chỉ lộ ra khi đo ở nơi người dùng thật chạm
         # tới, chứ không lộ khi tự gọi resolve_toolset trong bài kiểm thử.
         platform_key = str(self.platform.value)
-        chosen = ([f"hermes-{platform_key}", TOOLSET_OWNER, TOOLSET_PUBLIC]
+        # ``kanban`` được liệt kê thẳng cho chủ nhân, không nằm trong
+        # ``hermes-zalo``: bảng công việc đã bị loại khỏi composite ở
+        # define_platform_composite() để người trong nhóm không với tới. Liệt
+        # kê tường minh là đường duy nhất còn lại để chủ nhân vẫn dùng được.
+        chosen = ([f"hermes-{platform_key}", "kanban", TOOLSET_OWNER, TOOLSET_PUBLIC]
                   if self._is_owner(uid) else [TOOLSET_PUBLIC])
 
         logger.debug("[zalo] %s (%s) → %s",

@@ -1331,6 +1331,49 @@ def _owner_only(handler, tool_name: str):
     return guarded
 
 
+def define_platform_composite() -> None:
+    """Định nghĩa tường minh toolset ``hermes-zalo``.
+
+    Khi toolset này không tồn tại, Hermes tự sinh nó bằng
+    ``_HERMES_CORE_TOOLS`` — và bộ lõi ấy chứa sẵn cả nhóm ``kanban_*``. Hậu
+    quả: khối "recover non-configurable toolsets" trong ``tools_config`` thấy
+    ``kanban ⊆ universe`` nên bật kanban cho MỌI người nhắn vào nền tảng, kể
+    cả người lạ trong nhóm. Không cấu hình nào cản được — đây là đường đi
+    vòng qua ``toolsets_for_source()``, nên bảng công việc riêng của chủ nhân
+    thành đọc/ghi công khai.
+
+    Định nghĩa tường minh ở đây khiến nhánh tự sinh không chạy nữa. Vẫn lấy
+    ``_HERMES_CORE_TOOLS`` làm gốc để bám theo Hermes khi nâng cấp, chỉ trừ
+    đúng phần kanban. Chủ nhân vẫn dùng kanban qua Zalo được: adapter liệt kê
+    thẳng ``kanban`` trong override dành riêng cho họ.
+    """
+    try:
+        from toolsets import (_HERMES_CORE_TOOLS, create_custom_toolset,
+                              resolve_toolset)
+    except ImportError as exc:
+        logger.warning("[zalo] không định nghĩa được hermes-zalo: %s", exc)
+        return
+
+    core = set(_HERMES_CORE_TOOLS)
+    private = set(resolve_toolset("kanban", include_registry=False))
+    create_custom_toolset(
+        name="hermes-zalo",
+        description="Công cụ lõi Hermes cho nền tảng Zalo (không gồm kanban).",
+        tools=sorted(core - private),
+        includes=[],
+    )
+    # Bộ nhớ đệm của resolve_toolset khoá theo registry chứ không theo
+    # TOOLSETS, nên một định nghĩa đến muộn có thể bị kết quả đã đệm che mất.
+    try:
+        import toolsets as _ts
+        _ts._resolve_toolset_memo.clear()
+    except Exception:
+        pass
+
+    logger.info("[zalo] hermes-zalo: %d công cụ (đã loại %d công cụ kanban)",
+                len(core - private), len(private))
+
+
 def register_tools(ctx) -> None:
     """Đăng ký công cụ Zalo, chia làm hai mức quyền."""
     counts = {TOOLSET_PUBLIC: 0, TOOLSET_OWNER: 0}
