@@ -15,6 +15,7 @@ nhóm) hoặc chạm tới tiền bạc cố tình bị bỏ ra ngoài.
 """
 
 import contextvars
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -698,14 +699,62 @@ def _kb_resolve(root, relative: str):
     return target
 
 
+# Đệm danh sách tệp của kho tài liệu.
+#
+# Kho thường nằm trên ổ mạng (RaiDrive gắn Google Drive chẳng hạn). Khi ổ đang
+# nguội, duyệt hết cây thư mục có thể mất tới bốn phút — đo được 239,98s trên
+# một kho 1180 thư mục, trong khi lần duyệt ngay sau đó chỉ 0,7s. Người trong
+# nhóm hỏi một câu rồi ngồi chờ bốn phút thì coi như bot hỏng.
+#
+# Danh sách tệp thay đổi hiếm, nên đệm lại là đủ. Đệm theo cây đầy đủ rồi lọc
+# trong bộ nhớ, để câu hỏi với từ khoá khác cũng không phải duyệt lại.
+_KB_CACHE: Dict[str, Any] = {"root": None, "at": 0.0, "files": None, "skipped": 0}
+_KB_CACHE_TTL = 300.0
+
+
+def _kb_listing(root, query: str):
+    """Danh sách tệp trong kho, lấy từ đệm nếu còn hạn."""
+    import time as _t
+    now = _t.monotonic()
+    fresh = (
+        _KB_CACHE["files"] is not None
+        and _KB_CACHE["root"] == str(root)
+        and now - _KB_CACHE["at"] < _KB_CACHE_TTL
+    )
+    if not fresh:
+        t0 = _t.monotonic()
+        # Duyệt KHÔNG lọc và nới hạn mức: đệm phải chứa cả cây thì lọc theo từ
+        # khoá trong bộ nhớ mới không sót tệp nằm sâu. Hạn mức 200 của lần
+        # duyệt thường là để giới hạn thứ trả về cho agent, không phải để giới
+        # hạn thứ ta biết.
+        files, skipped = _kb_walk(root, "", limit=20000)
+        took = _t.monotonic() - t0
+        _KB_CACHE.update(root=str(root), at=now, files=files, skipped=skipped)
+        if took > 5:
+            logger.warning("[zalo] duyệt kho tài liệu mất %.1fs — ổ mạng đang nguội", took)
+
+    files = _KB_CACHE["files"]
+    if query:
+        files = [f for f in files if query in str(f.get("path", "")).lower()]
+    return files, _KB_CACHE["skipped"], fresh
+
+
 async def zalo_kb_list(args: Dict[str, Any], **_kw) -> str:
     root = _kb_root()
     if root is None:
         return _err("chưa cấu hình kho tài liệu (ZALO_KB_DIR)")
 
     query = (args.get("query") or "").strip().lower()
-    files, skipped = _kb_walk(root, query)
-    payload = {"root": root.name or str(root), "files": files, "count": len(files)}
+    files, skipped, _ = _kb_listing(root, query)
+
+    # Đệm giữ cả cây, nhưng chỉ đưa cho agent một nắm vừa phải — nhồi vài nghìn
+    # đường dẫn vào ngữ cảnh vừa tốn token vừa làm nó khó chọn.
+    total = len(files)
+    shown = files[:200]
+    payload = {"root": root.name or str(root), "files": shown, "count": total}
+    if total > len(shown):
+        payload["note"] = (f"còn {total - len(shown)} tệp nữa — thu hẹp bằng "
+                           f"tham số `query` để tìm đúng thứ cần")
     if skipped:
         payload["skipped"] = skipped
     return _ok(payload)
@@ -820,6 +869,41 @@ async def zalo_kb_read(args: Dict[str, Any], **_kw) -> str:
 _BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".lan", ".home.arpa")
 
 
+def _google_export_url(raw: str) -> str:
+    """Đổi link Google Docs/Sheets/Slides sang đường xuất bản văn bản.
+
+    Link `/edit` của Google trả về khung ứng dụng JavaScript chứ không phải nội
+    dung — bộ đọc trang web nhận về một trang trống kèm nút đăng nhập, và rất
+    dễ kết luận nhầm là "tài liệu không được chia sẻ". Thực ra tài liệu công
+    khai vẫn đọc được bình thường qua đường `/export`.
+
+    Chỉ đổi đường dẫn, không đổi quyền: tài liệu riêng tư vẫn trả về trang đăng
+    nhập như trước.
+    """
+    import re
+    from urllib.parse import urlparse
+
+    try:
+        u = urlparse(str(raw).strip())
+    except ValueError:
+        return raw
+    if (u.hostname or "").lower() not in ("docs.google.com", "drive.google.com"):
+        return raw
+
+    m = re.search(r"/(document|spreadsheets|presentation|file)/d/([A-Za-z0-9_-]+)", u.path)
+    if not m:
+        return raw
+    kind, doc_id = m.group(1), m.group(2)
+
+    if kind == "document":
+        return f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+    if kind == "spreadsheets":
+        return f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=csv"
+    if kind == "presentation":
+        return f"https://docs.google.com/presentation/d/{doc_id}/export/txt"
+    return f"https://drive.google.com/uc?export=download&id={doc_id}"
+
+
 def _is_public_url(raw: str) -> bool:
     """Chỉ cho phép http/https trỏ ra địa chỉ công cộng."""
     import ipaddress
@@ -849,16 +933,50 @@ def _is_public_url(raw: str) -> bool:
     )
 
 
-async def _core(tool_name: str, args: Dict[str, Any]) -> str:
-    """Gọi lại một công cụ lõi của Hermes qua registry."""
+async def _core(tool_name: str, args: Dict[str, Any], *, attempts: int = 1) -> str:
+    """Gọi lại một công cụ lõi của Hermes qua registry.
+
+    ``attempts`` > 1 dành cho công cụ web. Khi chưa cấu hình khoá backend,
+    Hermes xoay vòng qua các dịch vụ không khoá (Firecrawl, Keenable, Exa) và
+    mỗi cái hỏng vào lúc khác nhau — đo được 3/6 lần thất bại trên cùng một
+    URL. Người trong nhóm không quan tâm backend nào hỏng, họ chỉ thấy bot lúc
+    tra được lúc không. Thử lại vài lần là cách rẻ nhất để che chuyện đó.
+    """
     from tools.registry import registry
+
+    last = ""
+    for i in range(max(1, attempts)):
+        try:
+            result = registry.dispatch(tool_name, args)
+            if hasattr(result, "__await__"):
+                result = await result
+            text = (result if isinstance(result, str)
+                    else json.dumps(result, ensure_ascii=False, default=str))
+        except Exception as exc:
+            last = _err(f"{tool_name} lỗi: {exc}")
+            continue
+
+        if not _core_result_empty(text):
+            return text
+        last = text
+        if i + 1 < attempts:
+            await asyncio.sleep(0.6)
+    return last
+
+
+def _core_result_empty(text: str) -> bool:
+    """Kết quả có thật sự rỗng không — để biết còn đáng thử lại nữa hay thôi."""
     try:
-        result = registry.dispatch(tool_name, args)
-        if hasattr(result, "__await__"):
-            result = await result
-        return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-    except Exception as exc:
-        return _err(f"{tool_name} lỗi: {exc}")
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return False
+    if isinstance(data, dict):
+        if data.get("success") is False:
+            return True
+        results = data.get("results")
+        if isinstance(results, list) and results:
+            return all(not (r or {}).get("content") for r in results if isinstance(r, dict))
+    return False
 
 
 async def zalo_web_search(args: Dict[str, Any], **_kw) -> str:
@@ -866,7 +984,7 @@ async def zalo_web_search(args: Dict[str, Any], **_kw) -> str:
     if not query:
         return _err("cần `query`")
     limit = max(1, min(int(args.get("limit", 5) or 5), 10))
-    return await _core("web_search", {"query": query, "limit": limit})
+    return await _core("web_search", {"query": query, "limit": limit}, attempts=3)
 
 
 async def zalo_web_read(args: Dict[str, Any], **_kw) -> str:
@@ -883,7 +1001,10 @@ async def zalo_web_read(args: Dict[str, Any], **_kw) -> str:
             "chỉ đọc được địa chỉ web công cộng (http/https), không đọc địa chỉ "
             f"nội bộ: {', '.join(blocked[:3])}"
         )
-    return await _core("web_extract", {"urls": urls[:5]})
+    # Đổi sau khi kiểm tra an toàn, không phải trước — để phép kiểm luôn nhìn
+    # đúng địa chỉ người dùng đưa vào.
+    urls = [_google_export_url(u) for u in urls]
+    return await _core("web_extract", {"urls": urls[:5]}, attempts=3)
 
 
 # =====================================================================

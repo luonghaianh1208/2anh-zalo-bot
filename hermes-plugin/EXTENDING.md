@@ -294,3 +294,72 @@ display:
 
 > Bất kỳ plugin platform nào cũng nên khai khối này ngay khi dựng, đừng đợi tới
 > lúc tiến trình nội bộ rơi vào mặt khách hàng.
+
+---
+
+## Chậm ở đâu: đo, đừng đoán
+
+Một lượt trả lời mất **320 giây** trong khi mô hình được quảng cáo là siêu
+nhanh. Đo từng tầng thì thấy mô hình vô can:
+
+| Tầng | Thời gian |
+|---|---|
+| Gọi mô hình (đo trực tiếp qua router) | 1,8 – 3,0s |
+| Gọi mô hình kèm 14 lược đồ công cụ | 3,1 – 5,2s |
+| Mọi công cụ khi ổ đĩa đang nóng | < 1s |
+
+Mốc thời gian trong `state.db` chỉ đúng thủ phạm:
+
+```
+  5.3s   gọi tool_search
+  1.6s   gọi zalo_kb_list
+239.98s  ← kết quả zalo_kb_list
+  0.7s   ← lần gọi thứ hai, cùng công cụ
+ 30.02s  ← zalo_send_file
+ 30.03s  ← zalo_send_file
+```
+
+Lần hai chỉ 0,7s. Đây là chênh lệch **nguội / nóng** của ổ mạng: kho tài liệu
+nằm trên RaiDrive gắn Google Drive, và khi nguội thì duyệt 1180 thư mục hoặc
+kéo một tệp về đều mất hàng chục giây tới vài phút.
+
+Hai bản vá:
+
+* **Đệm danh sách kho** (`_kb_listing`, TTL 300s) — đo được 4,6s lần đầu và
+  0,00s các lần sau. Đệm cả cây rồi lọc trong bộ nhớ, nên câu hỏi với từ khoá
+  khác cũng không phải duyệt lại.
+* **Nới thời gian chờ riêng cho lệnh đọc tệp** (`SLOW_METHODS`, 150s). Hai lần
+  đo được 30,02s và 30,03s — sát ngưỡng `ACK_TIMEOUT_SECONDS = 30` tới mức chỉ
+  cần chậm thêm chút là hỏng. Nới riêng nhóm này chứ không nới tất cả: một lệnh
+  gửi chữ mà treo 2 phút thì nên báo hỏng sớm.
+
+> Truy vết bằng mốc thời gian trong `state.db` hiệu quả hơn hẳn việc đoán, vì
+> nó chỉ thẳng ra khoảng trống nằm ở đâu. Con số tròn (30,0 / 240,0) luôn đáng
+> ngờ — hoặc là timeout, hoặc là một hằng số nào đó, hiếm khi là công việc thật.
+
+## Công cụ web chập chờn vì không có khoá backend
+
+`web_search` và `web_extract` khi chưa cấu hình khoá sẽ xoay vòng qua các dịch
+vụ không khoá (Firecrawl, Keenable, Exa). Đo cùng một URL sáu lần: **3 lần hỏng,
+3 lần được** — mỗi lần một backend khác nhau báo lỗi.
+
+Đã thêm thử lại ba lượt trong `_core`, đưa tỉ lệ lên 4/5. Nhưng đây là che bớt
+triệu chứng, không phải chữa: cách dứt điểm là đặt `EXA_API_KEY` hoặc khoá của
+một backend khác.
+
+## Link Google Docs: `/edit` không phải là nội dung
+
+Link `/edit` trả về khung ứng dụng JavaScript, nên bộ đọc trang nhận được một
+trang gần như trống kèm nút đăng nhập — và rất dễ kết luận nhầm là *"tài liệu
+không được chia sẻ"*. Tài liệu công khai vẫn đọc được bình thường qua đường
+`/export`:
+
+| Loại | Đường đọc được |
+|---|---|
+| Docs | `/document/d/<id>/export?format=txt` |
+| Sheets | `/spreadsheets/d/<id>/export?format=csv` |
+| Slides | `/presentation/d/<id>/export/txt` |
+| Tệp Drive | `/uc?export=download&id=<id>` |
+
+`_google_export_url()` đổi tự động. Đổi **sau** khi kiểm tra an toàn, không phải
+trước — để phép kiểm luôn nhìn đúng địa chỉ người dùng đưa vào.

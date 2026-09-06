@@ -135,6 +135,14 @@ DEFAULT_BRIDGE_URL = "ws://127.0.0.1:3873"
 MAX_MESSAGE_LENGTH = 4000          # Zalo caps around 4k characters per message
 RECONNECT_BACKOFF = [2, 5, 10, 30, 60]
 ACK_TIMEOUT_SECONDS = 30
+
+# Vài lệnh phải đọc tệp trước khi gửi, và kho tài liệu thường nằm trên ổ mạng
+# (RaiDrive gắn Google Drive). Khi ổ đang nguội, chỉ riêng việc kéo tệp về đã
+# mất khoảng 30 giây — đo được hai lần liên tiếp 30,02s và 30,03s, tức là sát
+# ngưỡng chờ đến mức chỉ cần chậm thêm chút là hỏng. Nới riêng cho nhóm lệnh
+# này thay vì nới tất cả: một lệnh gửi chữ mà treo 2 phút thì nên báo hỏng sớm.
+SLOW_ACK_TIMEOUT_SECONDS = 150
+SLOW_METHODS = frozenset({"uploadAttachment", "sendMessage", "sendVoice", "sendVideo"})
 DEDUP_WINDOW_SECONDS = 300
 DEDUP_MAX_SIZE = 1000
 
@@ -747,11 +755,16 @@ class ZaloAdapter(BasePlatformAdapter):
         if not fut:
             return None
 
+        timeout = ACK_TIMEOUT_SECONDS
+        if payload.get("type") == "invoke" and payload.get("method") in SLOW_METHODS:
+            timeout = SLOW_ACK_TIMEOUT_SECONDS
+
         try:
-            return await asyncio.wait_for(fut, timeout=ACK_TIMEOUT_SECONDS)
+            return await asyncio.wait_for(fut, timeout=timeout)
         except asyncio.TimeoutError:
             self._pending.pop(payload.get("reqId", ""), None)
-            logger.warning("[zalo] sidecar did not ack %s in %ss", payload.get("type"), ACK_TIMEOUT_SECONDS)
+            logger.warning("[zalo] sidecar did not ack %s (%s) in %ss",
+                           payload.get("type"), payload.get("method") or "-", timeout)
             return None
 
 
