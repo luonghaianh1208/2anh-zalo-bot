@@ -172,9 +172,46 @@ lúc khởi động thay vì đợi ai đó phát hiện trong nhóm.
 
 ---
 
-## Hạn chế đã biết
+## Trạng thái từng công cụ (kiểm chứng 2026-09-06)
 
-- **`zalo_read_history` không dùng được.** `getGroupChatHistory` trả HTTP 404 với
-  zca-js 2.1.2 (bản mới nhất trên npm tại thời điểm ghi), cả khi gọi đúng chữ ký.
-  Đây là giới hạn phía thư viện, không phải lỗi cấu hình. Công cụ vẫn đăng ký
-  nhưng sẽ báo lỗi khi gọi.
+Đã gọi thật qua cầu nối, không suy từ tài liệu. Bot lúc kiểm là **phó nhóm** ở
+nhóm thử.
+
+**Chạy được — 31 công cụ.** Toàn bộ nhóm đọc dữ liệu, gửi nội dung (văn bản,
+sticker, tệp, liên kết, thoại, chuyển tiếp), bình chọn, lời nhắc, đổi tên nhóm,
+link nhóm, tắt thông báo, ghim, hồ sơ bot, sổ người quen, kho tài liệu, đọc
+trang web.
+
+**Hỏng — 3 công cụ:**
+
+| Công cụ | Triệu chứng | Nguyên nhân |
+|---|---|---|
+| `zalo_read_history` | HTTP 404 | Giới hạn zca-js 2.1.2, gọi đúng chữ ký vẫn hỏng |
+| `zalo_undo` | Không dùng được | `sendMessage` chỉ trả `{msgId}`, còn `undo` đòi cả `cliMsgId` — không có đường lấy |
+| `zalo_web_search` | Backend từ chối | Chưa đặt `EXA_API_KEY` hoặc backend tìm kiếm khác cho Hermes |
+
+`zalo_undo` sửa được: listener vẫn nhận lại tin bot tự gửi (kèm `cliMsgId`), nên
+có thể đệm một bảng `msgId → cliMsgId` ngắn hạn rồi tra khi thu hồi.
+
+**Chưa kiểm được — 6 công cụ.** Chúng để lại dấu vết vĩnh viễn hoặc tác động
+tới người thật, nên không thử tự động: `zalo_create_note` (không có API xoá ghi
+chú), `zalo_create_group`, `zalo_invite_to_groups`, `zalo_join_group_link`,
+`zalo_group_member_change`, `zalo_group_deputy`, `zalo_review_member` (cần có
+người đang chờ duyệt). Tham số của chúng đã đối chiếu với `.d.ts`, nhưng đối
+chiếu không phải là bằng chứng.
+
+---
+
+## Hai lỗi khả dụng đã sửa trong đợt này
+
+**`zalo_list_groups` trả về vô dụng.** `getAllGroups` một mình chỉ cho
+`{groupId: version}` — agent nhận một nắm số và không nói nổi cho người dùng
+biết đó là nhóm nào. Nay gọi thêm `getGroupInfo` để trả tên, sĩ số và vai trò
+của bot trong nhóm.
+
+**Tạo được lời nhắc mà không xoá được.** Đặt nhầm giờ là lời nhắc nằm lại trong
+nhóm vĩnh viễn, phải nhờ người vào Zalo xoá tay. Đã thêm `zalo_remove_reminder`.
+
+Bài học chung: một công cụ "gọi không lỗi" chưa chắc dùng được. Phải nhìn vào
+thứ nó trả về và hỏi *agent làm gì được với cái này*, và mỗi hành động tạo ra
+thứ gì đó phải có đường dọn tương ứng.

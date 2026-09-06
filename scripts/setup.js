@@ -49,19 +49,9 @@ if (!existsSync(dataDir)) {
   ok('data/ đã có');
 }
 
-const seeds = [
-  ['examples/bot_settings.example.json', 'data/bot_settings.json'],
-  ['examples/personas.example.json', 'data/personas.json'],
-];
-for (const [from, to] of seeds) {
-  const dst = join(ROOT, to);
-  if (existsSync(dst)) {
-    ok(`${to} đã có — giữ nguyên`);
-  } else {
-    copyFileSync(join(ROOT, from), dst);
-    ok(`đã tạo ${to} từ mẫu`);
-  }
-}
+// Không còn tệp mẫu nào cần chép: cấu hình bot (persona, ai được dùng, trả
+// lời khi nào) nay nằm hết bên Hermes. data/ chỉ giữ phiên đăng nhập Zalo và
+// tệp pid, cả hai đều do chương trình tự tạo lúc chạy.
 
 // --- 3. .env -----------------------------------------------------------
 step('3. Chuẩn bị .env');

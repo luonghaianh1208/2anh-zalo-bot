@@ -30,7 +30,10 @@ import { RateLimiter, RateLimitedError, THROTTLED_METHODS } from './rate-limiter
  * cho Hermes để tránh trả lời hai lần.
  */
 
-const DEFAULT_PORT = 3873;
+// Đọc từ môi trường chứ không cứng 3873: `.env.example` vẫn ghi biến này là
+// đổi được, nhưng trước đây server.js gọi startHermesBridge() không truyền
+// port nên biến đó không có tác dụng — ai đổi sẽ ngồi tự hỏi vì sao không ăn.
+const DEFAULT_PORT = Number(process.env.ZALO_BRIDGE_PORT) || 3873;
 
 /**
  * Các API zca-js mà Hermes được phép gọi qua lệnh `invoke`.
@@ -43,35 +46,28 @@ const DEFAULT_PORT = 3873;
  */
 const ALLOWED_METHODS = new Set([
   // Gửi nội dung
-  'sendMessage', 'sendVoice', 'sendVideo', 'sendSticker', 'sendLink', 'sendCard',
-  'uploadAttachment', 'forwardMessage',
+  'sendMessage', 'sendVoice', 'sendSticker', 'sendLink', 'uploadAttachment',
+  'forwardMessage',
   // Sửa sai
-  'undo', 'deleteMessage',
+  'undo',
   // Đọc ngữ cảnh
-  'getGroupChatHistory', 'getGroupMembersInfo', 'getGroupInfo', 'getAllGroups',
-  'getAllFriends', 'getUserInfo', 'findUser', 'findUserByUsername',
-  'getMultiUsersByPhones', 'lastOnline', 'getFriendOnlines', 'fetchAccountInfo',
-  'getOwnId', 'getStickers', 'searchSticker', 'getStickersDetail', 'parseLink',
+  'getGroupChatHistory', 'getGroupMembersInfo', 'getGroupInfo',
+  'getAllGroups', 'getAllFriends', 'getUserInfo', 'findUser',
+  'findUserByUsername', 'fetchAccountInfo', 'searchSticker',
   // Tính năng riêng của Zalo
-  'createPoll', 'votePoll', 'getPollDetail', 'lockPoll', 'addPollOptions',
-  'createNote', 'editNote', 'getListBoard',
-  'createReminder', 'editReminder', 'removeReminder', 'getListReminder',
-  'getReminder', 'getReminderResponses',
+  'createPoll', 'getPollDetail', 'lockPoll', 'createNote', 'createReminder',
+  'getListReminder', 'removeReminder',
   // Quản trị nhóm
-  'changeGroupName', 'changeGroupAvatar', 'updateGroupSettings',
-  'addUserToGroup', 'removeUserFromGroup',
-  'addGroupDeputy', 'removeGroupDeputy',
-  'getPendingGroupMembers', 'reviewPendingMemberRequest',
-  'getGroupLinkInfo', 'enableGroupLink', 'disableGroupLink',
+  'changeGroupName', 'addUserToGroup', 'removeUserFromGroup',
+  'addGroupDeputy', 'removeGroupDeputy', 'getPendingGroupMembers',
+  'reviewPendingMemberRequest', 'enableGroupLink', 'disableGroupLink',
   'createGroup', 'inviteUserToGroups', 'getGroupLinkDetail', 'joinGroupLink',
   // Hồ sơ của chính tài khoản bot
   'updateProfileBio', 'updateActiveStatus',
   // Quản lý hội thoại
-  'setPinnedConversations', 'getPinConversations',
-  'setMute', 'getMute',
-  'addUnreadMark', 'removeUnreadMark', 'getUnreadMark',
+  'setPinnedConversations', 'setMute',
   // Lịch sự
-  'sendSeenEvent', 'sendTypingEvent', 'sendDeliveredEvent', 'addReaction',
+  'sendSeenEvent', 'sendTypingEvent', 'addReaction',
 ]);
 
 /**

@@ -42,23 +42,19 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 **Trả lời**
 * Markdown của Hermes được dịch sang định dạng gốc của Zalo — in đậm, đỏ, xanh lá, cam, vàng, nghiêng, gạch ngang
 * Thả cảm xúc theo ngữ cảnh câu chữ (55 icon), báo đã đọc, hiệu ứng đang soạn tin
-* Nhiều tính cách (persona) cấu hình được, đặt riêng cho từng nhóm
+* Tính cách đặt ở `platform_hints.zalo` của Hermes — một chỗ duy nhất, không rải ra nhiều tệp
 
-**Hai chế độ**
-| Chế độ | Khi nào | Khả năng |
-|---|---|---|
-| `hermes-agent` | Hermes đang cắm vào cầu | Đầy đủ tools, memory, skills, cron |
-| `chatbot-noi-bo` | Không có Hermes | Gọi thẳng LLM, chỉ trò chuyện |
+**Một bộ não duy nhất.** Hermes trả lời tất cả. Hermes chưa cắm thì bot nói thẳng là đang mất kết nối và mời nhắn lại sau — không có đường dự phòng nào.
 
-Chuyển chế độ tự động, không cần cấu hình. Xem `/api/status` để biết đang chạy chế độ nào.
+Trước đây *có* một bộ não Node dự phòng gọi thẳng LLM. Đã bỏ, vì hai lý do. Nó không bao giờ chạy nên âm thầm mục ruỗng — mấy lỗi nặng nhất của dự án (định tuyến nhóm sai, kiểm chủ nhân sai) đều nằm trong đoạn đó và sống sót nhiều tháng vì không ai đi qua. Nguy hiểm hơn: khi nó *có* chạy thì lại chạy bằng bộ luật khác — Hermes phân quyền theo toolset, còn bộ não Node đọc một tệp JSON và không có tầng phân quyền nào. Hermes rớt là hệ thống lặng lẽ hạ cấp sang bộ luật lỏng hơn, đúng lúc không ai để ý.
 
-**31 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
+**40 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
 
 | Nhóm | Công cụ |
 |---|---|
 | Gửi nội dung | `zalo_send_file` `zalo_send_voice` `zalo_send_sticker` `zalo_send_link` `zalo_forward` |
 | Đọc ngữ cảnh | `zalo_read_history` `zalo_list_groups` `zalo_group_members` `zalo_find_user` `zalo_user_info` `zalo_list_friends` |
-| Riêng của Zalo | `zalo_create_poll` `zalo_poll_detail` `zalo_lock_poll` `zalo_create_note` `zalo_create_reminder` `zalo_list_reminders` `zalo_pin_conversation` `zalo_mute` |
+| Riêng của Zalo | `zalo_create_poll` `zalo_poll_detail` `zalo_lock_poll` `zalo_create_note` `zalo_create_reminder` `zalo_list_reminders` `zalo_remove_reminder` `zalo_pin_conversation` `zalo_mute` |
 | Sửa sai & quản trị | `zalo_undo` `zalo_rename_group` `zalo_group_member_change` `zalo_group_deputy` `zalo_pending_members` `zalo_review_member` |
 | Lập nhóm & lời mời | `zalo_create_group` `zalo_invite_to_groups` `zalo_group_link` `zalo_join_group_link` |
 | Hồ sơ bot | `zalo_set_bio` `zalo_set_active_status` |
@@ -69,18 +65,18 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 
 ### Hai mức quyền
 
-39 công cụ chia làm hai nhóm, quyết định bằng `ZALO_ALLOWED_USERS`:
+40 công cụ chia làm hai nhóm, quyết định bằng `ZALO_ALLOWED_USERS`:
 
 | | Chủ nhân | Người khác trong nhóm |
 |---|---|---|
 | Toolset | `hermes-zalo` + `zalo_owner` + `zalo_public` | chỉ `zalo_public` |
-| Số công cụ Zalo | 39 | 13 |
+| Số công cụ Zalo | 40 | 14 |
 | `terminal`, `read_file`, `write_file` | ✅ | ❌ |
 | `browser_*`, `web_search` | ✅ | ❌ |
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
 | Nhắn riêng với bot | ✅ | ❌ mặc định (`ZALO_DM_POLICY`) |
 
-**13 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · nhớ người quen · tra sổ người quen · **tìm kiếm web · đọc trang web**.
+**14 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xoá lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · nhớ người quen · tra sổ người quen · **tìm kiếm web · đọc trang web**.
 
 Việc phân nhóm toolset chỉ *giấu* công cụ khỏi danh sách. Rào chắn thật nằm ở tầng thực thi: mỗi công cụ thuộc nhóm chủ nhân được bọc một lớp kiểm tra danh tính người gửi, nên dù công cụ có lọt vào danh sách vì cấu hình sai thì người ngoài gọi vẫn bị từ chối.
 
@@ -244,26 +240,21 @@ curl http://127.0.0.1:3872/api/status
 
 ## Cấu hình
 
-### `data/bot_settings.json`
+### Cấu hình nằm ở đâu
 
-| Khoá | Mặc định | Ý nghĩa |
-|---|---|---|
-| `enabled` | `true` | Bật/tắt toàn bộ bot |
-| `dmPolicy` | `owner-only` | `owner-only` \| `allowlist` \| `open` |
-| `replyOnlyTagged` | `true` | Trong nhóm chỉ trả lời khi được tag |
-| `silentListenOnly` | `false` | Chỉ nghe, không nói |
-| `adminUids` | `[]` | UID chủ nhân — điền bằng `/sethome` |
-| `allowedUids` | `[]` | Ai được nhắn riêng khi `dmPolicy: allowlist` |
-| `ownerName` | `""` | Tên chủ, dùng khi bot tự giới thiệu |
-| `orgName` | `""` | Tên đơn vị |
-| `persona` | `friendly` | Tính cách mặc định |
-| `groups` | `{}` | Ghi đè cấu hình cho từng nhóm |
+Sidecar không còn tệp cấu hình nào. Ai được dùng bot, trả lời khi nào, tính cách ra sao — tất cả nằm bên Hermes:
 
-> **UID Zalo là dãy số dài 17–21 chữ số, không bắt đầu bằng `0`.** Số điện thoại thì ngược lại. Điền nhầm số điện thoại vào `adminUids` sẽ bị bỏ qua kèm cảnh báo trong log — đây là chủ ý, để một mục sai định dạng không vô tình mở quyền cho tất cả mọi người.
+| Việc | Đặt ở đâu |
+|---|---|
+| Ai là chủ nhân | `ZALO_ALLOWED_USERS` trong `.env` của Hermes |
+| Ai được nhắn riêng | `ZALO_DM_POLICY` |
+| Trong nhóm chỉ trả lời khi được tag | `ZALO_GROUP_REPLY_ONLY_TAGGED` |
+| Tính cách | `platform_hints.zalo.append` trong `config.yaml` |
+| Công cụ mỗi mức quyền được dùng | `known_plugin_toolsets.zalo` + `toolsets_for_source()` |
 
-### `data/personas.json`
+`data/` của sidecar chỉ giữ phiên đăng nhập Zalo và tệp pid — cả hai do chương trình tự tạo.
 
-Mỗi tính cách gồm `name`, `system_prompt`, `tone`, `greeting`, `creativity` (0–1). Sửa thẳng trong file, hoặc nhờ agent sửa hộ.
+> **UID Zalo là dãy số dài 17–21 chữ số, không bắt đầu bằng `0`.** Số điện thoại thì ngược lại. Điền nhầm số điện thoại vào `ZALO_ALLOWED_USERS` thì người đó đơn giản là không khớp với ai — không mở quyền cho ai khác.
 
 ---
 
@@ -291,17 +282,13 @@ Emoji hiển thị gốc, dùng thoải mái.
 
 ## API
 
-Giữ lại để chẩn đoán bằng `curl` — không có giao diện nào gọi chúng nữa.
+Chỉ còn đúng ba route mà trang quét QR cần. Sáu route khác (đọc/ghi cấu hình, liệt kê nhóm, gửi tin tay) đã bị xoá: không giao diện nào gọi chúng, chúng không có xác thực, và hai trong số đó gửi được tin nhắn hoặc ghi đè cấu hình.
 
 | Đường dẫn | Việc |
 |---|---|
 | `GET /api/status` | Trạng thái đăng nhập, chế độ, đã cắm Hermes chưa |
 | `POST /api/qr/start` | Bắt đầu đăng nhập QR |
 | `POST /api/logout` | Đăng xuất, xoá phiên |
-| `GET /api/groups` | Danh sách nhóm đang tham gia |
-| `GET \| POST /api/config` | Đọc / ghi `bot_settings.json` |
-| `GET \| POST /api/personas` | Đọc / ghi `personas.json` |
-| `POST /api/send-home` | Gửi tin nhắn tay tới một UID |
 
 Cổng WebSocket `3873` là giao thức riêng giữa sidecar và Hermes: `hello`, `message`, `ack` đi từ sidecar ra; `send`, `typing`, `ack_message`, `invoke` đi từ Hermes vào.
 

@@ -1,45 +1,46 @@
-import { loadBotConfig, saveBotConfig, loadPersonas } from './config-manager.js';
-import { formatZaloMarkdown } from './markdown-formatter.js';
-import { pickSmartReaction } from './smart-reaction.js';
-import { BRAIN } from './brain-config.js';
 import { isHermesAttached, forwardToHermes } from './hermes-bridge.js';
 import { ThreadType } from 'zca-js';
 
-// Lịch sử hội thoại theo từng thread (nhóm hoặc DM)
-const conversationHistory = new Map();
-const MAX_HISTORY_TURNS = 10;
+/**
+ * Định tuyến tin nhắn Zalo sang Hermes Agent.
+ *
+ * File này CỐ Ý không có bộ não riêng. Trước đây nó có: một đường dự phòng gọi
+ * thẳng LLM khi Hermes chưa cắm. Đường đó đã bị bỏ vì hai lý do.
+ *
+ * Thứ nhất, nó không bao giờ chạy nên âm thầm mục ruỗng — mấy lỗi nặng nhất
+ * của dự án (định tuyến nhóm sai, kiểm chủ nhân sai) đều nằm trong đoạn mã đó
+ * và sống sót qua nhiều tháng vì không ai đi qua.
+ *
+ * Thứ hai, nguy hiểm hơn: khi nó *có* chạy thì lại chạy bằng một bộ luật khác.
+ * Hermes phân quyền theo toolset (người ngoài chỉ nhận zalo_public), còn bộ
+ * não Node đọc `adminUids` trong bot_settings.json và không có tầng phân quyền
+ * nào. Hermes rớt là hệ thống lặng lẽ hạ cấp sang bộ luật lỏng hơn — đúng lúc
+ * không ai để ý.
+ *
+ * Nay Hermes rớt thì bot báo thẳng là chưa sẵn sàng. Im lặng hoặc trả lời sai
+ * đều tệ hơn một câu nói thật.
+ */
+
+let selfUid = '';
+
+/** Ai được nghe câu báo lỗi khi Hermes chưa sẵn sàng (UID Zalo, phân tách bởi dấu phẩy). */
+const ownerUids = String(process.env.ZALO_ALLOWED_USERS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
 
 /**
- * UID Zalo là chuỗi số dài (17-20 chữ số) và không bao giờ bắt đầu bằng '0'.
- * Số điện thoại Việt Nam thì ngược lại. Cấu hình cũ hay bị điền nhầm số điện
- * thoại vào adminUids — nhận diện để bỏ qua thay vì hiểu nhầm thành chủ nhân.
+ * Đừng lặp lại câu báo lỗi. Một người hỏi năm lần trong lúc Hermes đang rớt
+ * thì chỉ nên nghe một lần — nhắc lại vừa phiền vừa tính vào hạn mức chống
+ * spam.
  */
-function isZaloUid(value) {
-  const s = String(value ?? '').trim();
-  return /^[1-9]\d{14,21}$/.test(s);
-}
+const notified = new Map();
+const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
 
-function normalizeUidList(list, label) {
-  if (!Array.isArray(list)) return [];
-  const valid = [];
-  const invalid = [];
-  for (const item of list) {
-    (isZaloUid(item) ? valid : invalid).push(String(item));
-  }
-  if (invalid.length) {
-    console.warn(
-      `[bot] ⚠️ ${label} có ${invalid.length} giá trị không phải UID Zalo (bỏ qua): ${invalid.join(', ')}\n` +
-      '        UID Zalo là dãy số dài, không phải số điện thoại. Gõ /sethome để gán lại chủ nhân.'
-    );
-  }
-  return valid;
-}
-
-export function setupBotListener(api) {
+export function setupBotListener(api, profile = null) {
   if (!api?.listener) {
     console.warn('[bot] ❌ api.listener không tồn tại — bot sẽ không nhận được tin nhắn');
     return;
   }
+  selfUid = String(profile?.user_id ?? profile?.userId ?? '');
 
   api.listener.on('message', (msg) => {
     handleIncomingMessage(api, msg).catch((err) => {
@@ -59,40 +60,11 @@ export function setupBotListener(api) {
   }
 }
 
-/**
- * Quyết định có nên trả lời tin nhắn này không.
- * Trả về { reply: boolean, reason: string } — reason để log, tiện chẩn đoán.
- *
- * Mặc định FAIL-CLOSED giống gateway Telegram của Hermes: người lạ nhắn riêng
- * thì im lặng, trong nhóm thì chỉ trả lời khi được tag.
- */
-function decideReply({ isGroup, isOwner, isMentioned, isAllowed, g, groupCfg }) {
-  // Bot bị tắt toàn cục / tắt riêng nhóm này
-  const enabled = groupCfg.enabled !== undefined ? groupCfg.enabled : g.enabled !== false;
-  if (!enabled) return { reply: false, reason: 'bot đang tắt' };
-
-  // Chế độ chỉ nghe, không nói
-  const silent = groupCfg.silentListenOnly !== undefined
-    ? groupCfg.silentListenOnly
-    : !!g.silentListenOnly;
-  if (silent) return { reply: false, reason: 'silent mode' };
-
-  if (isGroup) {
-    const onlyTagged = groupCfg.replyOnlyTagged !== undefined
-      ? groupCfg.replyOnlyTagged
-      : g.replyOnlyTagged !== false;
-    if (onlyTagged && !isMentioned) {
-      return { reply: false, reason: 'nhóm: chưa được tag' };
-    }
-    return { reply: true, reason: isMentioned ? 'nhóm: được tag' : 'nhóm: mở' };
-  }
-
-  // --- Tin nhắn riêng (DM) ---
-  const dmPolicy = g.dmPolicy || 'owner-only';
-  if (isOwner) return { reply: true, reason: 'DM: chủ nhân' };
-  if (dmPolicy === 'open') return { reply: true, reason: 'DM: mở cho tất cả' };
-  if (dmPolicy === 'allowlist' && isAllowed) return { reply: true, reason: 'DM: trong allowlist' };
-  return { reply: false, reason: `DM: người lạ bị chặn (dmPolicy=${dmPolicy})` };
+/** Tin này có gọi đích danh bot không (tag trong nhóm, hoặc chủ nhân nhắn riêng). */
+function isAddressedToBot(msg, isGroup, senderUid) {
+  if (!isGroup) return ownerUids.includes(senderUid);
+  const mentions = Array.isArray(msg.data?.mentions) ? msg.data.mentions : [];
+  return selfUid ? mentions.some((m) => String(m?.uid ?? '') === selfUid) : false;
 }
 
 async function handleIncomingMessage(api, msg) {
@@ -101,7 +73,6 @@ async function handleIncomingMessage(api, msg) {
   const content = typeof msg.data?.content === 'string' ? msg.data.content.trim() : '';
   if (!content) return;
 
-  // ── Định tuyến thread ────────────────────────────────────────────────────
   // zca-js đã tính sẵn msg.threadId và msg.type cho cả hai loại hội thoại.
   // (Trước đây code đọc msg.isGroup — property KHÔNG tồn tại — nên mọi tin
   //  nhắn nhóm đều bị trả lời vào DM của người gửi.)
@@ -109,246 +80,43 @@ async function handleIncomingMessage(api, msg) {
   const isGroup = threadType === ThreadType.Group;
   const threadId = msg.threadId;
   const senderUid = String(msg.data?.uidFrom ?? '');
-  const senderName = msg.data?.dName || 'bạn';
 
   if (!threadId) {
     console.warn('[bot] bỏ qua: không xác định được threadId');
     return;
   }
 
-  const config = await loadBotConfig();
-  const g = config.global || {};
-  const groupCfg = isGroup ? (config.groups?.[threadId] || {}) : {};
-
-  const adminUids = normalizeUidList(g.adminUids, 'adminUids');
-  const allowedUids = normalizeUidList(g.allowedUids, 'allowedUids');
-  const isOwner = adminUids.includes(senderUid);
-  const isAllowed = allowedUids.includes(senderUid);
-
   const where = isGroup ? `Nhóm ${threadId}` : `DM ${threadId}`;
-  console.log(`[bot] 📩 [${where}] ${senderName} (${senderUid}): ${content.slice(0, 80)}`);
+  console.log(`[bot] 📩 [${where}] ${msg.data?.dName || '?'} (${senderUid}): ${content.slice(0, 80)}`);
 
-  // Hermes đang cắm thì nhường toàn bộ quyền trả lời cho nó — Hermes có đủ
-  // tools/memory/skills, còn bot nội bộ chỉ là LLM thuần. Nhường sớm ở đây để
-  // không trả lời hai lần và không tốn thêm một lượt gọi LLM.
   if (isHermesAttached()) {
     forwardToHermes(msg);
     console.log('[bot] ➡️ đã chuyển cho Hermes Agent');
     return;
   }
 
-  // ── Lệnh /sethome — nhận diện chủ nhân ───────────────────────────────────
-  if (/^\/?sethome$/i.test(content)) {
-    await handleSetHome({ api, msg, config, g, adminUids, senderUid, senderName, threadId, threadType });
+  // Hermes chưa cắm. Chỉ báo cho người thật sự đang gọi bot — người khác nói
+  // chuyện với nhau trong nhóm thì không việc gì phải nghe.
+  if (!isAddressedToBot(msg, isGroup, senderUid)) {
+    console.log('[bot] ⚠️ Hermes chưa cắm — tin này không gọi bot, bỏ qua');
     return;
   }
 
-  // ── Phát hiện tag trong nhóm ─────────────────────────────────────────────
-  let isMentioned = false;
-  if (isGroup) {
-    const mentions = msg.data?.mentions;
-    if (Array.isArray(mentions) && mentions.length > 0) isMentioned = true;
-    const lower = content.toLowerCase();
-    if (lower.includes('@bot') || lower === 'bot' || lower.startsWith('bot ')) isMentioned = true;
-  }
-
-  // ── Quyết định trả lời ───────────────────────────────────────────────────
-  const decision = decideReply({ isGroup, isOwner, isMentioned, isAllowed, g, groupCfg });
-  if (!decision.reply) {
-    console.log(`[bot] 🔇 bỏ qua — ${decision.reason}`);
+  const last = notified.get(threadId) || 0;
+  if (Date.now() - last < NOTIFY_COOLDOWN_MS) {
+    console.log('[bot] ⚠️ Hermes chưa cắm — đã báo cho thread này rồi, không nhắc lại');
     return;
   }
+  notified.set(threadId, Date.now());
 
-  // ── Báo đã đọc ───────────────────────────────────────────────────────────
-  await safe('sendSeenEvent', async () => {
-    const d = msg.data;
-    await api.sendSeenEvent({
-      msgId: d.msgId,
-      cliMsgId: d.cliMsgId,
-      uidFrom: d.uidFrom,
-      idTo: d.idTo,
-      msgType: d.msgType,
-      st: d.st,
-      at: d.at,
-      cmd: d.cmd,
-      ts: d.ts,
-    }, threadType);
-  });
-
-  // ── Thả cảm xúc ──────────────────────────────────────────────────────────
-  await safe('addReaction', async () => {
-    if (!msg.data?.msgId) return;
-    await api.addReaction(pickSmartReaction(content), {
-      data: { msgId: msg.data.msgId, cliMsgId: msg.data.cliMsgId },
+  console.warn('[bot] ⚠️ Hermes chưa cắm — báo lỗi cho người dùng');
+  try {
+    await api.sendMessage(
+      { msg: 'Mình đang mất kết nối với bộ não xử lý nên chưa trả lời được 😔 Bạn nhắn lại giúp mình sau ít phút nhé!' },
       threadId,
-      type: threadType,
-    });
-  });
-
-  // ── Hiệu ứng đang soạn tin ───────────────────────────────────────────────
-  await safe('sendTypingEvent', () => api.sendTypingEvent(threadId, threadType));
-
-  // ── Hỏi bộ não ───────────────────────────────────────────────────────────
-  const personas = await loadPersonas();
-  const personaKey = groupCfg.persona || g.persona || 'friendly';
-  const persona = personas[personaKey] || personas.friendly || {};
-
-  const cleanText = content.replace(/@bot/gi, '').trim();
-  const answer = await askHermesBrain({
-    prompt: cleanText,
-    senderName,
-    persona,
-    isOwner,
-    threadId,
-    ownerName: g.ownerName || '',
-    orgName: g.orgName || '',
-  });
-
-  // ── Trả lời ĐÚNG nơi được hỏi ────────────────────────────────────────────
-  const formatted = formatZaloMarkdown(answer);
-  await api.sendMessage(
-    { msg: formatted.msg, styles: formatted.styles, quote: msg.data },
-    threadId,
-    threadType
-  );
-  console.log(`[bot] ✅ đã trả lời vào ${where}`);
-}
-
-/**
- * /sethome — gán quyền chủ nhân.
- * Lần đầu (chưa có admin nào) thì ai gõ trước thành chủ. Sau đó chỉ chủ hiện
- * tại mới thêm được người khác, tránh người lạ tự nhận quyền.
- */
-async function handleSetHome({ api, msg, config, g, adminUids, senderUid, senderName, threadId, threadType }) {
-  const isFirstClaim = adminUids.length === 0;
-  const isOwner = adminUids.includes(senderUid);
-
-  if (!isFirstClaim && !isOwner) {
-    console.log(`[bot] 🔇 từ chối /sethome từ người lạ ${senderName} (${senderUid})`);
-    return; // im lặng, không tiết lộ có lệnh này
-  }
-
-  if (!isZaloUid(senderUid)) {
-    console.warn(`[bot] ⚠️ /sethome: UID không hợp lệ (${senderUid}), bỏ qua`);
-    return;
-  }
-
-  if (!isOwner) {
-    // Ghi đè bằng danh sách đã lọc — đồng thời dọn luôn giá trị rác cũ.
-    config.global = { ...g, adminUids: [...adminUids, senderUid] };
-    await saveBotConfig(config);
-    console.log(`[bot] 👑 đã gán chủ nhân: ${senderName} (${senderUid})`);
-  }
-
-  const raw = `👑 Dạ em đã nhận diện [green]${senderName}[/green] (UID: ${senderUid}) là [red]CHỦ NHÂN[/red] của Hermes Agent rồi ạ!\n\nAnh cần gì cứ nhắn em nhé ✨`;
-  const formatted = formatZaloMarkdown(raw);
-  await api.sendMessage(
-    { msg: formatted.msg, styles: formatted.styles, quote: msg.data },
-    threadId,
-    threadType
-  );
-}
-
-async function askHermesBrain({ prompt, senderName, persona, isOwner, threadId, ownerName = '', orgName = '' }) {
-  if (!BRAIN.apiKey) {
-    return 'Dạ em đang không kết nối được tới bộ não AI (thiếu API key). Anh kiểm tra giúp em file cấu hình Hermes nhé.';
-  }
-
-  // Danh tính chủ nhân lấy từ cấu hình, không viết cứng trong mã — mỗi bản
-  // triển khai là một người/đơn vị khác nhau.
-  const owner = [ownerName, orgName].filter(Boolean).join(' — ');
-  const intro = owner
-    ? `Bạn là Hermes Agent — trợ lý AI cá nhân của ${owner}.`
-    : 'Bạn là Hermes Agent — một trợ lý AI cá nhân.';
-
-  const systemInstruction = `${intro}
-Vai trò hiện tại: ${persona.name || 'Trợ lý Zalo'}.
-Người đang trò chuyện: ${senderName}${isOwner ? ' — ĐÂY LÀ CHỦ NHÂN của bạn' : ''}.
-Chỉ dẫn vai trò: ${persona.system_prompt || 'Thông minh, sắc bén, chu đáo.'}
-Văn phong: ${persona.tone || 'Lịch sự, nhiệt huyết, đúng trọng tâm'}.
-
-Quy tắc trình bày trên Zalo:
-1. ${isOwner ? 'Xưng "em", gọi "anh".' : 'Xưng "em", gọi người dùng lịch sự theo tên.'}
-2. Trả lời trực diện, đúng trọng tâm, không lan man.
-3. Định dạng:
-   - [red]nội dung quan trọng, cảnh báo[/red] → chữ đỏ đậm
-   - [green]kết quả tốt, thành công[/green] → chữ xanh lá đậm
-   - [orange]lưu ý vừa[/orange] / [yellow]ghi chú nhẹ[/yellow]
-   - **từ khoá, con số quan trọng** → in đậm
-   - Danh sách chính dùng 1. 2. kèm emoji; ý phụ dùng gạch đầu dòng.`;
-
-  if (!conversationHistory.has(threadId)) conversationHistory.set(threadId, []);
-  const history = conversationHistory.get(threadId);
-  history.push({ role: 'user', content: prompt });
-  while (history.length > MAX_HISTORY_TURNS) history.shift();
-
-  try {
-    const res = await fetch(`${BRAIN.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${BRAIN.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: BRAIN.model,
-        messages: [{ role: 'system', content: systemInstruction }, ...history],
-        stream: false,
-        temperature: persona.creativity !== undefined ? persona.creativity : 0.7,
-        max_tokens: 1500,
-      }),
-    });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      console.error(`[brain] ❌ HTTP ${res.status}: ${body.slice(0, 200)}`);
-      history.pop(); // đừng giữ lượt hỏi đã thất bại
-      return res.status === 401
-        ? 'Dạ em chưa xác thực được với bộ não AI (lỗi 401). Anh kiểm tra lại API key giúp em ạ.'
-        : `Dạ bộ não AI đang bận (lỗi ${res.status}). Anh thử lại sau chút nhé.`;
-    }
-
-    const text = await res.text();
-    const answer = parseLLMResponse(text);
-
-    if (answer) {
-      history.push({ role: 'assistant', content: answer });
-      return answer;
-    }
-    history.pop();
-    return 'Dạ em chưa nghĩ ra câu trả lời phù hợp. Anh hỏi lại rõ hơn giúp em nhé.';
+      threadType,
+    );
   } catch (err) {
-    console.error('[brain] ❌ không gọi được:', err.message);
-    history.pop();
-    return 'Dạ em đang mất kết nối tới bộ não AI. Anh kiểm tra 9router giúp em nhé.';
-  }
-}
-
-/** Chấp nhận cả JSON thường lẫn stream SSE. */
-function parseLLMResponse(text) {
-  if (!text) return '';
-  if (text.startsWith('data:')) {
-    let out = '';
-    for (const line of text.split('\n')) {
-      if (!line.startsWith('data:') || line.includes('[DONE]')) continue;
-      try {
-        const chunk = JSON.parse(line.slice(5).trim());
-        out += chunk.choices?.[0]?.delta?.content || '';
-      } catch { /* bỏ qua dòng hỏng */ }
-    }
-    return out.trim();
-  }
-  try {
-    return (JSON.parse(text).choices?.[0]?.message?.content || '').trim();
-  } catch {
-    return '';
-  }
-}
-
-/** Chạy tác vụ phụ, lỗi thì ghi log chứ không làm chết luồng trả lời. */
-async function safe(label, fn) {
-  try {
-    await fn();
-  } catch (err) {
-    console.warn(`[bot] ${label} lỗi: ${err?.message || err}`);
+    console.error('[bot] không gửi được thông báo lỗi:', err?.message || err);
   }
 }

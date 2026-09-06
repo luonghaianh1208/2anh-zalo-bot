@@ -128,6 +128,13 @@ def _scoped_thread(args: Dict[str, Any], key: str = "thread_id") -> tuple:
     return current, _current_thread_kind(), None
 
 
+def _self_uid() -> str:
+    """UID của chính tài khoản bot, rỗng nếu chưa nối được cầu."""
+    adapter = _ACTIVE_ADAPTER
+    profile = getattr(adapter, "_self_profile", None) or {}
+    return str(profile.get("user_id") or "")
+
+
 async def _invoke(method: str, args: List[Any]) -> str:
     """Gọi một hàm zca-js qua cầu nối và gói kết quả lại thành JSON."""
     adapter = _ACTIVE_ADAPTER
@@ -244,7 +251,44 @@ async def zalo_read_history(args: Dict[str, Any], **_kw) -> str:
 
 
 async def zalo_list_groups(args: Dict[str, Any], **_kw) -> str:
-    return await _invoke("getAllGroups", [])
+    """Liệt kê nhóm kèm TÊN, không phải chỉ dãy ID.
+
+    ``getAllGroups`` một mình chỉ trả về ``{groupId: version}`` — agent nhận
+    được một nắm số và không nói nổi cho người dùng biết đó là nhóm nào. Phải
+    hỏi thêm ``getGroupInfo`` mới ra tên, sĩ số và vai trò của bot trong nhóm.
+    """
+    listed = await _invoke("getAllGroups", [])
+    payload = json.loads(listed)
+    if not payload.get("success"):
+        return listed
+
+    grid = (payload.get("result") or {}).get("gridVerMap") or {}
+    group_ids = list(grid.keys())
+    if not group_ids:
+        return _ok({"count": 0, "groups": []})
+
+    detail = await _invoke("getGroupInfo", [group_ids])
+    dpayload = json.loads(detail)
+    if not dpayload.get("success"):
+        # Vẫn còn hơn không: trả ID để agent có cái mà tra tiếp.
+        return _ok({"count": len(group_ids), "groups": [{"id": g} for g in group_ids],
+                    "note": "không lấy được tên nhóm"})
+
+    info = (dpayload.get("result") or {}).get("gridInfoMap") or {}
+    self_uid = str(_self_uid() or "")
+    groups = []
+    for gid in group_ids:
+        d = info.get(gid) or {}
+        deputies = [str(x) for x in (d.get("adminIds") or [])]
+        groups.append({
+            "id": gid,
+            "name": d.get("name") or "",
+            "members": d.get("totalMember"),
+            "my_role": ("trưởng nhóm" if str(d.get("creatorId")) == self_uid
+                        else "phó nhóm" if self_uid and self_uid in deputies
+                        else "thành viên"),
+        })
+    return _ok({"count": len(groups), "groups": groups})
 
 
 async def zalo_group_members(args: Dict[str, Any], **_kw) -> str:
@@ -346,6 +390,21 @@ async def zalo_list_reminders(args: Dict[str, Any], **_kw) -> str:
     return await _invoke("getListReminder", [
         {"page": 1, "count": 20}, thread_id, _thread_type(kind),
     ])
+
+
+async def zalo_remove_reminder(args: Dict[str, Any], **_kw) -> str:
+    """Xoá một lời nhắc.
+
+    Có mặt vì trước đây tạo được mà không xoá được: đặt nhầm giờ là lời nhắc
+    nằm lại trong nhóm vĩnh viễn, phải nhờ người vào Zalo xoá tay.
+    """
+    reminder_id = str(args.get("reminder_id") or "")
+    if not reminder_id:
+        return _err("cần `reminder_id` (lấy từ zalo_list_reminders)")
+    thread_id, kind, err = _scoped_thread(args)
+    if err:
+        return err
+    return await _invoke("removeReminder", [reminder_id, thread_id, _thread_type(kind)])
 
 
 async def zalo_pin_conversation(args: Dict[str, Any], **_kw) -> str:
@@ -956,8 +1015,9 @@ TOOLS = [
     # --- Nhóm 2: đọc ngữ cảnh ---
     ("zalo_read_history", "📜", _schema(
         "zalo_read_history",
-        "Đọc các tin nhắn gần đây của một nhóm. Dùng khi cần hiểu câu chuyện "
-        "đang diễn ra trước khi trả lời, hoặc khi được nhờ tóm tắt nhóm.",
+        "KHÔNG DÙNG ĐƯỢC — Zalo trả lỗi 404 với thư viện hiện tại (zca-js "
+        "2.1.2). Đừng gọi; nếu cần bối cảnh thì dựa vào các tin trong phiên "
+        "hội thoại hiện tại.",
         {
             "thread_id": _THREAD_ID,
             "count": {"type": "integer", "description": "Số tin muốn đọc (tối đa 100, mặc định 30)."},
@@ -1067,6 +1127,17 @@ TOOLS = [
         ["thread_id"],
     ), zalo_list_reminders, TOOLSET_PUBLIC),
 
+    ("zalo_remove_reminder", "🗑️", _schema(
+        "zalo_remove_reminder",
+        "Xoá một lời nhắc đã đặt. Dùng khi đặt nhầm giờ hoặc việc đã xong.",
+        {
+            "thread_id": _THREAD_ID,
+            "thread_kind": _THREAD_KIND,
+            "reminder_id": {"type": "string", "description": "Mã lời nhắc, lấy từ zalo_list_reminders."},
+        },
+        ["thread_id", "reminder_id"],
+    ), zalo_remove_reminder, TOOLSET_PUBLIC),
+
     ("zalo_pin_conversation", "📍", _schema(
         "zalo_pin_conversation",
         "Ghim hoặc bỏ ghim một hội thoại lên đầu danh sách chat.",
@@ -1094,8 +1165,9 @@ TOOLS = [
     # --- Nhóm 4: sửa sai & quản trị ---
     ("zalo_undo", "↩️", _schema(
         "zalo_undo",
-        "Thu hồi một tin nhắn mà chính bot đã gửi. Dùng khi lỡ gửi nhầm nội "
-        "dung hoặc nhầm hội thoại.",
+        "KHÔNG DÙNG ĐƯỢC — Zalo đòi cả `cliMsgId` khi thu hồi, nhưng lệnh gửi "
+        "chỉ trả về `msgId` nên không có đường lấy. Nếu lỡ gửi nhầm thì nhắn "
+        "thêm một tin đính chính.",
         {
             "thread_id": _THREAD_ID,
             "thread_kind": _THREAD_KIND,

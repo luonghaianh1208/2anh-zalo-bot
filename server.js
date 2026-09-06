@@ -6,9 +6,7 @@ import { dirname, join } from 'path';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { Zalo, LoginQRCallbackEventType } from 'zca-js';
 import { tryReconnect, saveSession, clearSession, fetchProfile } from './auth.js';
-import { loadBotConfig, saveBotConfig, loadPersonas, savePersonas } from './config-manager.js';
 import { setupBotListener } from './bot-handler.js';
-import { assertBrainReady } from './brain-config.js';
 import { startHermesBridge, isHermesAttached } from './hermes-bridge.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -18,17 +16,6 @@ const wss = new WebSocketServer({ server });
 
 app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
-
-// API Cấu hình Personas
-app.get('/api/personas', async (req, res) => {
-  const data = await loadPersonas();
-  res.json(data);
-});
-
-app.post('/api/personas', async (req, res) => {
-  const success = await savePersonas(req.body);
-  res.json({ ok: success });
-});
 
 // --- State ---
 let zalo = null;
@@ -59,7 +46,6 @@ wss.on('connection', (ws) => {
 });
 
 // --- Boot check: Auto Reconnect ---
-assertBrainReady();
 
 const reconnectResult = await tryReconnect();
 if (reconnectResult) {
@@ -69,7 +55,7 @@ if (reconnectResult) {
   sessionFromDisk = true;
   status = 'logged-in';
   console.log(`[boot] ✅ đã kết nối lại — ${loginInfo?.display_name || '?'} (${loginInfo?.user_id || '?'})`);
-  setupBotListener(api);
+  setupBotListener(api, loginInfo);
   startHermesBridge({ api, profile: loginInfo });
 } else {
   console.log('[boot] chưa có phiên — cần quét QR');
@@ -138,7 +124,7 @@ app.post('/api/qr/start', async (req, res) => {
 
     console.log(`[auth] ✅ đăng nhập thành công — ${loginInfo?.display_name || '?'} (${loginInfo?.user_id || '?'})`);
     broadcast({ type: 'login-success', data: loginInfo });
-    setupBotListener(api);
+    setupBotListener(api, loginInfo);
     startHermesBridge({ api, profile: loginInfo });
     res.json({ ok: true, user: loginInfo });
   } catch (err) {
@@ -158,80 +144,6 @@ app.get('/api/status', (req, res) => {
     hermesAttached: isHermesAttached(),
     mode: isHermesAttached() ? 'hermes-agent' : 'chatbot-noi-bo',
   });
-});
-
-// --- API Lấy Danh Sách Tất Cả Nhóm Zalo Đang Tham Gia ---
-app.get('/api/groups', async (req, res) => {
-  if (status !== 'logged-in' || !api) {
-    return res.json({ ok: false, groups: [], msg: 'Chưa đăng nhập Zalo' });
-  }
-  try {
-    let groupList = [];
-    if (typeof api.getAllGroups === 'function') {
-      const g = await api.getAllGroups();
-      const gridMap = g?.gridVerMap || {};
-      const gridIds = Object.keys(gridMap);
-
-      if (gridIds.length > 0 && typeof api.getGroupInfo === 'function') {
-        try {
-          const infoRes = await api.getGroupInfo(gridIds);
-          if (infoRes && infoRes.gridInfoMap) {
-            groupList = Object.keys(infoRes.gridInfoMap).map(gid => {
-              const item = infoRes.gridInfoMap[gid];
-              return {
-                id: gid,
-                grid: gid,
-                name: item.name || `Nhóm Zalo (${gid.slice(-4)})`,
-                avatar: item.avt || item.avatar || '',
-                memberCount: item.totalMember || 0
-              };
-            });
-          }
-        } catch (e) {
-          console.warn('[groups] getGroupInfo error:', e.message);
-        }
-      }
-
-      if (groupList.length === 0) {
-        groupList = gridIds.map(gid => ({
-          id: gid,
-          grid: gid,
-          name: `Nhóm Zalo (${gid.slice(-4)})`,
-          avatar: ''
-        }));
-      }
-    }
-    res.json({ ok: true, groups: groupList });
-  } catch (err) {
-    console.error('[groups] fetch failed:', err.message);
-    res.json({ ok: false, groups: [], error: err.message });
-  }
-});
-
-// --- Bot Settings Config API ---
-app.get('/api/config', async (req, res) => {
-  const cfg = await loadBotConfig();
-  res.json(cfg);
-});
-
-app.post('/api/config', async (req, res) => {
-  const ok = await saveBotConfig(req.body);
-  res.json({ ok });
-});
-
-// --- Send to home (Zalo main account) ---
-app.post('/api/send-home', async (req, res) => {
-  if (status !== 'logged-in' || !api) {
-    return res.status(400).json({ ok: false, error: 'Chua dang nhap' });
-  }
-  const { uid, message } = req.body;
-  if (!uid || !message) return res.status(400).json({ ok: false, error: 'Thieu uid hoac message' });
-  try {
-    await api.sendMessage({ msg: message }, uid);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
 });
 
 // --- Logout ---
