@@ -132,7 +132,19 @@ def _get_scoped_secret(name, default=None):
 logger = logging.getLogger(__name__)
 
 DEFAULT_BRIDGE_URL = "ws://127.0.0.1:3873"
-MAX_MESSAGE_LENGTH = 4000          # Zalo caps around 4k characters per message
+# Zalo từ chối tin dài quá 3000 ký tự với lỗi "Nội dung quá dài". Đo bằng phép
+# chia đôi trên tài khoản thật: ASCII, tiếng Việt có dấu và emoji đều dừng ở
+# đúng 3000 — là số ĐƠN VỊ MÃ UTF-16, không phải byte.
+#
+# Trước đây hằng số này để 4000, nên mọi câu trả lời dài đều rơi vào khoảng
+# chết: bot đọc xong, soạn xong, rồi im lặng vì không gửi đi được. Người trong
+# nhóm chỉ thấy bot bị tag mà không nói gì.
+#
+# Để 2800 lấy chỗ thở: cầu nối dịch Markdown sang style Zalo sau khi cắt, và
+# tuy phép dịch thường làm chuỗi NGẮN đi (bỏ dấu ** ` #) thì cũng không nên
+# tính sát ngưỡng.
+ZALO_HARD_LIMIT = 3000
+MAX_MESSAGE_LENGTH = 2800
 RECONNECT_BACKOFF = [2, 5, 10, 30, 60]
 ACK_TIMEOUT_SECONDS = 30
 
@@ -727,11 +739,49 @@ class ZaloAdapter(BasePlatformAdapter):
         """Group IDs run longer than user IDs; used only when nothing else says."""
         return len(str(chat_id).strip()) >= 19
 
+    @staticmethod
+    def _u16len(text: str) -> int:
+        """Độ dài theo cách Zalo đếm — đơn vị mã UTF-16.
+
+        Python đếm điểm mã, JavaScript và Zalo đếm đơn vị UTF-16. Với chữ
+        thường thì bằng nhau, nhưng mỗi emoji là 1 trong Python và 2 bên kia.
+        Một câu trả lời rắc emoji mà đếm theo Python sẽ tưởng vừa, gửi đi mới
+        biết quá.
+        """
+        return len(text.encode("utf-16-le")) // 2
+
     def _chunk(self, content: str) -> List[str]:
+        """Cắt câu trả lời dài thành nhiều tin, cắt ở chỗ đọc được.
+
+        Ưu tiên cắt giữa hai đoạn, rồi mới tới cuối câu, cuối cùng mới cắt
+        cứng. Cắt cứng giữa từ làm câu trả lời trông như bị lỗi, mà lỗi thật
+        thì không có — chỉ là dài.
+        """
         text = content or ""
-        if len(text) <= MAX_MESSAGE_LENGTH:
+        if self._u16len(text) <= MAX_MESSAGE_LENGTH:
             return [text]
-        return [text[i:i + MAX_MESSAGE_LENGTH] for i in range(0, len(text), MAX_MESSAGE_LENGTH)]
+
+        chunks: List[str] = []
+        rest = text
+        while self._u16len(rest) > MAX_MESSAGE_LENGTH:
+            # Tìm điểm cắt xa nhất còn nằm trong hạn mức.
+            cut = MAX_MESSAGE_LENGTH
+            while self._u16len(rest[:cut]) > MAX_MESSAGE_LENGTH:
+                cut -= 50                      # lùi dần khi có nhiều emoji
+            window = rest[:cut]
+
+            # Chỗ cắt đẹp nhất: hết một đoạn văn, rồi tới hết một câu.
+            for sep in ("\n\n", "\n", ". ", "! ", "? ", " "):
+                idx = window.rfind(sep)
+                if idx > cut * 0.5:            # đừng cắt quá non nửa đoạn
+                    cut = idx + len(sep)
+                    break
+
+            chunks.append(rest[:cut].rstrip())
+            rest = rest[cut:].lstrip()
+        if rest:
+            chunks.append(rest)
+        return chunks
 
     async def _command(self, payload: Dict[str, Any], *, expect_ack: bool) -> Optional[Dict[str, Any]]:
         if self._ws is None:

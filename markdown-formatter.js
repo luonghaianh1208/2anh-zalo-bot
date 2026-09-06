@@ -42,6 +42,55 @@ const ALIASES = [
   [/\[vang\]/gi, '[yellow]'], [/\[\/vang\]/gi, '[/yellow]'],
 ];
 
+/**
+ * Zalo giới hạn KÍCH THƯỚC của mảng định dạng, khoảng 256 ký tự JSON.
+ *
+ * Vượt quá thì API trả về "Lỗi không xác định" — không nhắc gì tới style, nên
+ * rất dễ đi tìm nhầm chỗ. Đo trên tài khoản thật:
+ *
+ *     8 style in đậm ngắn  → 256 ký tự JSON → gửi được
+ *     7 style thật của bài → 237            → gửi được
+ *     8 style thật của bài → 277            → HỎNG
+ *     9 style in đậm ngắn  → 288            → HỎNG
+ *
+ * Nên đây không phải giới hạn theo số lượng: style màu (`c_f27806`) tốn chỗ
+ * gấp tám lần in đậm (`b`), và đoạn càng dài thì con số càng nhiều chữ số.
+ * Đếm số style sẽ lúc đúng lúc sai, đo bằng chính chuỗi gửi đi mới chắc.
+ *
+ * Vì sao chuyện này quan trọng: một câu trả lời bình thường của Hermes sinh
+ * ra 30–50 style. Không cắt bớt thì gần như MỌI câu trả lời có định dạng đều
+ * không gửi nổi — bot đọc xong, soạn xong, rồi im lặng, và trong nhóm chỉ
+ * thấy nó bị tag mà không nói gì.
+ *
+ * Giữ lại theo mức quan trọng chứ không cắt bừa từ cuối: tiêu đề có màu giữ
+ * cấu trúc bài, in đậm giữ từ khoá, nghiêng và gạch ngang chỉ là gia vị. Phần
+ * bị bỏ vẫn hiện thành chữ thường — mất định dạng chứ không mất nội dung.
+ */
+const STYLE_BUDGET = 240;   // chừa chỗ so với ngưỡng đo được (~256)
+
+function capStyles(styles) {
+  if (JSON.stringify(styles).length <= STYLE_BUDGET) return styles;
+
+  const rank = (s) => {
+    if (s.st && s.st.startsWith('c_')) return 0;   // tiêu đề có màu
+    if (s.st === 'b') return 1;                    // in đậm
+    if (s.st === 's') return 2;                    // gạch ngang
+    return 3;                                      // nghiêng và phần còn lại
+  };
+
+  const byImportance = styles
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i);
+
+  const kept = [];
+  for (const item of byImportance) {
+    const next = [...kept, item];
+    if (JSON.stringify(next.map((x) => x.s)).length > STYLE_BUDGET) continue;
+    kept.push(item);
+  }
+  return kept.sort((a, b) => a.i - b.i).map((x) => x.s);
+}
+
 export function formatZaloMarkdown(input) {
   if (!input) return { msg: '', styles: [] };
 
@@ -113,7 +162,7 @@ export function formatZaloMarkdown(input) {
     offset += text.length + 1; // +1 cho ký tự xuống dòng
   }
 
-  return { msg: outLines.join('\n'), styles };
+  return { msg: outLines.join('\n'), styles: capStyles(styles) };
 }
 
 /**
