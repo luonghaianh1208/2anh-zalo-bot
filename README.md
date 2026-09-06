@@ -201,16 +201,35 @@ hermes plugins enable zalo-platform
 hermes plugins enable zalo-tools
 ```
 
-**Bước 3 — khai báo toolset là "đã biết"** trong `config.yaml` của Hermes:
+**Bước 3 — khai báo cấu hình Zalo** trong `config.yaml` của Hermes:
 
 ```yaml
+# 1. Khai báo toolset là "đã biết" để Hermes không tự cấp quyền chủ cho người lạ:
 known_plugin_toolsets:
   zalo:
     - zalo_owner
     - zalo_public
+
+# 2. Tắt hiển thị tiến trình làm việc nội bộ ra nhóm Zalo (tránh lộ dòng 'Working...'):
+display:
+  platforms:
+    zalo:
+      tool_progress: "off"
+      long_running_notifications: false
+      busy_ack_detail: false
+      show_reasoning: false
+
+# 3. Tính cách và phong cách phản hồi mô phỏng giọng điệu tự nhiên:
+platform_hints:
+  zalo:
+    append: >-
+      Giọng điệu — bạn nói chuyện thay cho chủ nhân: vui vẻ, hoà đồng, thi thoảng
+      tếu táo một câu cho đỡ khô, nhưng vào việc thì nghiêm túc và làm tới nơi.
+      Bám sát mạch câu chuyện đang diễn ra trong nhóm, nhớ ai vừa nói gì để trả lời
+      cho ăn nhập. Khi tư vấn: kiên nhẫn, giải thích chi tiết, hỏi lại cho rõ nhu cầu.
 ```
 
-Bước này bắt buộc, không phải tuỳ chọn. Hermes mặc định **bật** mọi toolset plugin mà nó chưa từng thấy; thiếu khai báo thì `zalo_owner` — bộ công cụ dành riêng chủ nhân — được cấp cho cả người lạ nhắn vào nhóm, dù adapter đã giới hạn.
+Bước này bắt buộc, không phải tuỳ chọn. Hermes mặc định **bật** mọi toolset plugin mà nó chưa từng thấy; thiếu khai báo thì `zalo_owner` — bộ công cụ dành riêng chủ nhân — được cấp cho cả người lạ nhắn vào nhóm, dù adapter đã giới hạn. Đồng thời cấu hình `display.platforms.zalo` giúp các bong bóng tin nhắn trong nhóm luôn sạch sẽ, không bị bắn rác thông báo hệ thống.
 
 **Bước 4 — thêm UID** vào file `.env` **của Hermes** (`%LOCALAPPDATA%\hermes\.env` trên Windows, `~/.hermes/.env` trên Linux/macOS):
 
@@ -264,13 +283,15 @@ Hermes cứ viết Markdown như bình thường; cầu nối dịch sang địn
 
 | Markdown | Hiển thị trên Zalo |
 |---|---|
-| `# ## ###` tiêu đề | chữ **phóng to** |
+| `# ## ###` tiêu đề | **in đậm** toàn bộ dòng tiêu đề |
 | `####` trở xuống | in đậm |
+| `1.` `2.` `3.` đầu mục số | **in đậm** phần số thứ tự |
+| `- mục` (cấp 1) | `- ` gạch đầu dòng |
+| `  • mục` (cấp con thụt lề) | `  • ` dấu chấm tròn |
 | `**đậm**` `__đậm__` | in đậm |
 | `` `mã` `` | in đậm (Zalo không có chữ đơn cách) |
 | `*nghiêng*` `> trích dẫn` | in nghiêng |
 | `~~gạch~~` | gạch ngang |
-| `- mục` | • mục |
 | `[chữ](link)` | chữ (link) |
 | `[đỏ]…[/đỏ]` · `[xanh]` `[cam]` `[vàng]` | đổi màu chữ |
 
