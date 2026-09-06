@@ -835,7 +835,7 @@ async def _kb_read_shortcut(target, rel_out: str) -> str:
     if not _is_public_url(url):
         return _err(f"lối tắt '{rel_out}' trỏ tới địa chỉ không công khai — bỏ qua")
 
-    fetched = await _core("web_extract", {"urls": [_google_export_url(url)]}, attempts=3)
+    fetched = await _core("web_extract", {"urls": [_google_export_url(url)]}, attempts=2)
     try:
         results = (json.loads(fetched).get("results") or [{}])[0]
     except (ValueError, TypeError, AttributeError):
@@ -987,11 +987,14 @@ def _is_public_url(raw: str) -> bool:
 async def _core(tool_name: str, args: Dict[str, Any], *, attempts: int = 1) -> str:
     """Gọi lại một công cụ lõi của Hermes qua registry.
 
-    ``attempts`` > 1 dành cho công cụ web. Khi chưa cấu hình khoá backend,
-    Hermes xoay vòng qua các dịch vụ không khoá (Firecrawl, Keenable, Exa) và
-    mỗi cái hỏng vào lúc khác nhau — đo được 3/6 lần thất bại trên cùng một
-    URL. Người trong nhóm không quan tâm backend nào hỏng, họ chỉ thấy bot lúc
-    tra được lúc không. Thử lại vài lần là cách rẻ nhất để che chuyện đó.
+    ``attempts`` > 1 dành cho công cụ web. Chưa cấu hình khoá backend thì Hermes
+    xoay vòng qua các dịch vụ không khoá (Firecrawl, Keenable, Exa) và mỗi cái
+    hỏng vào lúc khác nhau — đo được 3/6 lần thất bại trên cùng một URL.
+
+    Có khoá rồi thì tỉ lệ hỏng gần như biến mất (đo 4/4 tìm kiếm, 5/6 đọc trang
+    — lần trượt duy nhất là do trang đích không cho thu thập chứ không phải do
+    backend). Nên giữ số lần thử ở mức thấp: một trang thật sự không đọc được
+    thì thử lại chỉ tổ bắt người trong nhóm chờ thêm mà kết quả vẫn thế.
     """
     from tools.registry import registry
 
@@ -1035,7 +1038,7 @@ async def zalo_web_search(args: Dict[str, Any], **_kw) -> str:
     if not query:
         return _err("cần `query`")
     limit = max(1, min(int(args.get("limit", 5) or 5), 10))
-    return await _core("web_search", {"query": query, "limit": limit}, attempts=3)
+    return await _core("web_search", {"query": query, "limit": limit}, attempts=2)
 
 
 async def zalo_web_read(args: Dict[str, Any], **_kw) -> str:
@@ -1055,7 +1058,7 @@ async def zalo_web_read(args: Dict[str, Any], **_kw) -> str:
     # Đổi sau khi kiểm tra an toàn, không phải trước — để phép kiểm luôn nhìn
     # đúng địa chỉ người dùng đưa vào.
     urls = [_google_export_url(u) for u in urls]
-    return await _core("web_extract", {"urls": urls[:5]}, attempts=3)
+    return await _core("web_extract", {"urls": urls[:5]}, attempts=2)
 
 
 # =====================================================================

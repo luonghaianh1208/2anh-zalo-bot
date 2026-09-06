@@ -343,9 +343,21 @@ Hai bản vá:
 vụ không khoá (Firecrawl, Keenable, Exa). Đo cùng một URL sáu lần: **3 lần hỏng,
 3 lần được** — mỗi lần một backend khác nhau báo lỗi.
 
-Đã thêm thử lại ba lượt trong `_core`, đưa tỉ lệ lên 4/5. Nhưng đây là che bớt
-triệu chứng, không phải chữa: cách dứt điểm là đặt `EXA_API_KEY` hoặc khoá của
-một backend khác.
+Đã thêm thử lại trong `_core` — che bớt triệu chứng, đưa tỉ lệ lên 4/5.
+
+**Cách chữa thật là đặt khoá.** Sau khi cắm `EXA_API_KEY`, đo lại với đầu vào
+khác nhau mỗi lần (để bộ đệm không che kết quả):
+
+| | Chưa có khoá | Có khoá |
+|---|---|---|
+| `web_search` | chập chờn | **4/4**, mỗi lượt ~1–1,5s |
+| `web_extract` | 3/6 | **5/6** |
+
+Lần trượt duy nhất là `moet.gov.vn`, và Exa trả rõ `CRAWL_LIVECRAWL_TIMEOUT` —
+trang đích không cho thu thập chứ không phải backend hỏng. Lượt đó tính phí $0.
+
+Vì backend đã ổn định, số lần thử lại giảm từ 3 xuống 2: một trang thật sự
+không đọc được thì thử lại chỉ tổ bắt người trong nhóm chờ thêm.
 
 ## Link Google Docs: `/edit` không phải là nội dung
 
