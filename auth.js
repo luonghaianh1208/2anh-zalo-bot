@@ -78,7 +78,7 @@ export async function tryReconnect() {
   if (!data?.credentials?.cookie) return null;
 
   console.log('[auth] đang kết nối lại bằng phiên đã lưu...');
-  const zalo = new Zalo({ logging: false });
+  const zalo = new Zalo({ logging: false, selfListen: true });
   try {
     const api = await zalo.login({
       cookie: data.credentials.cookie,

@@ -53,11 +53,16 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 try:
     import websockets
@@ -72,6 +77,7 @@ from gateway.platforms.base import (
     MessageEvent,
     MessageType,
     SendResult,
+    cache_image_from_url,
 )
 
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
@@ -85,6 +91,35 @@ from plugins.zalo_tools.tools import TOOLSET_OWNER, TOOLSET_PUBLIC
 from .flood import JUST_MUTED as FLOOD_JUST_MUTED
 from .flood import MUTED as FLOOD_MUTED
 from .flood import FloodGuard
+
+
+def _transcode_to_aac(audio_path: str) -> Optional[str]:
+    """Return a temporary AAC file suitable for Zalo voice messages."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+    fd, output_path = tempfile.mkstemp(prefix="zalo_voice_", suffix=".aac")
+    os.close(fd)
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg, "-v", "error", "-y", "-i", audio_path,
+                "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "96k",
+                output_path,
+            ],
+            capture_output=True,
+            timeout=60,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode == 0 and os.path.getsize(output_path) > 0:
+            return output_path
+    except Exception:
+        logger.debug("Zalo AAC conversion failed for %s", audio_path, exc_info=True)
+    try:
+        os.unlink(output_path)
+    except OSError:
+        pass
+    return None
 
 
 def _zalo_tools():
@@ -157,6 +192,11 @@ SLOW_ACK_TIMEOUT_SECONDS = 150
 SLOW_METHODS = frozenset({"uploadAttachment", "sendMessage", "sendVoice", "sendVideo"})
 DEDUP_WINDOW_SECONDS = 300
 DEDUP_MAX_SIZE = 1000
+GROUP_CONTEXT_LIMIT = 5
+_IMAGE_CONTEXT_RE = re.compile(
+    r"\b(đây|này|kia|ảnh|hình|xe này|như thế|cái này|cái đó|trong ảnh)\b",
+    re.IGNORECASE,
+)
 
 THREAD_TYPE_USER = 0
 THREAD_TYPE_GROUP = 1
@@ -193,6 +233,17 @@ def _truthy(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _authenticated_bridge_url(url: str, token: str) -> str:
+    """Attach the shared bridge token without logging or altering other query keys."""
+    if not str(token or "").strip():
+        raise ValueError("Thiếu ZALO_BRIDGE_TOKEN trong cấu hình Zalo")
+    parts = urlsplit(str(url))
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    query = [(key, value) for key, value in query if key != "token"]
+    query.append(("token", str(token)))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 def check_requirements() -> bool:
     """The adapter needs the ``websockets`` package; the sidecar is checked later."""
     return WEBSOCKETS_AVAILABLE
@@ -221,6 +272,10 @@ class ZaloAdapter(BasePlatformAdapter):
             extra.get("bridge_url")
             or _get_scoped_secret("ZALO_BRIDGE_URL", DEFAULT_BRIDGE_URL)
         )
+        self._bridge_token: str = str(
+            extra.get("bridge_token")
+            or _get_scoped_secret("ZALO_BRIDGE_TOKEN", "")
+        ).strip()
         self._reply_only_tagged: bool = _truthy(
             extra.get("reply_only_tagged",
                       _get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "true")),
@@ -257,6 +312,8 @@ class ZaloAdapter(BasePlatformAdapter):
 
         self._ws = None
         self._reader_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._heartbeat_interval_s = 15.0
         self._closing = False
         self._self_profile: Dict[str, Any] = {}
 
@@ -265,6 +322,15 @@ class ZaloAdapter(BasePlatformAdapter):
 
         # msgId -> seen-at, to survive sidecar reconnect replays
         self._seen: Dict[str, float] = {}
+
+        # Zalo user IDs and group IDs can both be 19 digits, so length is not
+        # enough to classify a reply target.  Remember the authoritative type
+        # supplied by each inbound event and reuse it for outbound replies.
+        self._known_thread_types: Dict[str, int] = {}
+
+        # threadId -> 5 tin gần nhất trong nhóm. Chỉ RAM, không ghi transcript,
+        # để câu hỏi kiểu "đây là gì" có thể nhìn lại ảnh vừa gửi không tag bot.
+        self._recent_group_messages: Dict[str, Deque[Dict[str, Any]]] = {}
 
     # -- Connection lifecycle -------------------------------------------------
 
@@ -275,8 +341,9 @@ class ZaloAdapter(BasePlatformAdapter):
 
         self._closing = False
         try:
+            authenticated_url = _authenticated_bridge_url(self._bridge_url, self._bridge_token)
             self._ws = await asyncio.wait_for(
-                websockets.connect(self._bridge_url, ping_interval=20, ping_timeout=20),
+                websockets.connect(authenticated_url, ping_interval=20, ping_timeout=20),
                 timeout=10,
             )
         except Exception as exc:
@@ -288,6 +355,7 @@ class ZaloAdapter(BasePlatformAdapter):
             return False
 
         self._reader_task = asyncio.create_task(self._read_loop())
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         # Gắn cầu nối vào ĐÚNG bản module công cụ mà Hermes đã nạp — xem
         # _zalo_tools(). Ghi luôn tên module vào log: nếu sau này nó lại trỏ
         # nhầm bản, đây là dòng duy nhất cho biết, vì triệu chứng bên ngoài
@@ -299,9 +367,12 @@ class ZaloAdapter(BasePlatformAdapter):
         self._log_permission_selfcheck()
         return True
 
-    async def invoke(self, method: str, args: list) -> Optional[Dict[str, Any]]:
+    async def invoke(self, method: str, args: list, *, confirmed: bool = False) -> Optional[Dict[str, Any]]:
         """Gọi một hàm zca-js qua cầu nối. Dùng bởi các tool trong tools.py."""
-        return await self._command({"type": "invoke", "method": method, "args": args}, expect_ack=True)
+        return await self._command(
+            {"type": "invoke", "method": method, "args": args, "_confirmed": confirmed},
+            expect_ack=True,
+        )
 
     async def disconnect(self) -> None:
         self._closing = True
@@ -314,6 +385,14 @@ class ZaloAdapter(BasePlatformAdapter):
             except (asyncio.CancelledError, Exception):
                 pass
             self._reader_task = None
+
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._heartbeat_task = None
 
         if self._ws:
             try:
@@ -363,12 +442,21 @@ class ZaloAdapter(BasePlatformAdapter):
                 await asyncio.sleep(delay)
                 try:
                     self._ws = await asyncio.wait_for(
-                        websockets.connect(self._bridge_url, ping_interval=20, ping_timeout=20),
+                        websockets.connect(
+                            _authenticated_bridge_url(self._bridge_url, self._bridge_token),
+                            ping_interval=20, ping_timeout=20,
+                        ),
                         timeout=10,
                     )
                     logger.info("[zalo] reconnected to sidecar")
                 except Exception:
                     continue  # stay in the loop and back off again
+
+    async def _heartbeat_loop(self) -> None:
+        """Keep the application bridge observable, beyond WebSocket TCP pings."""
+        while not self._closing:
+            await self._command({"type": "ping"}, expect_ack=False)
+            await asyncio.sleep(self._heartbeat_interval_s)
 
     async def _dispatch(self, frame: Dict[str, Any]) -> None:
         kind = frame.get("type")
@@ -399,8 +487,9 @@ class ZaloAdapter(BasePlatformAdapter):
 
     async def _on_message(self, frame: Dict[str, Any]) -> None:
         text = (frame.get("text") or "").strip()
-        if not text:
-            return
+        media_urls = self._extract_media_urls(frame)
+        quote = frame.get("quote") if isinstance(frame.get("quote"), dict) else None
+        quote_media_urls = self._extract_media_urls(quote or {})
 
         msg_id = str(frame.get("id") or "")
         if msg_id and self._is_duplicate(msg_id):
@@ -412,12 +501,33 @@ class ZaloAdapter(BasePlatformAdapter):
             return
 
         is_group = frame.get("threadType") == THREAD_TYPE_GROUP
+        self._known_thread_types[thread_id] = (
+            THREAD_TYPE_GROUP if is_group else THREAD_TYPE_USER
+        )
         sender_uid = str(frame.get("senderUid") or "")
         sender_name = frame.get("senderName") or "Zalo user"
 
-        # Trong nhóm: chỉ trả lời khi được gọi đúng tên.
-        if is_group and self._reply_only_tagged and not self._is_mentioned(frame, text):
-            logger.debug("[zalo] group message not addressed to the bot — skipping")
+        if not text and not media_urls and not quote_media_urls:
+            return
+
+        recent_entry = {
+            "id": msg_id,
+            "sender_uid": sender_uid,
+            "sender_name": sender_name,
+            "text": text,
+            "media_urls": list(media_urls),
+            "quote_media_urls": list(quote_media_urls),
+            "msg_type": str(frame.get("msgType") or ""),
+            "ts": frame.get("ts"),
+        }
+        if is_group:
+            self._remember_group_message(thread_id, recent_entry)
+
+        mentioned = self._is_mentioned(frame, text)
+        # Trong nhóm: không trả lời khi chưa được gọi, nhưng vẫn giữ tin đó trong
+        # rolling memory ở trên để câu tag ngay sau có ảnh/ngữ cảnh gần nhất.
+        if is_group and self._reply_only_tagged and not mentioned:
+            logger.debug("[zalo] group message not addressed to the bot — saved as context only")
             return
 
         # Nhắn riêng: mặc định chỉ chủ nhân. Cửa vào nhóm mở cho tất cả, nhưng
@@ -427,6 +537,17 @@ class ZaloAdapter(BasePlatformAdapter):
             logger.info("[zalo] bỏ qua tin nhắn riêng từ %s (%s) — không phải chủ nhân",
                         sender_name, sender_uid)
             return
+
+        # Chốt danh tính trước mọi side effect của lượt này, kể cả thông báo
+        # chống flood và cử chỉ đã xem/thả cảm xúc. Task xử lý agent được tạo
+        # phía dưới sẽ kế thừa ContextVar này.
+        _zalo_tools().set_turn_context(
+            text=text,
+            sender_uid=sender_uid,
+            thread_id=thread_id,
+            is_group=is_group,
+            is_owner=self._is_owner(sender_uid),
+        )
 
         # Chặn nhắn dồn dập. Đặt sau cổng kiểm quyền (chỉ đếm tin thật sự
         # dành cho bot) nhưng TRƯỚC cả thả cảm xúc lẫn gọi mô hình — người
@@ -468,9 +589,21 @@ class ZaloAdapter(BasePlatformAdapter):
         except (ValueError, OSError, TypeError):
             timestamp = datetime.now(tz=timezone.utc)
 
+        context_entries = self._recent_context_for_question(thread_id, recent_entry) if is_group else []
+        inbound_urls = self._dedupe_urls([*media_urls, *quote_media_urls, *self._media_urls_from_entries(context_entries)])
+        cached_media, media_types = await self._cache_image_urls(inbound_urls)
+        channel_context = self._build_channel_context(context_entries, inbound_urls) if is_group else None
+        reply_to_text = None
+        if quote:
+            reply_to_text = str(quote.get("text") or "").strip() or None
+            if not reply_to_text and quote_media_urls:
+                reply_to_text = "[Tin được reply có ảnh]"
+
         # Kẹp hồ sơ người quen vào đầu tin. Nhờ đó bot xưng hô đúng và nhớ
         # bối cảnh của họ ngay từ câu đầu, không phải hỏi lại mỗi lần.
-        prompt_text = self._strip_mention(text)
+        prompt_text = self._strip_mention(text) if text else ""
+        if not prompt_text and cached_media:
+            prompt_text = "[Người dùng gửi ảnh]"
         try:
             from .people import describe_person
             known = describe_person(sender_uid)
@@ -481,18 +614,28 @@ class ZaloAdapter(BasePlatformAdapter):
 
         event = MessageEvent(
             text=prompt_text,
-            message_type=MessageType.TEXT,
+            message_type=MessageType.PHOTO if cached_media and not text else MessageType.TEXT,
             user_id=sender_uid,
             user_name=sender_name,
             source=source,
             message_id=msg_id or None,
             raw_message=frame.get("raw"),
             timestamp=timestamp,
+            media_urls=cached_media,
+            media_types=media_types,
+            reply_to_message_id=(str(quote.get("id") or "") or None) if quote else None,
+            reply_to_text=reply_to_text,
+            reply_to_author_id=(str(quote.get("authorId") or "") or None) if quote else None,
+            reply_to_author_name=(quote.get("authorName") or None) if quote else None,
+            reply_to_is_own_message=bool(quote and str(quote.get("authorId") or "") == str(self._self_profile.get("user_id") or "")),
+            channel_context=channel_context,
         )
 
         logger.info(
-            "[zalo] %s from %s (%s): %s",
-            "group" if is_group else "dm", sender_name, sender_uid, text[:80],
+            "[zalo] %s from %s (%s): %s%s",
+            "group" if is_group else "dm", sender_name, sender_uid,
+            text[:80] if text else "[media]",
+            f" +{len(cached_media)} ảnh" if cached_media else "",
         )
 
         # Cử chỉ lịch sự của Zalo: báo đã xem + thả cảm xúc hợp ngữ cảnh.
@@ -520,17 +663,6 @@ class ZaloAdapter(BasePlatformAdapter):
                 },
                 expect_ack=False,
             )
-
-        # Ghi lại ai đang hỏi và ở đâu, để các công cụ công khai biết đường
-        # khoá phạm vi. Đặt ngay trước handle_message: gateway spawn task con
-        # từ đây, và task con kế thừa context của cha.
-        _zalo_tools().set_turn_context(
-            text=text,
-            sender_uid=sender_uid,
-            thread_id=thread_id,
-            is_group=is_group,
-            is_owner=self._is_owner(sender_uid),
-        )
 
         await self.handle_message(event)
 
@@ -564,6 +696,114 @@ class ZaloAdapter(BasePlatformAdapter):
         if name:
             cleaned = re.sub(rf"@{re.escape(name)}", "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip() or text
+
+    @staticmethod
+    def _dedupe_urls(urls: List[str]) -> List[str]:
+        out: List[str] = []
+        seen = set()
+        for url in urls:
+            item = str(url or "").strip()
+            if re.match(r"^https?://", item, re.IGNORECASE) and item not in seen:
+                seen.add(item)
+                out.append(item)
+        return out
+
+    def _extract_media_urls(self, value: Any) -> List[str]:
+        """Extract image-like URLs from bridge frame/raw Zalo payloads."""
+        urls: List[str] = []
+        raw = value.get("raw") if isinstance(value, dict) else None
+        roots = [value]
+        if raw is not None:
+            roots.append(raw)
+        if isinstance(value, dict):
+            for field in ("mediaUrls", "media_urls"):
+                direct = value.get(field)
+                if isinstance(direct, list):
+                    urls.extend(str(item or "").strip() for item in direct)
+                elif direct:
+                    urls.append(str(direct).strip())
+
+        def push(candidate: Any) -> None:
+            item = str(candidate or "").strip()
+            if re.match(r"^https?://", item, re.IGNORECASE):
+                urls.append(item)
+
+        def walk(node: Any, key: str = "") -> None:
+            if node is None:
+                return
+            if isinstance(node, str):
+                if re.match(r"^(href|oriUrl|hdUrl|normalUrl|thumb|thumbUrl|previewThumb|rawUrl|url)$", key, re.IGNORECASE):
+                    push(node)
+                return
+            if isinstance(node, list):
+                for item in node:
+                    walk(item, key)
+                return
+            if not isinstance(node, dict):
+                return
+            for k, v in node.items():
+                if re.match(r"^(href|oriUrl|hdUrl|normalUrl|thumb|thumbUrl|previewThumb|rawUrl|url)$", str(k), re.IGNORECASE):
+                    push(v)
+                elif isinstance(v, (dict, list)):
+                    walk(v, str(k))
+
+        for root in roots:
+            walk(root)
+        return self._dedupe_urls(urls)
+
+    def _remember_group_message(self, thread_id: str, entry: Dict[str, Any]) -> None:
+        bucket = self._recent_group_messages.get(thread_id)
+        if bucket is None:
+            bucket = deque(maxlen=GROUP_CONTEXT_LIMIT)
+            self._recent_group_messages[thread_id] = bucket
+        bucket.append(entry)
+
+    def _recent_context_for_question(self, thread_id: str, current: Dict[str, Any]) -> List[Dict[str, Any]]:
+        bucket = list(self._recent_group_messages.get(thread_id) or [])
+        if current.get("media_urls") or current.get("quote_media_urls"):
+            return []
+        text = str(current.get("text") or "")
+        if not _IMAGE_CONTEXT_RE.search(text):
+            return []
+        # Bỏ chính tin đang hỏi, lấy tối đa 3 tin gần nhất phía trước — đủ cho ảnh
+        # + một câu caption, không làm phình prompt nhóm.
+        prior = [item for item in bucket if item.get("id") != current.get("id")]
+        return prior[-3:]
+
+    @staticmethod
+    def _media_urls_from_entries(entries: List[Dict[str, Any]]) -> List[str]:
+        urls: List[str] = []
+        for item in entries:
+            urls.extend(item.get("media_urls") or [])
+            urls.extend(item.get("quote_media_urls") or [])
+        return urls
+
+    async def _cache_image_urls(self, urls: List[str]) -> tuple[List[str], List[str]]:
+        cached: List[str] = []
+        media_types: List[str] = []
+        for url in urls[:4]:
+            try:
+                cached.append(await cache_image_from_url(url))
+                media_types.append("image/jpeg")
+            except Exception as exc:
+                logger.warning("[zalo] không cache được ảnh %s: %s", url[:80], exc)
+        return cached, media_types
+
+    def _build_channel_context(self, entries: List[Dict[str, Any]], urls: List[str]) -> Optional[str]:
+        if not entries and not urls:
+            return None
+        lines = ["[Ngữ cảnh gần nhất trong nhóm Zalo]"]
+        for item in entries:
+            who = item.get("sender_name") or "Zalo user"
+            msg = str(item.get("text") or "").strip()
+            media_count = len(item.get("media_urls") or []) + len(item.get("quote_media_urls") or [])
+            if msg:
+                lines.append(f"- {who}: {msg[:300]}")
+            elif media_count:
+                lines.append(f"- {who}: [đã gửi {media_count} ảnh]")
+        if urls:
+            lines.append(f"Ảnh liên quan đã được đính kèm cho Vision ({len(urls)} ảnh).")
+        return "\n".join(lines)
 
     def _log_permission_selfcheck(self) -> None:
         """Ghi một lần lúc khởi động: người trong nhóm thật sự cầm được gì.
@@ -718,6 +958,106 @@ class ZaloAdapter(BasePlatformAdapter):
             expect_ack=False,
         )
 
+    async def send_voice(
+        self,
+        chat_id: str,
+        audio_path: str,
+        caption: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> SendResult:
+        """Upload local audio to Zalo's CDN, then send it as a voice bubble."""
+        if not os.path.isfile(audio_path):
+            return SendResult(success=False, error="audio file was not found")
+
+        metadata = metadata or {}
+        thread_type = self._guess_thread_type(chat_id, metadata)
+        upload_path = audio_path
+        temporary_path: Optional[str] = None
+        if os.path.splitext(audio_path)[1].lower() != ".aac":
+            temporary_path = await asyncio.to_thread(_transcode_to_aac, audio_path)
+            if not temporary_path:
+                return SendResult(success=False, error="could not convert audio to AAC")
+            upload_path = temporary_path
+
+        try:
+            uploaded = await self.invoke(
+                "uploadAttachment", [[upload_path], str(chat_id), thread_type]
+            )
+            if not uploaded or not uploaded.get("ok"):
+                return SendResult(
+                    success=False,
+                    error=(uploaded or {}).get("error", "Zalo audio upload failed"),
+                )
+            items = uploaded.get("result") or []
+            voice_url = items[0].get("fileUrl") if items and isinstance(items[0], dict) else None
+            if not voice_url:
+                return SendResult(success=False, error="Zalo audio upload returned no file URL")
+
+            sent = await self.invoke(
+                "sendVoice",
+                [{"voiceUrl": voice_url, "ttl": 0}, str(chat_id), thread_type],
+            )
+            if not sent or not sent.get("ok"):
+                return SendResult(
+                    success=False,
+                    error=(sent or {}).get("error", "Zalo voice send failed"),
+                )
+            payload = sent.get("result") or {}
+            message = payload.get("message") if isinstance(payload, dict) else {}
+            message_id = (
+                (payload.get("msgId") or payload.get("msgID"))
+                if isinstance(payload, dict)
+                else None
+            ) or (message or {}).get("msgId") or (message or {}).get("msgID")
+            return SendResult(success=True, message_id=message_id, raw_response=sent)
+        finally:
+            if temporary_path:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
+
+    async def read_history(
+        self,
+        chat_id: str,
+        count: int = 30,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        metadata = metadata or {}
+        return await self._command(
+            {
+                "type": "history",
+                "threadId": str(chat_id),
+                "threadType": self._guess_thread_type(chat_id, metadata),
+                "count": min(max(int(count), 1), 100),
+            },
+            expect_ack=True,
+        )
+
+    async def undo_message(
+        self,
+        chat_id: str,
+        msg_id: Optional[str] = None,
+        cli_msg_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        *,
+        confirmed: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        metadata = metadata or {}
+        return await self._command(
+            {
+                "type": "undo",
+                "threadId": str(chat_id),
+                "threadType": self._guess_thread_type(chat_id, metadata),
+                "msgId": str(msg_id) if msg_id else None,
+                "cliMsgId": str(cli_msg_id) if cli_msg_id else None,
+                "_confirmed": confirmed,
+            },
+            expect_ack=True,
+        )
+
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         return {
             "id": str(chat_id),
@@ -733,6 +1073,9 @@ class ZaloAdapter(BasePlatformAdapter):
             return THREAD_TYPE_GROUP
         if chat_type == "dm":
             return THREAD_TYPE_USER
+        known_type = self._known_thread_types.get(str(chat_id))
+        if known_type is not None:
+            return known_type
         return THREAD_TYPE_GROUP if self._looks_like_group(chat_id) else THREAD_TYPE_USER
 
     def _looks_like_group(self, chat_id: str) -> bool:
@@ -788,6 +1131,11 @@ class ZaloAdapter(BasePlatformAdapter):
             logger.warning("[zalo] no sidecar link — dropping %s", payload.get("type"))
             return None
 
+        payload = dict(payload)
+        confirmed = bool(payload.pop("_confirmed", False))
+        if payload.get("type") != "ping" and "auth" not in payload:
+            payload["auth"] = _zalo_tools().current_authorization(confirmed=confirmed)
+
         fut: Optional[asyncio.Future] = None
         if expect_ack:
             req_id = uuid.uuid4().hex[:12]
@@ -807,7 +1155,9 @@ class ZaloAdapter(BasePlatformAdapter):
             return None
 
         timeout = ACK_TIMEOUT_SECONDS
-        if payload.get("type") == "invoke" and payload.get("method") in SLOW_METHODS:
+        if payload.get("type") == "send":
+            timeout = SLOW_ACK_TIMEOUT_SECONDS
+        elif payload.get("type") == "invoke" and payload.get("method") in SLOW_METHODS:
             timeout = SLOW_ACK_TIMEOUT_SECONDS
 
         try:
@@ -826,6 +1176,7 @@ def _env_enablement() -> Optional[dict]:
 
     extra: Dict[str, Any] = {
         "bridge_url": _get_scoped_secret("ZALO_BRIDGE_URL", DEFAULT_BRIDGE_URL),
+        "bridge_token": _get_scoped_secret("ZALO_BRIDGE_TOKEN", ""),
         "reply_only_tagged": _truthy(_get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "true"), True),
     }
 

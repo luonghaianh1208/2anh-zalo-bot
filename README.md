@@ -48,7 +48,7 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 
 Trước đây *có* một bộ não Node dự phòng gọi thẳng LLM. Đã bỏ, vì hai lý do. Nó không bao giờ chạy nên âm thầm mục ruỗng — mấy lỗi nặng nhất của dự án (định tuyến nhóm sai, kiểm chủ nhân sai) đều nằm trong đoạn đó và sống sót nhiều tháng vì không ai đi qua. Nguy hiểm hơn: khi nó *có* chạy thì lại chạy bằng bộ luật khác — Hermes phân quyền theo toolset, còn bộ não Node đọc một tệp JSON và không có tầng phân quyền nào. Hermes rớt là hệ thống lặng lẽ hạ cấp sang bộ luật lỏng hơn, đúng lúc không ai để ý.
 
-**40 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
+**45 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
 
 | Nhóm | Công cụ |
 |---|---|
@@ -65,12 +65,12 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 
 ### Hai mức quyền
 
-40 công cụ chia làm hai nhóm, quyết định bằng `ZALO_ALLOWED_USERS`:
+45 công cụ chia làm hai nhóm, quyết định bằng `ZALO_ALLOWED_USERS`:
 
 | | Chủ nhân | Người khác trong nhóm |
 |---|---|---|
 | Toolset | `hermes-zalo` + `zalo_owner` + `zalo_public` | chỉ `zalo_public` |
-| Số công cụ Zalo | 40 | 14 |
+| Số công cụ Zalo | 45 | 14 |
 | `terminal`, `read_file`, `write_file` | ✅ | ❌ |
 | `browser_*`, `web_search` | ✅ | ❌ |
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
@@ -79,6 +79,8 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 **14 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xoá lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · nhớ người quen · tra sổ người quen · **tìm kiếm web · đọc trang web**.
 
 Việc phân nhóm toolset chỉ *giấu* công cụ khỏi danh sách. Rào chắn thật nằm ở tầng thực thi: mỗi công cụ thuộc nhóm chủ nhân được bọc một lớp kiểm tra danh tính người gửi, nên dù công cụ có lọt vào danh sách vì cấu hình sai thì người ngoài gọi vẫn bị từ chối.
+
+Các thao tác nguy hiểm như thu hồi tin, đổi tên nhóm, sửa thành viên hoặc quyền phó nhóm còn cần xác nhận hai lượt. Agent trả một mã sáu ký tự; chủ nhân phải gửi một tin nhắn mới đúng nguyên câu `XÁC NHẬN <MÃ>` trong vòng 5 phút. Mã được khóa theo UID chủ nhân, cuộc trò chuyện, công cụ và đúng bộ tham số nên không thể dùng lại cho người, nhóm hay thao tác khác.
 
 ### Tra cứu Internet
 
@@ -158,23 +160,31 @@ Cả hai đều chỉnh được qua `.env` (xem `.env.example`).
 
 ## Yêu cầu
 
-* **Node.js 20+**
+* **Node.js 22+**
 * **Một tài khoản Zalo phụ** — xem phần Rủi ro bên dưới
-* *(tuỳ chọn)* **Hermes Agent** — không có thì bot chạy chế độ chatbot độc lập
+* **Hermes Agent đã cài đặt** — sidecar không có bộ não dự phòng độc lập
 
 ---
 
 ## Cài đặt
 
+Nếu giao việc cho một coding agent, chỉ cần gửi yêu cầu: **“Clone repo này và cài vào Hermes Agent theo `AGENTS.md`; chạy `doctor` và báo lại kết quả.”** Agent không cần biết trước cấu trúc nội bộ của plugin.
+
 ```bash
 git clone https://github.com/luonghaianh1208/2anh-zalo-bot.git
 cd 2anh-zalo-bot
-npm install
-npm run setup
-npm start
+npm ci
+npm run install:hermes -- --hermes-home <đường-dẫn-Hermes>
+npm run doctor -- --hermes-home <đường-dẫn-Hermes>
 ```
 
-`npm run setup` sẽ: tạo `data/` với cấu hình mẫu, tạo `.env`, tìm thư mục Hermes, chép plugin vào đó và cài gói `websockets`. Chạy lại nhiều lần được — không đè lên thứ bạn đã sửa.
+Nếu Hermes nằm ở vị trí chuẩn hoặc biến `HERMES_HOME` đã có, có thể bỏ tham số `--hermes-home`. Bộ cài sẽ tạo `.env` nếu thiếu, sinh khóa bí mật cho bridge, cài đủ `zalo-platform` và `zalo-tools`, cập nhật các khóa Zalo còn thiếu trong `config.yaml`, cài `websockets` vào Python của Hermes rồi tự chạy kiểm tra. Chạy lại cùng lệnh để nâng cấp; cấu hình, phiên Zalo và SQLite được giữ nguyên.
+
+Sau khi `doctor` đạt, chạy sidecar:
+
+```bash
+npm start
+```
 
 ### Kết nối Zalo
 
@@ -183,7 +193,9 @@ npm start
 3. Từ Zalo cá nhân của bạn, nhắn `/sethome` cho tài khoản vừa quét
    → bot ghi nhận bạn là chủ và in ra UID
 
-### Nối vào Hermes
+### Nối vào Hermes thủ công
+
+Phần này chỉ dùng khi không thể chạy bộ cài tự động ở trên.
 
 **Bước 1 — chép plugin vào Hermes.** Thư mục `hermes-plugin/` chứa hai plugin, chép vào đúng chỗ trong mã nguồn Hermes:
 
@@ -197,7 +209,7 @@ Vì sao lại hai thư mục thay vì một: Hermes nạp mọi plugin `kind: pl
 **Bước 2 — bật cả hai plugin:**
 
 ```bash
-hermes plugins enable zalo-platform
+hermes plugins enable platforms/zalo
 hermes plugins enable zalo-tools
 ```
 
@@ -235,6 +247,7 @@ Bước này bắt buộc, không phải tuỳ chọn. Hermes mặc định **b�
 
 ```env
 ZALO_BRIDGE_URL=ws://127.0.0.1:3873
+ZALO_BRIDGE_TOKEN=<cùng giá trị do bộ cài sinh trong .env của sidecar>
 ZALO_ALLOWED_USERS=<UID Zalo của bạn>
 ZALO_HOME_CHANNEL=<UID Zalo của bạn>
 ZALO_GROUP_REPLY_ONLY_TAGGED=true
