@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws';
 import { ThreadType, Reactions } from 'zca-js';
 import { fileURLToPath } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
 import { formatAndChunkZaloMarkdown } from './markdown-formatter.js';
 import { pickSmartReaction } from './smart-reaction.js';
 import { RateLimiter, RateLimitedError, THROTTLED_METHODS } from './rate-limiter.js';
@@ -302,7 +303,9 @@ export function isHermesAttached() {
 export function startHermesBridge({
   api, profile, port = DEFAULT_PORT, store = null, maxBackfillPages: pageLimit = null,
   ownerUids = null, health = null, staleCheckIntervalMs = 15_000,
+  bridgeToken = process.env.ZALO_BRIDGE_TOKEN,
 }) {
+  if (!bridgeToken) throw new Error('Thiếu ZALO_BRIDGE_TOKEN; hãy chạy npm run install:hermes');
   zaloApi = api;
   selfProfile = profile || null;
   activeAccountId = String(profile?.user_id ?? profile?.userId ?? 'unknown');
@@ -333,7 +336,20 @@ export function startHermesBridge({
   historyListener?.on?.('closed', historyListenerDisconnectedCallback);
   if (historyListener?.ws?.readyState === 1) historyListenerReady = true;
 
-  wss = new WebSocketServer({ host: '127.0.0.1', port });
+  wss = new WebSocketServer({
+    host: '127.0.0.1',
+    port,
+    verifyClient(info, done) {
+      if (info.origin || info.req.headers.origin) return done(false, 403, 'Browser origin is not allowed');
+      const supplied = new URL(info.req.url || '/', 'ws://127.0.0.1').searchParams.get('token') || '';
+      const expected = String(bridgeToken);
+      const suppliedBytes = Buffer.from(supplied);
+      const expectedBytes = Buffer.from(expected);
+      const valid = suppliedBytes.length === expectedBytes.length
+        && timingSafeEqual(suppliedBytes, expectedBytes);
+      return done(valid, valid ? 101 : 401, valid ? undefined : 'Unauthorized');
+    },
+  });
 
   wss.on('connection', (ws, req) => {
     clients.add(ws);
@@ -353,9 +369,12 @@ export function startHermesBridge({
       }
       if (cmd?.type === 'ping') activeHealth?.bridgeHeartbeat(clientId);
       handleCommand(ws, cmd).catch((err) => {
-        activeHealth?.recordError('bridge_command_failed', err?.message || err);
-        console.error('[bridge] lỗi khi chạy lệnh:', err?.message || err);
-        if (cmd?.reqId) send(ws, { type: 'ack', reqId: cmd.reqId, ok: false, error: String(err?.message || err) });
+        activeHealth?.recordError('bridge_command_failed', 'operation_failed');
+        console.error('[bridge] lỗi khi chạy lệnh:', err?.name || 'operation_failed');
+        if (cmd?.reqId) send(ws, {
+          type: 'ack', reqId: cmd.reqId, ok: false,
+          errorCode: 'operation_failed', error: 'Thao tác Zalo thất bại; xem health/audit để tra mã lỗi',
+        });
       });
     });
 
@@ -581,8 +600,8 @@ export async function sendSystemNotice({ api, threadId, threadType, text }) {
     activeHealth?.markOutbound();
     return result;
   } catch (error) {
-    activeStore.finishAudit(requestId, 'failed', { error: String(error?.message || error) });
-    activeHealth?.recordError('system_notice_failed', error?.message || error);
+    activeStore.finishAudit(requestId, 'failed', { error: 'operation_failed' });
+    activeHealth?.recordError('system_notice_failed', 'operation_failed');
     throw error;
   }
 }
@@ -600,11 +619,23 @@ function policyErrorMessage(code) {
 
 function auditTargetSummary(cmd) {
   const args = Array.isArray(cmd.args) ? cmd.args : [];
+  const targetIndexes = {
+    sendMessage: 1, sendVoice: 1, sendSticker: 1, sendLink: 1,
+    uploadAttachment: 1, createReminder: 1, removeReminder: 1,
+    getGroupMembersInfo: 0, changeGroupName: 1, addUserToGroup: 1,
+    removeUserFromGroup: 1, addGroupDeputy: 1, removeGroupDeputy: 1,
+  };
+  const invokeIndex = targetIndexes[String(cmd.method || '')];
+  const invokeThreadId = invokeIndex == null ? undefined : args[invokeIndex];
   const summary = {
     commandType: String(cmd.type || ''),
     method: cmd.type === 'invoke' ? String(cmd.method || '') : undefined,
-    threadId: cmd.threadId == null ? undefined : String(cmd.threadId),
-    threadType: cmd.threadType == null ? undefined : Number(cmd.threadType),
+    threadId: cmd.threadId == null
+      ? (invokeThreadId == null ? undefined : String(invokeThreadId))
+      : String(cmd.threadId),
+    threadType: cmd.threadType == null
+      ? (invokeThreadId == null ? undefined : 1)
+      : Number(cmd.threadType),
   };
   if (Array.isArray(args[0])) summary.itemCount = args[0].length;
   return Object.fromEntries(Object.entries(summary).filter(([, value]) => value !== undefined));
@@ -857,6 +888,9 @@ async function handleCommand(ws, cmd) {
       }
       const args = Array.isArray(cmd.args) ? cmd.args : [];
       const result = await zaloApi[method](...args);
+      if (['sendMessage', 'sendVoice', 'sendSticker', 'sendLink'].includes(method)) {
+        rememberOutboundResult(result, args[1], args[2], '', method);
+      }
       if (cmd.reqId) send(ws, { type: 'ack', reqId: cmd.reqId, ok: true, result: safeResult(result) });
       break;
     }
@@ -867,7 +901,7 @@ async function handleCommand(ws, cmd) {
   finishAudit('succeeded');
   if (shouldAudit) activeHealth?.markOutbound();
   } catch (error) {
-    finishAudit('failed', String(error?.message || error));
+    finishAudit('failed', 'operation_failed');
     throw error;
   }
 }

@@ -250,7 +250,7 @@
       el.ph.hidden = false;
       clearQr();
       try {
-        const r = await (await fetch('/api/qr/start', { method: 'POST' })).json();
+        const r = await (await fetch('/api/qr/start', { method: 'POST', headers: { 'X-Zalo-Dashboard': '1' } })).json();
         if (!r.ok) { setStatus(r.error || 'Không tạo được mã', 'err'); el.refresh.hidden = false; }
       } catch {
         setStatus('Không liên lạc được với máy chủ', 'err');
@@ -260,7 +260,7 @@
 
     async function doLogout() {
       if (!confirm('Đăng xuất khỏi Zalo? Lần sau phải quét mã lại.')) return;
-      await fetch('/api/logout', { method: 'POST' });
+      await fetch('/api/logout', { method: 'POST', headers: { 'X-Zalo-Dashboard': '1' } });
       location.reload();
     }
 

@@ -241,6 +241,16 @@ async def zalo_send_voice(args: Dict[str, Any], **_kw) -> str:
     if err:
         return err
     if os.path.isfile(url):
+        turn = _turn()
+        if not turn.get("is_owner"):
+            root = _kb_root()
+            target = _kb_resolve(root, url) if root is not None else None
+            if target is None or not target.is_file():
+                return _err("chỉ gửi được voice cục bộ nằm trong kho tài liệu")
+            rel = target.relative_to(root).as_posix()
+            if not _kb_allowed(rel):
+                return _err(f"tệp '{rel}' nằm ngoài phạm vi được phép chia sẻ")
+            url = str(target)
         adapter = _ACTIVE_ADAPTER
         if adapter is None:
             return _err("Zalo chưa kết nối")
@@ -1938,7 +1948,7 @@ def _owner_only(handler, tool_name: str):
     """
     async def guarded(args: Dict[str, Any], **kw) -> str:
         turn = _turn()
-        if turn and not turn.get("is_owner"):
+        if not turn.get("is_owner"):
             logger.info("[zalo] chặn %s — %s không phải chủ nhân",
                         tool_name, turn.get("sender_uid"))
             return _err("công cụ này chỉ chủ nhân dùng được")

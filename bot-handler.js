@@ -43,19 +43,21 @@ const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
 export function setupBotListener(api, profile = null) {
   if (!api?.listener) {
     console.warn('[bot] ❌ api.listener không tồn tại — bot sẽ không nhận được tin nhắn');
-    return;
+    return () => {};
   }
   selfUid = String(profile?.user_id ?? profile?.userId ?? '');
 
-  api.listener.on('message', (msg) => {
+  const onMessage = (msg) => {
     handleIncomingMessage(api, msg).catch((err) => {
       console.error('[bot] lỗi khi xử lý tin nhắn:', err?.message || err);
     });
-  });
+  };
 
-  api.listener.on('error', (err) => {
+  const onError = (err) => {
     console.error('[bot] listener error:', err?.message || err);
-  });
+  };
+  api.listener.on('message', onMessage);
+  api.listener.on('error', onError);
 
   try {
     api.listener.start();
@@ -63,6 +65,17 @@ export function setupBotListener(api, profile = null) {
   } catch (err) {
     console.error('[bot] không start được listener:', err.message);
   }
+
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    api.listener.off?.('message', onMessage);
+    api.listener.off?.('error', onError);
+    try { api.listener.stop?.(); } catch (err) {
+      console.warn('[bot] không stop được listener:', err?.message || err);
+    }
+  };
 }
 
 /** Tin này có gọi đích danh bot không (tag trong nhóm, hoặc chủ nhân nhắn riêng). */

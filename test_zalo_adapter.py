@@ -13,6 +13,13 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from gateway.config import PlatformConfig
+import plugins
+import plugins.platforms
+
+# Chạy test trực tiếp từ repo 2anh-zalo-bot nhưng dùng lõi Hermes đã cài trên máy.
+# Ưu tiên hai plugin trong repo này, không vô tình test bản đã cài ở Hermes.
+plugins.__path__ = [os.path.join(ROOT, "hermes-plugin"), *list(plugins.__path__)]
+plugins.platforms.__path__ = [os.path.join(ROOT, "hermes-plugin"), *list(plugins.platforms.__path__)]
 from plugins.platforms.zalo import adapter as zalo_adapter
 from plugins.zalo_tools import tools as zalo_tools
 
@@ -45,6 +52,16 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         adapter._self_profile = {"user_id": "bot-uid", "display_name": "Lăng Tiêu"}
         adapter._flood.check = lambda _uid: None
         return adapter
+
+    def test_bridge_url_contains_shared_token_without_changing_existing_query(self):
+        self.assertEqual(
+            zalo_adapter._authenticated_bridge_url(
+                "ws://127.0.0.1:3873/path?existing=1", "bridge secret"
+            ),
+            "ws://127.0.0.1:3873/path?existing=1&token=bridge+secret",
+        )
+        with self.assertRaisesRegex(ValueError, "ZALO_BRIDGE_TOKEN"):
+            zalo_adapter._authenticated_bridge_url("ws://127.0.0.1:3873", "")
 
     async def test_unmentioned_group_image_is_saved_as_context_only(self):
         adapter = self.make_adapter()
@@ -460,6 +477,47 @@ class ZaloToolSchemaTest(unittest.TestCase):
 
 
 class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_owner_tool_fails_closed_without_turn_context(self):
+        raw_handler = next(
+            handler for name, _emoji, _schema, handler, _toolset in zalo_tools.TOOLS
+            if name == "zalo_list_people"
+        )
+        handler = zalo_tools._owner_only(raw_handler, "zalo_list_people")
+        token = zalo_tools._TURN.set({})
+        try:
+            response = await handler({})
+        finally:
+            zalo_tools._TURN.reset(token)
+        self.assertFalse(json.loads(response)["success"])
+        self.assertIn("chủ nhân", json.loads(response)["error"])
+
+    async def test_public_voice_cannot_read_local_file_outside_knowledge_base(self):
+        class FakeAdapter:
+            async def send_voice(self, *_args, **_kwargs):
+                raise AssertionError("unsafe local file reached adapter")
+
+        with tempfile.TemporaryDirectory() as knowledge_base, \
+                tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as audio:
+            audio.write(b"mp3")
+            audio_path = audio.name
+        previous = zalo_tools._ACTIVE_ADAPTER
+        zalo_tools._ACTIVE_ADAPTER = FakeAdapter()
+        turn_token = zalo_tools._TURN.set({
+            "sender_uid": "public-user", "thread_id": "group-1",
+            "is_group": True, "is_owner": False, "text": "gửi voice",
+        })
+        try:
+            with patch.dict(os.environ, {"ZALO_KB_DIR": knowledge_base}):
+                response = await zalo_tools.zalo_send_voice({
+                    "thread_id": "group-1", "thread_kind": "group", "url": audio_path,
+                })
+        finally:
+            zalo_tools._TURN.reset(turn_token)
+            zalo_tools._ACTIVE_ADAPTER = previous
+            os.unlink(audio_path)
+        self.assertFalse(json.loads(response)["success"])
+        self.assertIn("kho tài liệu", json.loads(response)["error"])
+
     def setUp(self):
         self.previous_adapter = zalo_tools._ACTIVE_ADAPTER
         self.turn_token = zalo_tools._TURN.set({

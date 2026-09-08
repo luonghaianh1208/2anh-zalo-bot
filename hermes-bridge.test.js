@@ -4,13 +4,22 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WebSocket } from 'ws';
+import { WebSocket as RawWebSocket } from 'ws';
 import { openZaloStore } from './zalo-store.js';
 import { createRuntimeHealth } from './runtime-health.js';
 
 process.env.ZALO_RATE_BURST = '1';
 process.env.ZALO_RATE_INTERVAL_MS = '60000';
 process.env.ZALO_RATE_MAX_WAIT_MS = '1';
+process.env.ZALO_BRIDGE_TOKEN = 'test-bridge-token';
+
+class WebSocket extends RawWebSocket {
+  constructor(url, options) {
+    const authenticated = new URL(url);
+    authenticated.searchParams.set('token', process.env.ZALO_BRIDGE_TOKEN);
+    super(authenticated.toString(), options);
+  }
+}
 
 const { extractMediaUrls, sendSystemNotice, startAutomaticBackfill, startHermesBridge, stopHermesBridge } = await import('./hermes-bridge.js');
 
@@ -40,6 +49,33 @@ function onceMessage(ws, predicate = () => true) {
     });
   });
 }
+
+test('bridge rejects a client without the shared token', async (t) => {
+  const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store: testStore(t) });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new RawWebSocket(`ws://127.0.0.1:${server.address().port}`);
+  t.after(() => { stopHermesBridge(); ws.close(); });
+  const status = await new Promise((resolve, reject) => {
+    ws.once('unexpected-response', (_request, response) => resolve(response.statusCode));
+    ws.once('open', () => reject(new Error('bridge accepted an unauthenticated client')));
+    ws.once('error', () => {});
+  });
+  assert.equal(status, 401);
+});
+
+test('bridge rejects browser-origin websocket clients even with the token', async (t) => {
+  const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store: testStore(t) });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const url = `ws://127.0.0.1:${server.address().port}?token=${process.env.ZALO_BRIDGE_TOKEN}`;
+  const ws = new RawWebSocket(url, { headers: { Origin: 'https://evil.example' } });
+  t.after(() => { stopHermesBridge(); ws.close(); });
+  const status = await new Promise((resolve, reject) => {
+    ws.once('unexpected-response', (_request, response) => resolve(response.statusCode));
+    ws.once('open', () => reject(new Error('bridge accepted a browser-origin client')));
+    ws.once('error', () => {});
+  });
+  assert.equal(status, 403);
+});
 
 test('extractMediaUrls rút ảnh từ content, raw và quote', () => {
   const urls = extractMediaUrls({
@@ -550,11 +586,40 @@ test('bridge rejects an unauthorized admin command before calling Zalo and audit
   }
 });
 
+test('rich-media invoke persists its outbound IDs for later undo', async (t) => {
+  const store = testStore(t);
+  const api = {
+    sendVoice: () => Promise.resolve({ message: { msgId: 'voice-m', cliMsgId: 'voice-c' } }),
+  };
+  const server = startHermesBridge({ api, profile: { user_id: 'bot' }, port: 0, store, ownerUids: ['owner'] });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await hello;
+    ws.send(JSON.stringify({
+      type: 'invoke', reqId: 'voice-send', method: 'sendVoice',
+      args: [{ voiceUrl: 'https://example.test/a.aac' }, 'group-1', 1],
+      auth: auth('group-1', 1),
+    }));
+    assert.equal((await onceMessage(ws, (msg) => msg.reqId === 'voice-send')).ok, true);
+    const saved = store.findOwnMessage('bot', 'group-1', 1, { msgId: 'voice-m', cliMsgId: 'voice-c' });
+    assert.equal(saved.msgId, 'voice-m');
+    assert.equal(saved.cliMsgId, 'voice-c');
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 test('bridge audits successful and failed owner administration without payload secrets', async (t) => {
+  const errorLog = [];
+  t.mock.method(console, 'error', (...args) => errorLog.push(args.join(' ')));
   const store = testStore(t);
   const api = {
     changeGroupName: () => Promise.resolve({ ok: true }),
-    removeUserFromGroup: () => Promise.reject(new Error('Zalo unavailable')),
+    removeUserFromGroup: () => Promise.reject(new Error('C:\\private\\session.json access_token=secret-value')),
   };
   const server = startHermesBridge({ api, profile: { user_id: 'bot' }, port: 0, store, ownerUids: ['owner'] });
   await new Promise((resolve) => server.once('listening', resolve));
@@ -581,6 +646,11 @@ test('bridge audits successful and failed owner administration without payload s
     const serialized = JSON.stringify([...store.getAuditTrail('admin-ok'), ...store.getAuditTrail('admin-fail')]);
     assert.equal(serialized.includes('Tên bí mật'), false);
     assert.equal(serialized.includes('victim'), false);
+    assert.equal(serialized.includes('secret-value'), false);
+    assert.equal(serialized.includes('session.json'), false);
+    assert.equal(store.getAuditTrail('admin-fail')[1].error, 'operation_failed');
+    assert.equal(store.getAuditTrail('admin-ok')[0].targetSummary.threadId, 'group-1');
+    assert.equal(errorLog.join('\n').includes('secret-value'), false);
   } finally {
     ws.close();
     stopHermesBridge();

@@ -62,6 +62,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 try:
     import websockets
@@ -232,6 +233,17 @@ def _truthy(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _authenticated_bridge_url(url: str, token: str) -> str:
+    """Attach the shared bridge token without logging or altering other query keys."""
+    if not str(token or "").strip():
+        raise ValueError("Thiếu ZALO_BRIDGE_TOKEN trong cấu hình Zalo")
+    parts = urlsplit(str(url))
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    query = [(key, value) for key, value in query if key != "token"]
+    query.append(("token", str(token)))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 def check_requirements() -> bool:
     """The adapter needs the ``websockets`` package; the sidecar is checked later."""
     return WEBSOCKETS_AVAILABLE
@@ -260,6 +272,10 @@ class ZaloAdapter(BasePlatformAdapter):
             extra.get("bridge_url")
             or _get_scoped_secret("ZALO_BRIDGE_URL", DEFAULT_BRIDGE_URL)
         )
+        self._bridge_token: str = str(
+            extra.get("bridge_token")
+            or _get_scoped_secret("ZALO_BRIDGE_TOKEN", "")
+        ).strip()
         self._reply_only_tagged: bool = _truthy(
             extra.get("reply_only_tagged",
                       _get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "true")),
@@ -325,8 +341,9 @@ class ZaloAdapter(BasePlatformAdapter):
 
         self._closing = False
         try:
+            authenticated_url = _authenticated_bridge_url(self._bridge_url, self._bridge_token)
             self._ws = await asyncio.wait_for(
-                websockets.connect(self._bridge_url, ping_interval=20, ping_timeout=20),
+                websockets.connect(authenticated_url, ping_interval=20, ping_timeout=20),
                 timeout=10,
             )
         except Exception as exc:
@@ -425,7 +442,10 @@ class ZaloAdapter(BasePlatformAdapter):
                 await asyncio.sleep(delay)
                 try:
                     self._ws = await asyncio.wait_for(
-                        websockets.connect(self._bridge_url, ping_interval=20, ping_timeout=20),
+                        websockets.connect(
+                            _authenticated_bridge_url(self._bridge_url, self._bridge_token),
+                            ping_interval=20, ping_timeout=20,
+                        ),
                         timeout=10,
                     )
                     logger.info("[zalo] reconnected to sidecar")
@@ -1156,6 +1176,7 @@ def _env_enablement() -> Optional[dict]:
 
     extra: Dict[str, Any] = {
         "bridge_url": _get_scoped_secret("ZALO_BRIDGE_URL", DEFAULT_BRIDGE_URL),
+        "bridge_token": _get_scoped_secret("ZALO_BRIDGE_TOKEN", ""),
         "reply_only_tagged": _truthy(_get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "true"), True),
     }
 

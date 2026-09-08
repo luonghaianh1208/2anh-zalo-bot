@@ -15,7 +15,7 @@ import { importLegacyHermesHistory } from './legacy-history-import.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 try {
-  loadEnvFile(join(__dirname, '..', '.env'));
+  loadEnvFile(join(__dirname, '.env'));
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error;
 }
@@ -33,10 +33,21 @@ const retentionTimer = setInterval(() => {
 retentionTimer.unref?.();
 const app = express();
 const server = createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({
+  server,
+  verifyClient(info, done) {
+    if (!info.origin) return done(true);
+    const expected = `http://${info.req.headers.host}`;
+    return done(info.origin === expected, info.origin === expected ? 101 : 403, 'Origin not allowed');
+  },
+});
 
 app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
+app.use('/api', (req, res, next) => {
+  if (req.method !== 'POST' || req.get('X-Zalo-Dashboard') === '1') return next();
+  return res.status(403).json({ ok: false, error: 'Yêu cầu dashboard không hợp lệ' });
+});
 
 // --- State ---
 let zalo = null;
@@ -45,22 +56,28 @@ let loginInfo = null;
 let qrBase64 = null;
 let status = 'idle'; // 'idle' | 'qr-pending' | 'scanned' | 'logged-in'
 let sessionFromDisk = false;
+let stopBotListener = () => {};
 
 function activateZaloRuntime() {
-  try {
-    const migration = importLegacyHermesHistory({
-      sourcePath: join(__dirname, '..', 'state.db'),
-      store: zaloStore,
-      accountId: String(loginInfo?.user_id || loginInfo?.userId || ''),
-      retentionDays: Number(process.env.ZALO_HISTORY_RETENTION_DAYS) || 365,
-    });
-    console.log(`[history] legacy import: ${migration.inserted} mới, ${migration.skipped} đã có`);
-  } catch (error) {
-    runtimeHealth.recordError('legacy_history_import_failed', error?.message || error);
-    console.error('[history] legacy import failed:', error?.message || error);
+  const legacyStatePath = process.env.HERMES_LEGACY_STATE_DB
+    || (process.env.HERMES_HOME ? join(process.env.HERMES_HOME, 'state.db') : null);
+  if (legacyStatePath && existsSync(legacyStatePath)) {
+    try {
+      const migration = importLegacyHermesHistory({
+        sourcePath: legacyStatePath,
+        store: zaloStore,
+        accountId: String(loginInfo?.user_id || loginInfo?.userId || ''),
+        retentionDays: Number(process.env.ZALO_HISTORY_RETENTION_DAYS) || 365,
+      });
+      console.log(`[history] legacy import: ${migration.inserted} mới, ${migration.skipped} đã có`);
+    } catch (error) {
+      runtimeHealth.recordError('legacy_history_import_failed', error?.message || error);
+      console.error('[history] legacy import failed:', error?.message || error);
+    }
   }
   startHermesBridge({ api, profile: loginInfo, store: zaloStore, health: runtimeHealth });
-  setupBotListener(api, loginInfo);
+  stopBotListener();
+  stopBotListener = setupBotListener(api, loginInfo);
   startAutomaticBackfill().catch((error) => {
     runtimeHealth.recordError('automatic_backfill_failed', error?.message || error);
     console.error('[history] automatic backfill failed:', error?.message || error);
@@ -196,7 +213,7 @@ app.get('/api/status', (req, res) => {
     status,
     user: loginInfo || null,
     hermesAttached: isHermesAttached(),
-    mode: isHermesAttached() ? 'hermes-agent' : 'chatbot-noi-bo',
+    mode: isHermesAttached() ? 'hermes-agent' : 'waiting-for-hermes',
   });
 });
 
@@ -212,6 +229,8 @@ app.get('/api/health', (req, res) => {
 
 // --- Logout ---
 app.post('/api/logout', async (req, res) => {
+  stopBotListener();
+  stopBotListener = () => {};
   stopHermesBridge();
   api = null;
   loginInfo = null;
@@ -245,6 +264,7 @@ function removePidFile() {
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(sig, () => {
+    stopBotListener();
     removePidFile();
     clearInterval(retentionTimer);
     try { zaloStore.close(); } catch { /* đang thoát */ }
@@ -252,6 +272,17 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   });
 }
 process.on('exit', removePidFile);
+
+server.on('error', (error) => {
+  runtimeHealth.recordError('dashboard_server_error', error?.code || 'listen_failed');
+  console.error(`[boot] không mở được dashboard 127.0.0.1:${PORT}: ${error?.code || 'listen_failed'}`);
+  stopBotListener();
+  stopHermesBridge();
+  removePidFile();
+  clearInterval(retentionTimer);
+  try { zaloStore.close(); } catch { /* đang dừng sau lỗi khởi động */ }
+  process.exitCode = 1;
+});
 
 server.listen(PORT, '127.0.0.1', () => {
   writePidFile();
