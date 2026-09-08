@@ -13,7 +13,7 @@
     }
     .card {
       background: #161b22; border: 1px solid #30363d; border-radius: 16px;
-      padding: 36px 32px; width: 420px; text-align: center;
+      padding: 36px 32px; width: min(760px, 100%); text-align: center;
     }
     h1 { font-size: 21px; font-weight: 600; margin-bottom: 6px; }
     .sub { font-size: 13px; color: #8b949e; margin-bottom: 24px; line-height: 1.5; }
@@ -62,6 +62,20 @@
       background: #0d1117; padding: 1px 6px; border-radius: 4px;
       color: #79c0ff; font-size: 12px;
     }
+    .health-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 10px; margin-top: 16px; text-align: left;
+    }
+    .metric {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 10px;
+      padding: 12px 14px; min-height: 82px;
+    }
+    .metric .label { color: #8b949e; font-size: 12px; margin-bottom: 5px; }
+    .metric .value { font-size: 15px; font-weight: 600; }
+    .metric .detail { color: #8b949e; font-size: 11.5px; margin-top: 5px; line-height: 1.4; }
+    .healthy { color: #3fb950; }
+    .degraded { color: #f0883e; }
+    .unhealthy { color: #f85149; }
   </style>
 </head>
 <body>
@@ -83,6 +97,7 @@
 
     <div class="panel" id="panel" hidden></div>
     <div class="hint" id="hint" hidden></div>
+    <div class="health-grid" id="healthGrid" hidden></div>
   </div>
 
   <script>
@@ -91,11 +106,37 @@
       status: $('#status'), box: $('#qrBox'), ph: $('#qrPlaceholder'),
       start: $('#btnStart'), refresh: $('#btnRefresh'), logout: $('#btnLogout'),
       panel: $('#panel'), hint: $('#hint'),
+      health: $('#healthGrid'),
     };
 
     function setStatus(text, cls = '') {
       el.status.textContent = text;
       el.status.className = 'status' + (cls ? ' ' + cls : '');
+    }
+
+    function age(ms) {
+      if (ms == null) return 'chưa có';
+      if (ms < 1000) return 'vừa xong';
+      if (ms < 60000) return `${Math.round(ms / 1000)} giây`;
+      return `${Math.round(ms / 60000)} phút`;
+    }
+
+    function renderHealth(h) {
+      const db = h.database || {};
+      const bridge = h.bridge || {};
+      const jobs = h.backfill || [];
+      const backfill = jobs.length
+        ? jobs.map(j => `${j.threadType === 1 ? 'Nhóm' : 'DM'}: ${j.status}, ${j.pagesFetched} trang`).join('<br>')
+        : 'Đang chờ tự động';
+      el.health.innerHTML = `
+        <div class="metric"><div class="label">Tổng thể</div><div class="value ${h.status}">${h.status}</div><div class="detail">Uptime ${age(h.uptimeMs)}</div></div>
+        <div class="metric"><div class="label">Lăng Tiêu</div><div class="value ${bridge.attachedClients ? 'healthy' : 'degraded'}">${bridge.attachedClients || 0} kết nối</div><div class="detail">Heartbeat: ${age(bridge.heartbeatAgeMs)} trước</div></div>
+        <div class="metric"><div class="label">SQLite</div><div class="value ${db.ready ? 'healthy' : 'unhealthy'}">${db.ready ? 'sẵn sàng' : 'lỗi'}</div><div class="detail">${db.messageCount || 0} tin · ${db.auditCount || 0} audit</div></div>
+        <div class="metric"><div class="label">Phân quyền</div><div class="value ${h.authorization?.ownerConfigured ? 'healthy' : 'unhealthy'}">public / owner</div><div class="detail">${h.authorization?.ownerConfigured ? 'Đã cấu hình UID owner' : 'Chưa có UID owner'}</div></div>
+        <div class="metric"><div class="label">Backfill</div><div class="value">${backfill}</div><div class="detail">Tự động DM + nhóm · giữ 365 ngày</div></div>
+        <div class="metric"><div class="label">Lưu lượng gần nhất</div><div class="value">Nhận: ${h.traffic?.lastInboundAtMs ? new Date(h.traffic.lastInboundAtMs).toLocaleString('vi-VN') : 'chưa có'}</div><div class="detail">Gửi: ${h.traffic?.lastOutboundAtMs ? new Date(h.traffic.lastOutboundAtMs).toLocaleString('vi-VN') : 'chưa có'}</div></div>
+        <div class="metric"><div class="label">Lỗi gần nhất</div><div class="value ${h.lastError ? 'degraded' : 'healthy'}">${h.lastError?.code || 'Không có'}</div><div class="detail">${h.lastError?.message || 'Hệ thống chưa ghi nhận lỗi.'}</div></div>`;
+      el.health.hidden = false;
     }
 
     function clearQr() {
@@ -193,8 +234,12 @@
 
     async function refreshState() {
       try {
-        const state = await (await fetch('/api/status')).json();
+        const [state, health] = await Promise.all([
+          fetch('/api/status').then(r => r.json()),
+          fetch('/api/health').then(r => r.json()),
+        ]);
         if (state.status === 'logged-in') showConnected(state);
+        renderHealth(health);
       } catch { /* server chưa sẵn sàng */ }
     }
 

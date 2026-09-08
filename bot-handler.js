@@ -1,4 +1,7 @@
-import { isHermesAttached, forwardToHermes, extractText } from './hermes-bridge.js';
+import {
+  isHermesAttached, forwardToHermes, extractMediaUrls, extractText, rememberZaloMessage,
+  sendSystemNotice,
+} from './hermes-bridge.js';
 import { ThreadType } from 'zca-js';
 
 /**
@@ -24,8 +27,10 @@ import { ThreadType } from 'zca-js';
 let selfUid = '';
 
 /** Ai được nghe câu báo lỗi khi Hermes chưa sẵn sàng (UID Zalo, phân tách bởi dấu phẩy). */
-const ownerUids = String(process.env.ZALO_ALLOWED_USERS || '')
-  .split(',').map((s) => s.trim()).filter(Boolean);
+function ownerUids() {
+  return String(process.env.ZALO_ALLOWED_USERS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+}
 
 /**
  * Đừng lặp lại câu báo lỗi. Một người hỏi năm lần trong lúc Hermes đang rớt
@@ -62,19 +67,22 @@ export function setupBotListener(api, profile = null) {
 
 /** Tin này có gọi đích danh bot không (tag trong nhóm, hoặc chủ nhân nhắn riêng). */
 function isAddressedToBot(msg, isGroup, senderUid) {
-  if (!isGroup) return ownerUids.includes(senderUid);
+  if (!isGroup) return ownerUids().includes(senderUid);
   const mentions = Array.isArray(msg.data?.mentions) ? msg.data.mentions : [];
   return selfUid ? mentions.some((m) => String(m?.uid ?? '') === selfUid) : false;
 }
 
 async function handleIncomingMessage(api, msg) {
+  rememberZaloMessage(msg);
   if (msg.isSelf) return;
 
   // Dùng chung bộ rút chữ với cầu nối: tin có link hay tệp thì content là
   // object chứ không phải chuỗi, lọc theo chuỗi ở đây là vứt mất tin trước
-  // cả khi Hermes kịp nhìn thấy.
+  // cả khi Hermes kịp nhìn thấy. Ảnh-only cũng được giữ lại để adapter Python
+  // lưu làm ngữ cảnh nhóm cho câu hỏi kiểu "đây là..." gửi ngay sau đó.
   const content = extractText(msg).trim();
-  if (!content) return;
+  const mediaUrls = extractMediaUrls(msg);
+  if (!content && !mediaUrls.length) return;
 
   // zca-js đã tính sẵn msg.threadId và msg.type cho cả hai loại hội thoại.
   // (Trước đây code đọc msg.isGroup — property KHÔNG tồn tại — nên mọi tin
@@ -114,11 +122,12 @@ async function handleIncomingMessage(api, msg) {
 
   console.warn('[bot] ⚠️ Hermes chưa cắm — báo lỗi cho người dùng');
   try {
-    await api.sendMessage(
-      { msg: 'Mình đang mất kết nối với bộ não xử lý nên chưa trả lời được 😔 Bạn nhắn lại giúp mình sau ít phút nhé!' },
+    await sendSystemNotice({
+      api,
       threadId,
       threadType,
-    );
+      text: 'Mình đang mất kết nối với bộ não xử lý nên chưa trả lời được 😔 Bạn nhắn lại giúp mình sau ít phút nhé!',
+    });
   } catch (err) {
     console.error('[bot] không gửi được thông báo lỗi:', err?.message || err);
   }

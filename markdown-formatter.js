@@ -9,8 +9,8 @@ import { TextStyle } from 'zca-js';
  * Markdown bình thường như khi trả lời trên Telegram.
  *
  * Bảng quy đổi
- *   # ## ###            → phóng to      (tiêu đề)
- *   #### trở xuống      → đậm           (tiêu đề phụ, hiếm dùng)
+ *   # ## ###            → đậm + phóng to (tiêu đề)
+ *   #### trở xuống      → đậm + phóng to (tiêu đề phụ, hiếm dùng)
  *   **đậm**, __đậm__    → đậm           (từ khoá, con số)
  *   *nghiêng*, _nghiêng_→ nghiêng
  *   ~~gạch ngang~~      → gạch ngang
@@ -32,9 +32,8 @@ const COLORS = {
   yellow: TextStyle.Yellow || 'c_f7b503',
 };
 const BOLD = TextStyle.Bold || 'b';
-// Cỡ chữ lớn. Dùng cho tiêu đề thay vì "đậm + màu": một mình nó đã đủ tách
-// tiêu đề khỏi thân bài, mà chỉ tốn 34 ký tự thay vì 69, và chiếm một suất
-// thay vì hai trong ngân sách định dạng vốn rất chật.
+// Cỡ chữ lớn. Dùng chồng với in đậm cho tiêu đề và số thứ tự để mắt dễ bắt ý;
+// chunker sẽ tự tách tin khi số style chạm ngưỡng an toàn.
 const BIG = TextStyle.Big || 'f_18';
 const ITALIC = TextStyle.Italic || 'i';
 const STRIKE = TextStyle.StrikeThrough || 's';
@@ -54,19 +53,16 @@ const ALIASES = [
  *
  * Để giao diện tin nhắn đẹp, rõ ràng, trang trọng theo chuẩn công văn giáo dục
  * (như mẫu ở Ảnh 2):
- * - Tiêu đề (# ## ###): In Đậm (b) toàn bộ dòng tiêu đề.
- * - Đầu các chỉ mục số (1. 2. 3.): In Đậm (b) cả dòng hoặc phần số.
+ * - Tiêu đề (# ## ###): In Đậm (b) + phóng to toàn bộ dòng tiêu đề.
+ * - Đầu các chỉ mục số (1. 2. 3.): In Đậm (b) + phóng to phần số.
  * - Các nhãn mục con (• Hiện tại:, • Góp ý:, • Phân tích:): In Đậm (b).
  * - Các từ khóa quan trọng (**từ khóa**): In Đậm (b) trọn vẹn, không bị nuốt chữ.
  *
- * Giới hạn an toàn: giữ tối đa 40 styles mỗi tin nhắn để đảm bảo gửi mượt mà.
+ * Giới hạn an toàn 40 styles được xử lý ở formatAndChunkZaloMarkdown():
+ * chia thành nhiều tin thay vì cắt bớt style.
  */
 const MAX_STYLES = 40;
-
-function capStyles(styles) {
-  if (styles.length <= MAX_STYLES) return styles;
-  return styles.slice(0, MAX_STYLES);
-}
+const MAX_CHARS = 2000;
 
 export function formatZaloMarkdown(input) {
   if (!input) return { msg: '', styles: [] };
@@ -111,20 +107,20 @@ export function formatZaloMarkdown(input) {
     prevBlank = isBlank;
 
     let lineStyles = [];
-    let wholeLineStyle = null;
+    let wholeLineStyles = [];
 
     // Tiêu đề & Đề mục: In Đậm (b) toàn bộ dòng để phân cấp mạch lạc, rõ ràng như mẫu công văn giáo dục
     const heading = line.match(/^\s*(#{1,6})\s+(.*)$/);
     if (heading) {
       line = heading[2];
-      wholeLineStyle = BOLD;
+      wholeLineStyles = [BOLD, BIG];
     }
 
     // Trích dẫn: > … → nghiêng cả dòng
     const quote = line.match(/^\s*>\s?(.*)$/);
     if (!heading && quote) {
       line = quote[1];
-      wholeLineStyle = ITALIC;
+      wholeLineStyles = [ITALIC];
     }
 
     // Phân cấp danh sách đầu dòng chuẩn:
@@ -136,10 +132,12 @@ export function formatZaloMarkdown(input) {
 
     // Đầu chỉ mục số thứ tự (ví dụ: '1. ', '2. ', '1) '):
     // In Đậm (b) phần số thứ tự ở đầu dòng để mắt dễ bắt ý
+    let listNumStart = 0;
     let listNumLen = 0;
     if (!heading) {
       const numMatch = line.match(/^(\s*)(\d+[\.)]\s+)/);
       if (numMatch) {
+        listNumStart = numMatch[1].length;
         listNumLen = numMatch[2].length;
       }
     }
@@ -147,12 +145,15 @@ export function formatZaloMarkdown(input) {
     const { text, styles: inline } = renderInline(line, offset);
     lineStyles = inline;
 
-    if (wholeLineStyle && text.length) {
-      lineStyles.push({ start: offset, len: text.length, st: wholeLineStyle });
+    if (wholeLineStyles.length && text.length) {
+      for (const st of wholeLineStyles) {
+        lineStyles.push({ start: offset, len: text.length, st });
+      }
     }
 
     if (listNumLen > 0) {
-      lineStyles.push({ start: offset, len: listNumLen, st: BOLD });
+      lineStyles.push({ start: offset + listNumStart, len: listNumLen, st: BOLD });
+      lineStyles.push({ start: offset + listNumStart, len: listNumLen, st: BIG });
     }
 
     styles.push(...lineStyles);
@@ -160,15 +161,14 @@ export function formatZaloMarkdown(input) {
     offset += text.length + 1; // +1 cho ký tự xuống dòng
   }
 
-  return { msg: outLines.join('\n'), styles: capStyles(styles) };
+  return { msg: outLines.join('\n'), styles };
 }
 
 /**
- * Tự động chia Markdown thành các tin nhắn Zalo độc lập, đạt chuẩn an toàn:
- * 1. JSON styles của mỗi tin luôn nằm trong ngưỡng an toàn (~230 bytes)
- *    => Đảm bảo giữ được đầy đủ styles in đậm, phóng to, màu sắc mà không bị cắt xén!
- * 2. Độ dài mỗi tin <= 2000 ký tự (dưới giới hạn 3000 của Zalo)
- * 3. Tách theo ranh giới đoạn văn (\n\n) hoặc tiêu đề (###), không bao giờ cắt giữa chừng câu.
+ * Tự động chia Markdown thành các tin nhắn Zalo độc lập.
+ *
+ * Không cắt bớt style nữa: nếu nội dung quá nhiều định dạng, hàm này tách nhỏ
+ * trước khi gửi để mỗi tin vẫn giữ đủ toàn bộ style nằm trong phần của nó.
  *
  * @param {string} input Nội dung Markdown thô từ Hermes Agent
  * @returns {Array<{ msg: string, styles: Array<{start: number, len: number, st: string}> }>}
@@ -176,41 +176,84 @@ export function formatZaloMarkdown(input) {
 export function formatAndChunkZaloMarkdown(input) {
   if (!input) return [];
 
-  const raw = String(input).trim();
-  // Tách theo ranh giới tiêu đề lớn (h1 - h4)
-  const blocks = raw.split(/(?=\n\s*#{1,4}\s+)/);
+  const formatted = formatZaloMarkdown(String(input).trim());
+  if (!formatted.msg.trim()) return [];
+  if (!exceedsZaloBudget(formatted)) return [formatted];
 
-  const subBlocks = [];
-  for (const b of blocks) {
-    const cleaned = b.replace(/^\s*([-*_])\1{2,}\s*$/gm, '').trim();
-    if (cleaned) subBlocks.push(cleaned);
+  return chunkFormattedMessage(formatted);
+}
+
+function exceedsZaloBudget(formatted) {
+  return formatted.msg.length > MAX_CHARS || formatted.styles.length > MAX_STYLES;
+}
+
+function chunkFormattedMessage(formatted) {
+  const chunks = [];
+  let start = 0;
+
+  while (start < formatted.msg.length) {
+    const end = findChunkEnd(formatted, start);
+    chunks.push(sliceFormattedMessage(formatted, start, end));
+    start = end;
   }
 
-  const results = [];
-  let currentBlock = [];
+  return chunks.filter((chunk) => chunk.msg.trim());
+}
 
-  for (const b of subBlocks) {
-    const candidate = currentBlock.concat([b]).join('\n\n');
-    const f = formatZaloMarkdown(candidate);
-    const jsonLen = JSON.stringify(f.styles).length;
+function findChunkEnd(formatted, start) {
+  let end = Math.min(start + MAX_CHARS, formatted.msg.length);
+  end = preferReadableBoundary(formatted.msg, start, end);
 
-    // Giới hạn an toàn Zalo: tối đa 35 styles VÀ độ dài ký tự <= 2000
-    // Gom tối đa các mục lại cùng 1 tin nhắn để tin nhắn dài đẹp, liền mạch
-    if ((f.styles.length > 30 || f.msg.length > 2000) && currentBlock.length > 0) {
-      const ready = formatZaloMarkdown(currentBlock.join('\n\n'));
-      if (ready.msg.trim()) results.push(ready);
-      currentBlock = [b];
-    } else {
-      currentBlock.push(b);
+  while (styleCountInRange(formatted.styles, start, end) > MAX_STYLES && end > start + 1) {
+    end = lastStyleBoundaryBefore(formatted.styles, start, end) || Math.floor((start + end) / 2);
+    end = Math.max(start + 1, Math.min(end, start + MAX_CHARS));
+  }
+
+  return end;
+}
+
+function preferReadableBoundary(msg, start, end) {
+  if (end >= msg.length) return msg.length;
+
+  const window = msg.slice(start, end);
+  for (const marker of ['\n\n', '\n', '. ', '; ', ', ', ' ']) {
+    const idx = window.lastIndexOf(marker);
+    if (idx > 0 && idx >= window.length * 0.6) {
+      return start + idx + marker.length;
     }
   }
+  return end;
+}
 
-  if (currentBlock.length > 0) {
-    const ready = formatZaloMarkdown(currentBlock.join('\n\n'));
-    if (ready.msg.trim()) results.push(ready);
+function styleCountInRange(styles, start, end) {
+  return styles.filter((style) => style.start < end && style.start + style.len > start).length;
+}
+
+function lastStyleBoundaryBefore(styles, start, end) {
+  const boundaries = styles
+    .flatMap((style) => [style.start, style.start + style.len])
+    .filter((pos) => pos > start && pos < end)
+    .sort((a, b) => b - a);
+  return boundaries.find((pos) => styleCountInRange(styles, start, pos) <= MAX_STYLES) || null;
+}
+
+function sliceFormattedMessage(formatted, start, end) {
+  const styles = [];
+  for (const style of formatted.styles) {
+    const styleStart = style.start;
+    const styleEnd = style.start + style.len;
+    if (styleStart >= end || styleEnd <= start) continue;
+
+    const clippedStart = Math.max(styleStart, start);
+    const clippedEnd = Math.min(styleEnd, end);
+    styles.push({
+      start: clippedStart - start,
+      len: clippedEnd - clippedStart,
+      st: style.st,
+    });
   }
 
-  return results;
+  return { msg: formatted.msg.slice(start, end), styles };
 }
 
 /**

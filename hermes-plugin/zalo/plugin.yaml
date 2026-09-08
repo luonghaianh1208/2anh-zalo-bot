@@ -1,7 +1,7 @@
 name: zalo-platform
 label: Zalo
 kind: platform
-version: 1.0.0
+version: 1.1.0
 description: >
   Zalo gateway adapter for Hermes Agent.
 
@@ -41,4 +41,12 @@ optional_env:
   - name: ZALO_HOME_CHANNEL_NAME
     description: "Display name for the Zalo home channel"
     prompt: "Home channel display name"
+    password: false
+  - name: ZALO_HISTORY_RETENTION_DAYS
+    description: "Number of days retained in the sidecar SQLite history (default: 365)"
+    prompt: "Zalo history retention days"
+    password: false
+  - name: ZALO_BACKFILL_MAX_PAGES
+    description: "Maximum old-message pages fetched by one history request (default: 10)"
+    prompt: "Zalo backfill page limit"
     password: false

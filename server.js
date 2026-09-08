@@ -4,12 +4,33 @@ import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { loadEnvFile } from 'node:process';
 import { Zalo, LoginQRCallbackEventType } from 'zca-js';
 import { tryReconnect, saveSession, clearSession, fetchProfile } from './auth.js';
 import { setupBotListener } from './bot-handler.js';
-import { startHermesBridge, isHermesAttached } from './hermes-bridge.js';
+import { startAutomaticBackfill, startHermesBridge, stopHermesBridge, isHermesAttached } from './hermes-bridge.js';
+import { openZaloStore } from './zalo-store.js';
+import { createRuntimeHealth } from './runtime-health.js';
+import { importLegacyHermesHistory } from './legacy-history-import.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+try {
+  loadEnvFile(join(__dirname, '..', '.env'));
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+const zaloStore = openZaloStore({
+  path: join(__dirname, 'data', 'zalo.sqlite'),
+  retentionDays: Number(process.env.ZALO_HISTORY_RETENTION_DAYS) || 365,
+});
+const runtimeHealth = createRuntimeHealth({ store: zaloStore });
+zaloStore.pruneMessages();
+const retentionTimer = setInterval(() => {
+  try { zaloStore.pruneMessages(); } catch (error) {
+    runtimeHealth.recordError('history_retention_failed', error?.message || error);
+  }
+}, 24 * 60 * 60 * 1000);
+retentionTimer.unref?.();
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
@@ -24,6 +45,27 @@ let loginInfo = null;
 let qrBase64 = null;
 let status = 'idle'; // 'idle' | 'qr-pending' | 'scanned' | 'logged-in'
 let sessionFromDisk = false;
+
+function activateZaloRuntime() {
+  try {
+    const migration = importLegacyHermesHistory({
+      sourcePath: join(__dirname, '..', 'state.db'),
+      store: zaloStore,
+      accountId: String(loginInfo?.user_id || loginInfo?.userId || ''),
+      retentionDays: Number(process.env.ZALO_HISTORY_RETENTION_DAYS) || 365,
+    });
+    console.log(`[history] legacy import: ${migration.inserted} mới, ${migration.skipped} đã có`);
+  } catch (error) {
+    runtimeHealth.recordError('legacy_history_import_failed', error?.message || error);
+    console.error('[history] legacy import failed:', error?.message || error);
+  }
+  startHermesBridge({ api, profile: loginInfo, store: zaloStore, health: runtimeHealth });
+  setupBotListener(api, loginInfo);
+  startAutomaticBackfill().catch((error) => {
+    runtimeHealth.recordError('automatic_backfill_failed', error?.message || error);
+    console.error('[history] automatic backfill failed:', error?.message || error);
+  });
+}
 
 // --- WebSocket clients ---
 let wsClients = [];
@@ -54,10 +96,14 @@ if (reconnectResult) {
   loginInfo = reconnectResult.loginInfo;
   sessionFromDisk = true;
   status = 'logged-in';
+  runtimeHealth.setZaloState('logged-in', {
+    userId: loginInfo?.user_id,
+    displayName: loginInfo?.display_name,
+  });
   console.log(`[boot] ✅ đã kết nối lại — ${loginInfo?.display_name || '?'} (${loginInfo?.user_id || '?'})`);
-  setupBotListener(api, loginInfo);
-  startHermesBridge({ api, profile: loginInfo });
+  activateZaloRuntime();
 } else {
+  runtimeHealth.setZaloState('idle');
   console.log('[boot] chưa có phiên — cần quét QR');
 }
 
@@ -70,7 +116,7 @@ app.post('/api/qr/start', async (req, res) => {
 
   try {
     const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0';
-    zalo = new Zalo({ logging: false });
+    zalo = new Zalo({ logging: false, selfListen: true });
     
     // Bắt sự kiện GotLoginInfo để lưu credentials chuẩn xác
     let capturedCredentials = null;
@@ -83,19 +129,23 @@ app.post('/api/qr/start', async (req, res) => {
           case LoginQRCallbackEventType.QRCodeGenerated:
             qrBase64 = evt.data.image;
             status = 'qr-pending';
+            runtimeHealth.setZaloState('qr-pending');
             broadcast({ type: 'qr-generated', data: { image: qrBase64 } });
             break;
           case LoginQRCallbackEventType.QRCodeScanned:
             status = 'scanned';
+            runtimeHealth.setZaloState('scanned');
             broadcast({ type: 'qr-scanned' });
             break;
           case LoginQRCallbackEventType.QRCodeExpired:
             status = 'idle';
+            runtimeHealth.setZaloState('idle');
             qrBase64 = null;
             broadcast({ type: 'qr-expired' });
             break;
           case LoginQRCallbackEventType.QRCodeDeclined:
             status = 'idle';
+            runtimeHealth.setZaloState('idle');
             qrBase64 = null;
             broadcast({ type: 'qr-declined' });
             break;
@@ -116,6 +166,10 @@ app.post('/api/qr/start', async (req, res) => {
 
     // zca-js không trả hồ sơ kèm session — phải hỏi server.
     loginInfo = await fetchProfile(api);
+    runtimeHealth.setZaloState('logged-in', {
+      userId: loginInfo?.user_id,
+      displayName: loginInfo?.display_name,
+    });
 
     if (!capturedCredentials) {
       console.warn('[auth] ⚠️ không bắt được credentials từ sự kiện GotLoginInfo');
@@ -124,12 +178,12 @@ app.post('/api/qr/start', async (req, res) => {
 
     console.log(`[auth] ✅ đăng nhập thành công — ${loginInfo?.display_name || '?'} (${loginInfo?.user_id || '?'})`);
     broadcast({ type: 'login-success', data: loginInfo });
-    setupBotListener(api, loginInfo);
-    startHermesBridge({ api, profile: loginInfo });
+    activateZaloRuntime();
     res.json({ ok: true, user: loginInfo });
   } catch (err) {
     console.error('[auth] loginQR error:', err);
     status = 'idle';
+    runtimeHealth.setZaloState('idle');
     qrBase64 = null;
     broadcast({ type: 'error', data: err.message });
     res.status(500).json({ ok: false, error: err.message });
@@ -146,11 +200,23 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+app.get('/api/health', (req, res) => {
+  const snapshot = runtimeHealth.snapshot();
+  snapshot.authorization = {
+    model: 'public-owner',
+    ownerConfigured: String(process.env.ZALO_ALLOWED_USERS || '')
+      .split(',').some((value) => value.trim()),
+  };
+  res.json(snapshot);
+});
+
 // --- Logout ---
 app.post('/api/logout', async (req, res) => {
+  stopHermesBridge();
   api = null;
   loginInfo = null;
   status = 'idle';
+  runtimeHealth.setZaloState('idle');
   qrBase64 = null;
   sessionFromDisk = false;
   await clearSession();
@@ -178,7 +244,12 @@ function removePidFile() {
   } catch { /* đang tắt, không cần xử lý thêm */ }
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-  process.on(sig, () => { removePidFile(); process.exit(0); });
+  process.on(sig, () => {
+    removePidFile();
+    clearInterval(retentionTimer);
+    try { zaloStore.close(); } catch { /* đang thoát */ }
+    process.exit(0);
+  });
 }
 process.on('exit', removePidFile);
 
