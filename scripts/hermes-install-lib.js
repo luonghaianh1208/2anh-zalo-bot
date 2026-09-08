@@ -11,6 +11,12 @@ import { parse, stringify } from 'yaml';
 
 const PLATFORM_KEY = 'platforms/zalo';
 const TOOLS_KEY = 'zalo-tools';
+const VIENEU_PROVIDER = 'vieneu-local';
+const VIENEU_VERSION = '3.6.4';
+
+export function vieneuProbeScript() {
+  return `import sys; from importlib.metadata import version; import edge_tts, vieneu; sys.exit(0 if version("vieneu") == "${VIENEU_VERSION}" else 1)`;
+}
 
 export function parseCliArgs(argv) {
   const options = {};
@@ -19,6 +25,7 @@ export function parseCliArgs(argv) {
     if (value === '--hermes-home') options.hermesHome = argv[++index];
     else if (value === '--sidecar-root') options.sidecarRoot = argv[++index];
     else if (value === '--skip-python') options.skipPython = true;
+    else if (value === '--vieneu-tts') options.vieneuTts = true;
     else throw new Error(`Tham số không hỗ trợ: ${value}`);
   }
   if (!options.sidecarRoot) options.sidecarRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -74,7 +81,7 @@ function setDefault(parent, key, value) {
   if (parent[key] === undefined) parent[key] = value;
 }
 
-export function mergeHermesConfig(text, { bridgeToken } = {}) {
+export function mergeHermesConfig(text, { bridgeToken, vieneu = null } = {}) {
   const config = parse(text || '') || {};
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error('config.yaml phải chứa một YAML mapping ở cấp cao nhất');
@@ -109,7 +116,27 @@ export function mergeHermesConfig(text, { bridgeToken } = {}) {
   setDefault(display, 'streaming', false);
   setDefault(display, 'interim_assistant_messages', false);
 
+  if (vieneu) {
+    const tts = ensureObject(config, 'tts');
+    tts.provider = VIENEU_PROVIDER;
+    setDefault(tts, 'speed', 1.0);
+    const provider = ensureObject(ensureObject(tts, 'providers'), VIENEU_PROVIDER);
+    provider.type = 'command';
+    provider.command = `${quoteCommandPath(vieneu.pythonPath)} ${quoteCommandPath(vieneu.scriptPath)} --input {input_path} --output {output_path} --voice {voice} --speed {speed}`;
+    provider.output_format = 'wav';
+    provider.voice = 'Minh Quân';
+    provider.speed = 1.0;
+    provider.timeout = 180;
+    provider.voice_compatible = true;
+  }
+
   return stringify(config, { lineWidth: 0 });
+}
+
+function quoteCommandPath(path) {
+  const value = String(path);
+  if (platform() === 'win32') return `"${value.replaceAll('"', '\\"')}"`;
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 export function renderPlatformManifest(template, sidecarRoot) {
@@ -204,6 +231,74 @@ function pythonPath(repoRoot) {
   return candidates.find(existsSync) || null;
 }
 
+function vieneuLayout(hermesHome) {
+  const root = join(hermesHome, 'tts');
+  const venv = join(root, '.venv');
+  return {
+    root,
+    scriptPath: join(root, 'vieneu_provider.py'),
+    pythonPath: platform() === 'win32'
+      ? join(venv, 'Scripts', 'python.exe')
+      : join(venv, 'bin', 'python'),
+  };
+}
+
+function runChecked(command, args, label) {
+  const result = spawnSync(command, args, { encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`${label}: ${result.stderr || result.stdout || `exit ${result.status}`}`);
+  }
+  return result;
+}
+
+function ensureVieneu(sidecarRoot, layout, { skipPython = false, commandProbe = spawnSync } = {}) {
+  const target = vieneuLayout(layout.home);
+  const source = join(sidecarRoot, 'tts', 'vieneu_provider.py');
+  if (!existsSync(source)) throw new Error(`Thiếu VieNeu provider trong bộ cài: ${source}`);
+  const ffmpeg = commandProbe('ffmpeg', ['-version'], { encoding: 'utf8' });
+  if (ffmpeg.status !== 0) throw new Error('Cần cài ffmpeg trước khi bật VieNeu TTS');
+  atomicWriteText(target.scriptPath, readFileSync(source, 'utf8'));
+  if (skipPython) return target;
+
+  const basePython = pythonPath(layout.repoRoot);
+  if (!basePython) throw new Error('Không tìm thấy Python venv của Hermes để tạo môi trường VieNeu');
+  const probe = () => spawnSync(
+    target.pythonPath,
+    ['-c', vieneuProbeScript()],
+    { encoding: 'utf8' },
+  );
+  if (!existsSync(target.pythonPath)) {
+    const uv = platform() === 'win32'
+      ? join(layout.home, 'bin', 'uv.exe')
+      : join(layout.home, 'bin', 'uv');
+    if (existsSync(uv)) {
+      runChecked(uv, ['venv', join(target.root, '.venv'), '--python', basePython], 'Không tạo được venv VieNeu');
+    } else {
+      runChecked(basePython, ['-m', 'venv', join(target.root, '.venv')], 'Không tạo được venv VieNeu');
+    }
+  }
+  if (probe().status !== 0) {
+    const uv = platform() === 'win32'
+      ? join(layout.home, 'bin', 'uv.exe')
+      : join(layout.home, 'bin', 'uv');
+    if (existsSync(uv)) {
+      runChecked(
+        uv,
+        ['pip', 'install', '--python', target.pythonPath, `vieneu==${VIENEU_VERSION}`, 'edge-tts'],
+        'Không cài được VieNeu',
+      );
+    } else {
+      runChecked(
+        target.pythonPath,
+        ['-m', 'pip', 'install', `vieneu==${VIENEU_VERSION}`, 'edge-tts'],
+        'Không cài được VieNeu',
+      );
+    }
+  }
+  if (probe().status !== 0) throw new Error('Môi trường VieNeu chưa import được vieneu và edge_tts');
+  return target;
+}
+
 function ensureWebsockets(repoRoot, hermesHome, { skipPython = false } = {}) {
   if (skipPython) return { skipped: true };
   const python = pythonPath(repoRoot);
@@ -227,7 +322,12 @@ function configObject(configPath) {
   try { return parse(readFileSync(configPath, 'utf8')) || {}; } catch { return null; }
 }
 
-export function doctorHermes({ sidecarRoot, hermesHome, skipPython = false } = {}) {
+export function doctorHermes({
+  sidecarRoot,
+  hermesHome,
+  skipPython = false,
+  commandProbe = spawnSync,
+} = {}) {
   const checks = [];
   const add = (name, ok, detail = '') => checks.push({ name, ok: Boolean(ok), detail });
   let layout;
@@ -255,15 +355,37 @@ export function doctorHermes({ sidecarRoot, hermesHome, skipPython = false } = {
   const hermesToken = config?.platforms?.zalo?.extra?.bridge_token;
   add('bridge-token', Boolean(sidecarToken && hermesToken && sidecarToken === String(hermesToken)));
   add('sidecar-server', existsSync(join(root, 'server.js')));
+  const configuredVieneu = config?.tts?.providers?.[VIENEU_PROVIDER];
+  const target = vieneuLayout(layout.home);
+  const managedVieneu = config?.tts?.provider === VIENEU_PROVIDER
+    && configuredVieneu?.type === 'command'
+    && String(configuredVieneu.command || '').includes(target.scriptPath);
+  if (managedVieneu) {
+    add('vieneu-provider', existsSync(target.scriptPath));
+    if (!skipPython) {
+      const probe = existsSync(target.pythonPath)
+        ? commandProbe(target.pythonPath, ['-c', vieneuProbeScript()], { encoding: 'utf8' })
+        : null;
+      add('vieneu-python', Boolean(probe?.status === 0));
+      const ffmpeg = commandProbe('ffmpeg', ['-version'], { encoding: 'utf8' });
+      add('vieneu-ffmpeg', ffmpeg.status === 0);
+    }
+  }
   if (!skipPython) {
     const python = pythonPath(layout.repoRoot);
-    const probe = python ? spawnSync(python, ['-c', 'import websockets'], { encoding: 'utf8' }) : null;
+    const probe = python ? commandProbe(python, ['-c', 'import websockets'], { encoding: 'utf8' }) : null;
     add('python-websockets', Boolean(python && probe?.status === 0));
   }
   return { ok: checks.every((check) => check.ok), checks };
 }
 
-export async function installHermes({ sidecarRoot, hermesHome, skipPython = false } = {}) {
+export async function installHermes({
+  sidecarRoot,
+  hermesHome,
+  skipPython = false,
+  vieneuTts = false,
+  commandProbe = spawnSync,
+} = {}) {
   if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Cần Node.js 22 trở lên');
   const root = resolve(sidecarRoot);
   const layout = resolveHermesLayout({ hermesHome });
@@ -277,10 +399,16 @@ export async function installHermes({ sidecarRoot, hermesHome, skipPython = fals
   const manifestPath = join(platformDestination, 'plugin.yaml');
   writeFileSync(manifestPath, renderPlatformManifest(readFileSync(manifestPath, 'utf8'), root), 'utf8');
 
+  const vieneu = vieneuTts ? ensureVieneu(root, layout, { skipPython, commandProbe }) : null;
   const currentConfig = existsSync(layout.configPath) ? readFileSync(layout.configPath, 'utf8') : '';
-  atomicWriteText(layout.configPath, mergeHermesConfig(currentConfig, { bridgeToken: token }));
+  atomicWriteText(layout.configPath, mergeHermesConfig(currentConfig, { bridgeToken: token, vieneu }));
   ensureWebsockets(layout.repoRoot, layout.home, { skipPython });
-  const diagnosis = doctorHermes({ sidecarRoot: root, hermesHome: layout.home, skipPython });
+  const diagnosis = doctorHermes({
+    sidecarRoot: root,
+    hermesHome: layout.home,
+    skipPython,
+    commandProbe,
+  });
   if (!diagnosis.ok) throw new Error(`Cài đặt chưa hoàn chỉnh: ${JSON.stringify(diagnosis.checks)}`);
   return diagnosis;
 }
