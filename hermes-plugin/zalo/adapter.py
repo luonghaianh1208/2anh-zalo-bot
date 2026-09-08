@@ -541,12 +541,20 @@ class ZaloAdapter(BasePlatformAdapter):
         # Chốt danh tính trước mọi side effect của lượt này, kể cả thông báo
         # chống flood và cử chỉ đã xem/thả cảm xúc. Task xử lý agent được tạo
         # phía dưới sẽ kế thừa ContextVar này.
+        quote_is_own = bool(
+            quote
+            and str(quote.get("authorId") or "")
+            == str(self._self_profile.get("user_id") or "")
+        )
         _zalo_tools().set_turn_context(
             text=text,
             sender_uid=sender_uid,
             thread_id=thread_id,
             is_group=is_group,
             is_owner=self._is_owner(sender_uid),
+            reply_msg_id=str(quote.get("id") or "") if quote else "",
+            reply_cli_msg_id=str(quote.get("cliMsgId") or "") if quote else "",
+            reply_is_own=quote_is_own,
         )
 
         # Chặn nhắn dồn dập. Đặt sau cổng kiểm quyền (chỉ đếm tin thật sự
@@ -627,7 +635,7 @@ class ZaloAdapter(BasePlatformAdapter):
             reply_to_text=reply_to_text,
             reply_to_author_id=(str(quote.get("authorId") or "") or None) if quote else None,
             reply_to_author_name=(quote.get("authorName") or None) if quote else None,
-            reply_to_is_own_message=bool(quote and str(quote.get("authorId") or "") == str(self._self_profile.get("user_id") or "")),
+            reply_to_is_own_message=quote_is_own,
             channel_context=channel_context,
         )
 

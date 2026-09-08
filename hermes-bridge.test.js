@@ -102,7 +102,7 @@ test('extractMediaUrls rút ảnh từ content, raw và quote', () => {
   ]);
 });
 
-test('forwardToHermes gửi mediaUrls và quote qua bridge', async (t) => {
+test('forwardToHermes chuẩn hóa đúng cấu trúc quote thực tế của zca-js', async (t) => {
   const server = startHermesBridge({ api: {}, profile: { user_id: 'bot-uid' }, port: 0, store: testStore(t) });
   await new Promise((resolve) => server.once('listening', resolve));
 
@@ -131,11 +131,13 @@ test('forwardToHermes gửi mediaUrls và quote qua bridge', async (t) => {
         msgType: 'chat.photo',
         mentions: [{ uid: 'bot-uid' }],
         quote: {
-          msgId: 'q1',
-          ownerId: 'u2',
-          ownerName: 'Anh',
-          content: { thumb: 'https://example.com/quoted.jpg' },
-          msgType: 'chat.photo',
+          ownerId: 'bot-uid',
+          cliMsgId: 1788864027075,
+          globalMsgId: 8240551224624,
+          cliMsgType: 1,
+          msg: 'Quá hay và quá chuẩn luôn anh Hải Anh ơi!',
+          attach: '',
+          fromD: 'Lăng Tiêu',
         },
         ts: 123,
       },
@@ -145,11 +147,13 @@ test('forwardToHermes gửi mediaUrls và quote qua bridge', async (t) => {
     assert.equal(ok, true);
     assert.equal(payload.id, 'm1');
     assert.equal(payload.threadId, 'g1');
-    assert.deepEqual(payload.mediaUrls, ['https://example.com/photo.jpg', 'https://example.com/quoted.jpg']);
-    assert.deepEqual(payload.mediaTypes, ['image/jpeg', 'image/jpeg']);
-    assert.equal(payload.quote.id, 'q1');
-    assert.equal(payload.quote.authorId, 'u2');
-    assert.deepEqual(payload.quote.mediaUrls, ['https://example.com/quoted.jpg']);
+    assert.deepEqual(payload.mediaUrls, ['https://example.com/photo.jpg']);
+    assert.deepEqual(payload.mediaTypes, ['image/jpeg']);
+    assert.equal(payload.quote.id, '8240551224624');
+    assert.equal(payload.quote.cliMsgId, '1788864027075');
+    assert.equal(payload.quote.authorId, 'bot-uid');
+    assert.equal(payload.quote.authorName, 'Lăng Tiêu');
+    assert.equal(payload.quote.text, 'Quá hay và quá chuẩn luôn anh Hải Anh ơi!');
   } finally {
     ws.close();
     stopHermesBridge();
