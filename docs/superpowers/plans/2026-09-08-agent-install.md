@@ -25,11 +25,11 @@
 
 **Files:**
 - Modify: root sidecar source files and `hermes-plugin/zalo/**`, `hermes-plugin/zalo_tools/**`
-- Create: existing sidecar `*.test.js` files and durable-history modules from `E:/Hermes/zca-test`
+- Create: existing sidecar `*.test.js` files and durable-history modules from the tested live sidecar source
 - Test: `*.test.js`, `test_zalo_adapter.py`
 
 **Interfaces:**
-- Consumes: tested live source in `E:/Hermes/zca-test` and the two installed plugin directories.
+- Consumes: the tested live sidecar source and the two installed plugin directories.
 - Produces: the current portable source baseline without runtime data.
 
 - [ ] **Step 1: Copy tests before production modules**

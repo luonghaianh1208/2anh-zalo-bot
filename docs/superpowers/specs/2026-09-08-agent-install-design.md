@@ -45,7 +45,7 @@ The installer performs these operations in order:
 5. Copy `hermes-plugin/zalo` to `plugins/platforms/zalo` and `hermes-plugin/zalo_tools` to `plugins/zalo_tools`.
 6. Render the installed platform manifest with an absolute, quoted sidecar start command derived from the clone path. The tracked template contains no machine-specific path.
 7. Merge only installer-owned Zalo keys into Hermes `config.yaml`, preserving unrelated keys and existing customer values. Existing Zalo values win; missing safe defaults are added.
-8. Enable `zalo-platform` and `zalo-tools` through Hermes CLI when available. If the CLI is absent, write no invented plugin registry state and report the exact enable commands.
+8. Enable the installed plugin keys by merging `platforms/zalo` and `zalo-tools` into `plugins.enabled`; this is the same persisted state as the Hermes CLI without depending on an interactive command.
 9. Install `websockets` into the detected Hermes Python environment.
 10. Run the same checks as `doctor` and exit nonzero if the resulting installation is incomplete.
 

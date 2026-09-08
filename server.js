@@ -243,7 +243,7 @@ app.post('/api/logout', async (req, res) => {
   res.json({ ok: true });
 });
 
-const PORT = process.env.ZCA_PORT || 3872;
+const PORT = Number(process.env.ZCA_PORT) || 3872;
 
 // Ghi PID ra file để Hermes-Offline.vbs tắt đúng tiến trình này. Không thể
 // nhận diện qua dòng lệnh vì nó chỉ là "node server.js" — trùng với vô số

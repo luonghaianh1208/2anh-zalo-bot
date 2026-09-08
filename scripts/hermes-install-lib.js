@@ -6,10 +6,24 @@ import { randomBytes } from 'node:crypto';
 import { homedir, platform } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
 
 const PLATFORM_KEY = 'platforms/zalo';
 const TOOLS_KEY = 'zalo-tools';
+
+export function parseCliArgs(argv) {
+  const options = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === '--hermes-home') options.hermesHome = argv[++index];
+    else if (value === '--sidecar-root') options.sidecarRoot = argv[++index];
+    else if (value === '--skip-python') options.skipPython = true;
+    else throw new Error(`Tham số không hỗ trợ: ${value}`);
+  }
+  if (!options.sidecarRoot) options.sidecarRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+  return options;
+}
 
 function isHermesRepo(path) {
   return existsSync(join(path, 'plugins'))
@@ -100,7 +114,7 @@ export function mergeHermesConfig(text, { bridgeToken } = {}) {
 
 export function renderPlatformManifest(template, sidecarRoot) {
   const serverPath = join(resolve(sidecarRoot), 'server.js').replaceAll('\\', '/');
-  return String(template).replaceAll('{{SIDECAR_SERVER}}', `\\"${serverPath}\\"`);
+  return String(template).replaceAll('{{SIDECAR_SERVER}}', serverPath);
 }
 
 function within(parent, child) {
@@ -132,13 +146,43 @@ function atomicReplaceDirectory(source, destination) {
   }
 }
 
+function atomicWriteText(destination, content) {
+  const parent = dirname(destination);
+  mkdirSync(parent, { recursive: true });
+  const suffix = `${process.pid}-${randomBytes(4).toString('hex')}`;
+  const staging = join(parent, `.${destination.split(/[\\/]/).pop()}.install-${suffix}`);
+  const backup = join(parent, `.${destination.split(/[\\/]/).pop()}.backup-${suffix}`);
+  if (!within(parent, staging) || !within(parent, backup)) throw new Error('Đường dẫn ghi cấu hình không an toàn');
+  writeFileSync(staging, content, 'utf8');
+  let movedOld = false;
+  try {
+    if (existsSync(destination)) {
+      renameSync(destination, backup);
+      movedOld = true;
+    }
+    renameSync(staging, destination);
+    if (movedOld) rmSync(backup, { force: true });
+  } catch (error) {
+    if (existsSync(staging)) rmSync(staging, { force: true });
+    if (movedOld && !existsSync(destination) && existsSync(backup)) renameSync(backup, destination);
+    throw error;
+  }
+}
+
 function readBridgeToken(envPath) {
   if (!existsSync(envPath)) return null;
   const match = readFileSync(envPath, 'utf8').match(/^ZALO_BRIDGE_TOKEN=(.+)$/m);
   return match?.[1]?.trim() || null;
 }
 
-function ensureSidecarEnv(sidecarRoot) {
+function appendEnvValue(envPath, key, value) {
+  const current = readFileSync(envPath, 'utf8');
+  const hasKey = new RegExp(`^${key}=.+$`, 'm').test(current);
+  if (hasKey) return;
+  writeFileSync(envPath, `${current}${current.endsWith('\n') || !current ? '' : '\n'}${key}=${value}\n`, 'utf8');
+}
+
+function ensureSidecarEnv(sidecarRoot, hermesHome) {
   const envPath = join(sidecarRoot, '.env');
   if (!existsSync(envPath)) {
     const examplePath = join(sidecarRoot, '.env.example');
@@ -147,9 +191,9 @@ function ensureSidecarEnv(sidecarRoot) {
   let token = readBridgeToken(envPath);
   if (!token) {
     token = randomBytes(32).toString('hex');
-    const current = readFileSync(envPath, 'utf8');
-    writeFileSync(envPath, `${current}${current.endsWith('\n') || !current ? '' : '\n'}ZALO_BRIDGE_TOKEN=${token}\n`, 'utf8');
+    appendEnvValue(envPath, 'ZALO_BRIDGE_TOKEN', token);
   }
+  appendEnvValue(envPath, 'HERMES_HOME', resolve(hermesHome).replaceAll('\\', '/'));
   return token;
 }
 
@@ -160,13 +204,18 @@ function pythonPath(repoRoot) {
   return candidates.find(existsSync) || null;
 }
 
-function ensureWebsockets(repoRoot, { skipPython = false } = {}) {
+function ensureWebsockets(repoRoot, hermesHome, { skipPython = false } = {}) {
   if (skipPython) return { skipped: true };
   const python = pythonPath(repoRoot);
   if (!python) throw new Error('Không tìm thấy Python venv của Hermes để cài websockets');
   let probe = spawnSync(python, ['-c', 'import websockets'], { encoding: 'utf8' });
   if (probe.status !== 0) {
-    const install = spawnSync(python, ['-m', 'pip', 'install', 'websockets'], { encoding: 'utf8' });
+    const uv = platform() === 'win32'
+      ? join(hermesHome, 'bin', 'uv.exe')
+      : join(hermesHome, 'bin', 'uv');
+    const install = existsSync(uv)
+      ? spawnSync(uv, ['pip', 'install', '--python', python, 'websockets'], { encoding: 'utf8' })
+      : spawnSync(python, ['-m', 'pip', 'install', 'websockets'], { encoding: 'utf8' });
     if (install.status !== 0) throw new Error(`Không cài được websockets: ${install.stderr || install.stdout}`);
     probe = spawnSync(python, ['-c', 'import websockets'], { encoding: 'utf8' });
   }
@@ -189,7 +238,7 @@ export function doctorHermes({ sidecarRoot, hermesHome, skipPython = false } = {
     add('hermes-layout', false, error.message);
     return { ok: false, checks };
   }
-  const root = resolve(sidecarRoot || dirname(new URL(import.meta.url).pathname));
+  const root = resolve(sidecarRoot || fileURLToPath(new URL('..', import.meta.url)));
   const platformDir = join(layout.repoRoot, 'plugins', 'platforms', 'zalo');
   const toolsDir = join(layout.repoRoot, 'plugins', 'zalo_tools');
   add('zalo-platform', existsSync(join(platformDir, 'adapter.py')));
@@ -202,6 +251,9 @@ export function doctorHermes({ sidecarRoot, hermesHome, skipPython = false } = {
   const known = config?.known_plugin_toolsets?.zalo || [];
   add('config', Boolean(config) && enabled.includes(PLATFORM_KEY) && enabled.includes(TOOLS_KEY)
     && known.includes('zalo_owner') && known.includes('zalo_public'));
+  const sidecarToken = readBridgeToken(join(root, '.env'));
+  const hermesToken = config?.platforms?.zalo?.extra?.bridge_token;
+  add('bridge-token', Boolean(sidecarToken && hermesToken && sidecarToken === String(hermesToken)));
   add('sidecar-server', existsSync(join(root, 'server.js')));
   if (!skipPython) {
     const python = pythonPath(layout.repoRoot);
@@ -215,7 +267,7 @@ export async function installHermes({ sidecarRoot, hermesHome, skipPython = fals
   if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Cần Node.js 22 trở lên');
   const root = resolve(sidecarRoot);
   const layout = resolveHermesLayout({ hermesHome });
-  const token = ensureSidecarEnv(root);
+  const token = ensureSidecarEnv(root, layout.home);
   mkdirSync(join(root, 'data'), { recursive: true });
 
   const platformDestination = join(layout.repoRoot, 'plugins', 'platforms', 'zalo');
@@ -226,8 +278,8 @@ export async function installHermes({ sidecarRoot, hermesHome, skipPython = fals
   writeFileSync(manifestPath, renderPlatformManifest(readFileSync(manifestPath, 'utf8'), root), 'utf8');
 
   const currentConfig = existsSync(layout.configPath) ? readFileSync(layout.configPath, 'utf8') : '';
-  writeFileSync(layout.configPath, mergeHermesConfig(currentConfig, { bridgeToken: token }), 'utf8');
-  ensureWebsockets(layout.repoRoot, { skipPython });
+  atomicWriteText(layout.configPath, mergeHermesConfig(currentConfig, { bridgeToken: token }));
+  ensureWebsockets(layout.repoRoot, layout.home, { skipPython });
   const diagnosis = doctorHermes({ sidecarRoot: root, hermesHome: layout.home, skipPython });
   if (!diagnosis.ok) throw new Error(`Cài đặt chưa hoàn chỉnh: ${JSON.stringify(diagnosis.checks)}`);
   return diagnosis;

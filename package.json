@@ -6,10 +6,14 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "setup": "node scripts/setup.js"
+    "test": "node --test",
+    "setup": "node scripts/setup.js",
+    "install:hermes": "node scripts/install-hermes.js",
+    "doctor": "node scripts/doctor.js",
+    "uninstall:hermes": "node scripts/uninstall-hermes.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "keywords": [
     "zalo",

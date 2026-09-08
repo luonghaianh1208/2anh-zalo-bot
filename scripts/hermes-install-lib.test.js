@@ -26,7 +26,7 @@ function fixture(t) {
   mkdirSync(join(sidecar, 'hermes-plugin', 'zalo_tools'), { recursive: true });
   writeFileSync(join(sidecar, 'server.js'), '// fixture\n');
   writeFileSync(join(sidecar, '.env.example'), 'ZALO_BRIDGE_PORT=3873\n');
-  writeFileSync(join(sidecar, 'hermes-plugin', 'zalo', 'plugin.yaml'), 'name: zalo-platform\nstart_command: "node {{SIDECAR_SERVER}}"\n');
+  writeFileSync(join(sidecar, 'hermes-plugin', 'zalo', 'plugin.yaml'), 'name: zalo-platform\nstart_command: node "{{SIDECAR_SERVER}}"\n');
   writeFileSync(join(sidecar, 'hermes-plugin', 'zalo', 'adapter.py'), '# adapter\n');
   writeFileSync(join(sidecar, 'hermes-plugin', 'zalo_tools', 'plugin.yaml'), 'name: zalo-tools\n');
   writeFileSync(join(sidecar, 'hermes-plugin', 'zalo_tools', 'tools.py'), '# tools\n');
@@ -62,10 +62,11 @@ test('mergeHermesConfig adds safe defaults and preserves customer values', async
 
 test('renderPlatformManifest replaces the portable placeholder with a quoted absolute server path', (t) => {
   const fx = fixture(t);
-  const template = 'start_command: "node {{SIDECAR_SERVER}}"\n';
+  const template = 'start_command: node "{{SIDECAR_SERVER}}"\n';
   const rendered = renderPlatformManifest(template, fx.sidecar);
   assert.doesNotMatch(rendered, /SIDECAR_SERVER/);
-  assert.match(rendered, /node \\".*server\.js\\"/);
+  assert.match(rendered, /node ".*server\.js"/);
+  assert.doesNotMatch(rendered, /\\"/);
 });
 
 test('install is repeatable, installs both plugins, and preserves env and config', async (t) => {
@@ -75,9 +76,10 @@ test('install is repeatable, installs both plugins, and preserves env and config
   assert.equal(existsSync(join(fx.hermesRepo, 'plugins', 'platforms', 'zalo', 'adapter.py')), true);
   assert.equal(existsSync(join(fx.hermesRepo, 'plugins', 'zalo_tools', 'tools.py')), true);
   assert.match(readFileSync(join(fx.sidecar, '.env'), 'utf8'), /^ZALO_BRIDGE_TOKEN=[a-f0-9]{64}$/m);
+  assert.match(readFileSync(join(fx.sidecar, '.env'), 'utf8'), new RegExp(`^HERMES_HOME=${fx.hermesHome.replaceAll('\\', '/')}$`, 'm'));
   writeFileSync(join(fx.sidecar, '.env'), 'CUSTOM_SENTINEL=preserve\nZALO_BRIDGE_TOKEN=fixed-token\n');
   await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
-  assert.equal(readFileSync(join(fx.sidecar, '.env'), 'utf8'), 'CUSTOM_SENTINEL=preserve\nZALO_BRIDGE_TOKEN=fixed-token\n');
+  assert.match(readFileSync(join(fx.sidecar, '.env'), 'utf8'), /^CUSTOM_SENTINEL=preserve\nZALO_BRIDGE_TOKEN=fixed-token\nHERMES_HOME=/);
   assert.match(readFileSync(join(fx.hermesHome, 'config.yaml'), 'utf8'), /custom_value: keep-me/);
   const diagnosis = doctorHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
   assert.equal(diagnosis.ok, true, JSON.stringify(diagnosis.checks));
@@ -94,4 +96,14 @@ test('uninstall removes only managed plugin directories', async (t) => {
   assert.equal(existsSync(join(fx.hermesRepo, 'plugins', 'zalo_tools')), false);
   assert.equal(readFileSync(unrelated, 'utf8'), 'safe');
   assert.equal(existsSync(join(fx.sidecar, '.env')), true);
+});
+
+test('doctor fails when Hermes and sidecar bridge tokens drift apart', async (t) => {
+  const fx = fixture(t);
+  await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  const configPath = join(fx.hermesHome, 'config.yaml');
+  writeFileSync(configPath, readFileSync(configPath, 'utf8').replace(/bridge_token: .+/, 'bridge_token: wrong-token'));
+  const diagnosis = doctorHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  assert.equal(diagnosis.ok, false);
+  assert.equal(diagnosis.checks.find((check) => check.name === 'bridge-token').ok, false);
 });
