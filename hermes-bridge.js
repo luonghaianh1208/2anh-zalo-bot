@@ -515,14 +515,18 @@ export function extractMediaUrls(value) {
 function extractQuote(msg) {
   const quote = msg?.data?.quote || null;
   if (!quote || typeof quote !== 'object') return null;
+  let attachment = quote.attach;
+  if (typeof attachment === 'string' && attachment.trim()) {
+    try { attachment = JSON.parse(attachment); } catch { attachment = null; }
+  }
   return {
     id: quote.msgId ? String(quote.msgId) : (quote.globalMsgId ? String(quote.globalMsgId) : null),
     cliMsgId: quote.cliMsgId ? String(quote.cliMsgId) : null,
     authorId: quote.ownerId ? String(quote.ownerId) : null,
-    authorName: quote.ownerName || quote.dName || '',
-    text: extractText({ data: quote }),
-    msgType: quote.msgType || '',
-    mediaUrls: extractMediaUrls(quote),
+    authorName: quote.ownerName || quote.dName || quote.fromD || '',
+    text: String(quote.msg || extractText({ data: quote }) || ''),
+    msgType: quote.msgType || quote.cliMsgType || '',
+    mediaUrls: extractMediaUrls(attachment || quote),
     raw: quote,
   };
 }

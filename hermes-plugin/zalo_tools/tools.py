@@ -56,7 +56,8 @@ _CONFIRMATION_TTL_SECONDS = 300
 
 
 def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool,
-                     is_owner: bool, text: str = "") -> None:
+                     is_owner: bool, text: str = "", reply_msg_id: str = "",
+                     reply_cli_msg_id: str = "", reply_is_own: bool = False) -> None:
     """Adapter gọi trước khi đẩy tin vào agent.
 
     ``text`` là NGUYÊN VĂN tin nhắn người dùng vừa gõ, chưa qua tay mô hình.
@@ -71,6 +72,9 @@ def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool,
         "is_group": bool(is_group),
         "is_owner": bool(is_owner),
         "text": str(text or ""),
+        "reply_msg_id": str(reply_msg_id or ""),
+        "reply_cli_msg_id": str(reply_cli_msg_id or ""),
+        "reply_is_own": bool(reply_is_own),
     })
 
 
@@ -532,7 +536,20 @@ async def zalo_mute(args: Dict[str, Any], **_kw) -> str:
 #  Nhóm 4 — Sửa sai & quản trị nhóm
 # =====================================================================
 
+def _with_quoted_undo_target(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Use the replied-to bot message when undo IDs were omitted."""
+    resolved = dict(args)
+    if resolved.get("msg_id") or resolved.get("cli_msg_id"):
+        return resolved
+    turn = _turn()
+    if turn.get("reply_is_own") and turn.get("reply_msg_id") and turn.get("reply_cli_msg_id"):
+        resolved["msg_id"] = str(turn["reply_msg_id"])
+        resolved["cli_msg_id"] = str(turn["reply_cli_msg_id"])
+    return resolved
+
+
 async def zalo_undo(args: Dict[str, Any], **_kw) -> str:
+    args = _with_quoted_undo_target(args)
     thread_id, kind, err = _scoped_thread(args)
     if err:
         return err
@@ -1220,8 +1237,8 @@ def _schema(name: str, description: str, properties: Dict[str, Any], required: L
 
 
 _ZALO_ID = {
-    "type": ["string", "integer"],
-    "description": "ID Zalo; nhận chuỗi hoặc số và luôn chuẩn hóa thành chuỗi trước khi gọi zca-js.",
+    "type": "string",
+    "description": "ID Zalo dạng chuỗi; không dùng số vì ID dài sẽ bị JavaScript làm tròn.",
 }
 _ZALO_ID_LIST = {
     "type": "array",
@@ -1914,7 +1931,8 @@ def _confirmation_required(tool_name: str, args: Dict[str, Any]) -> bool:
 
 def _confirmed_action(handler, tool_name: str):
     async def guarded(args: Dict[str, Any], **kw) -> str:
-        required = _confirmation_required(tool_name, args)
+        call_args = dict(args)
+        required = _confirmation_required(tool_name, call_args)
         confirmed = False
         if required:
             turn = _turn()
@@ -1927,15 +1945,26 @@ def _confirmed_action(handler, tool_name: str):
             actor = str(turn.get("sender_uid") or "")
             thread = str(turn.get("thread_id") or "")
             key = (actor, thread, tool_name)
+            pending = _PENDING_CONFIRMATIONS.get(key)
+            if tool_name == "zalo_undo":
+                call_args = _with_quoted_undo_target(call_args)
+                if (pending and not call_args.get("msg_id") and not call_args.get("cli_msg_id")):
+                    previous = pending.get("arguments") or {}
+                    same_destination = all(
+                        str(call_args.get(name) or "") == str(previous.get(name) or "")
+                        for name in ("thread_id", "thread_kind")
+                    )
+                    if same_destination and previous.get("msg_id") and previous.get("cli_msg_id"):
+                        call_args["msg_id"] = previous["msg_id"]
+                        call_args["cli_msg_id"] = previous["cli_msg_id"]
             normalized_args = {
-                name: value for name, value in args.items()
+                name: value for name, value in call_args.items()
                 if name not in {"confirm", "confirmation_code"}
             }
             fingerprint = hashlib.sha256(
                 json.dumps(normalized_args, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
             ).hexdigest()
-            pending = _PENDING_CONFIRMATIONS.get(key)
-            supplied = str(args.get("confirmation_code") or "").strip().upper()
+            supplied = str(call_args.get("confirmation_code") or "").strip().upper()
             phrase = f"XÁC NHẬN {supplied}" if supplied else ""
             human_text = str(turn.get("text") or "").strip().upper()
             if (pending and supplied and secrets.compare_digest(supplied, pending["code"])
@@ -1948,6 +1977,7 @@ def _confirmed_action(handler, tool_name: str):
                     pending = {
                         "code": secrets.token_hex(3).upper(),
                         "fingerprint": fingerprint,
+                        "arguments": normalized_args,
                         "expires_at": now + _CONFIRMATION_TTL_SECONDS,
                     }
                     _PENDING_CONFIRMATIONS[key] = pending
@@ -1959,7 +1989,7 @@ def _confirmed_action(handler, tool_name: str):
                 }, ensure_ascii=False)
         token = _CONFIRMED.set(confirmed)
         try:
-            return await handler(args, **kw)
+            return await handler(call_args, **kw)
         finally:
             _CONFIRMED.reset(token)
 

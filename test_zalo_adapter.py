@@ -143,6 +143,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_quote_image_is_attached_and_reply_context_set(self):
         adapter = self.make_adapter()
         handled = []
+        dummy_tools = DummyZaloTools()
 
         async def handle(event):
             handled.append(event)
@@ -153,7 +154,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             return f"C:/cache/{url.rsplit('/', 1)[-1]}"
 
         with patch.object(zalo_adapter, "cache_image_from_url", side_effect=fake_cache), \
-                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+                patch.object(zalo_adapter, "_zalo_tools", return_value=dummy_tools):
             await adapter._on_message(
                 {
                     "type": "message",
@@ -166,9 +167,10 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                     "mentions": [{"uid": "bot-uid"}],
                     "quote": {
                         "id": "q1",
-                        "authorId": "u2",
-                        "authorName": "Anh",
+                        "authorId": "bot-uid",
+                        "authorName": "Lăng Tiêu",
                         "text": "",
+                        "cliMsgId": "qc1",
                         "mediaUrls": ["https://example.com/quoted.jpg"],
                     },
                 }
@@ -179,8 +181,12 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.media_urls, ["C:/cache/quoted.jpg"])
         self.assertEqual(event.reply_to_message_id, "q1")
         self.assertEqual(event.reply_to_text, "[Tin được reply có ảnh]")
-        self.assertEqual(event.reply_to_author_id, "u2")
-        self.assertEqual(event.reply_to_author_name, "Anh")
+        self.assertEqual(event.reply_to_author_id, "bot-uid")
+        self.assertEqual(event.reply_to_author_name, "Lăng Tiêu")
+        self.assertTrue(event.reply_to_is_own_message)
+        self.assertEqual(dummy_tools.context["reply_msg_id"], "q1")
+        self.assertEqual(dummy_tools.context["reply_cli_msg_id"], "qc1")
+        self.assertTrue(dummy_tools.context["reply_is_own"])
 
     async def test_inbound_dm_id_is_reused_as_dm_for_outbound_reply(self):
         adapter = self.make_adapter()
@@ -432,31 +438,46 @@ class ZaloToolSchemaTest(unittest.TestCase):
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 14)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 31)
 
-    def test_send_voice_accepts_numeric_zalo_thread_id(self):
+    def test_zalo_ids_remain_strings_through_hermes_argument_coercion(self):
+        import model_tools
+
+        original = "2054797107487294899"
+        schema = next(
+            schema for name, _emoji, schema, _handler, _toolset in zalo_tools.TOOLS
+            if name == "zalo_undo"
+        )
+        with patch.object(model_tools.registry, "get_schema", return_value=schema):
+            coerced = model_tools.coerce_tool_args("zalo_undo", {
+                "thread_id": original,
+                "thread_kind": "group",
+            })
+
+        self.assertEqual(coerced["thread_id"], original)
+        self.assertIsInstance(coerced["thread_id"], str)
+
+    def test_send_voice_requires_string_zalo_thread_id(self):
         schema = next(
             schema for name, _emoji, schema, _handler, _toolset in zalo_tools.TOOLS
             if name == "zalo_send_voice"
         )["parameters"]
 
         errors = list(Draft7Validator(schema).iter_errors({
-            "thread_id": 2054797107487294899,
+            "thread_id": "2054797107487294899",
             "thread_kind": "group",
             "url": "https://example.com/voice.aac",
         }))
 
         self.assertEqual(errors, [])
 
-    def test_all_zalo_id_fields_accept_numeric_ids(self):
+    def test_all_zalo_id_fields_are_declared_as_strings(self):
         for name, _emoji, schema, _handler, _toolset in zalo_tools.TOOLS:
             properties = schema["parameters"].get("properties", {})
             for key, spec in properties.items():
                 if not (key.endswith("_id") or key.endswith("_ids")):
                     continue
-                candidate = 9133571695356732407
-                value = [candidate] if spec.get("type") == "array" else candidate
-                errors = list(Draft7Validator(spec).iter_errors(value))
+                item_spec = spec.get("items") if spec.get("type") == "array" else spec
                 with self.subTest(tool=name, field=key):
-                    self.assertEqual(errors, [])
+                    self.assertEqual(item_spec.get("type"), "string")
 
     def test_dangerous_owner_tools_expose_human_confirmation_code(self):
         dangerous = {
@@ -683,6 +704,75 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.call, (
             "9133571695356732407", None, None, {"chat_type": "group"}, False,
         ))
+
+    async def test_undo_without_ids_targets_the_quoted_own_message(self):
+        class FakeAdapter:
+            async def undo_message(self, chat_id, msg_id=None, cli_msg_id=None, metadata=None, *, confirmed=False):
+                self.call = (chat_id, msg_id, cli_msg_id, metadata, confirmed)
+                return {"ok": True, "result": {"status": 0, "msgId": msg_id}}
+
+        fake = FakeAdapter()
+        zalo_tools._ACTIVE_ADAPTER = fake
+        quoted_turn = zalo_tools._TURN.set({
+            "sender_uid": "owner", "thread_id": "2054797107487294899",
+            "is_group": True, "is_owner": True, "text": "thu hồi tin nhắn này",
+            "reply_msg_id": "8240551224624", "reply_cli_msg_id": "1788864027075",
+            "reply_is_own": True,
+        })
+        try:
+            response = await zalo_tools.zalo_undo({
+                "thread_id": "2054797107487294899", "thread_kind": "group",
+            })
+        finally:
+            zalo_tools._TURN.reset(quoted_turn)
+
+        self.assertTrue(json.loads(response)["success"])
+        self.assertEqual(fake.call, (
+            "2054797107487294899", "8240551224624", "1788864027075",
+            {"chat_type": "group"}, False,
+        ))
+
+    async def test_undo_confirmation_keeps_the_quoted_target_on_the_later_turn(self):
+        class FakeAdapter:
+            def __init__(self):
+                self.calls = []
+
+            async def undo_message(self, chat_id, msg_id=None, cli_msg_id=None, metadata=None, *, confirmed=False):
+                self.calls.append((chat_id, msg_id, cli_msg_id, metadata, confirmed))
+                return {"ok": True, "result": {"status": 0, "msgId": msg_id}}
+
+        fake = FakeAdapter()
+        zalo_tools._ACTIVE_ADAPTER = fake
+        guarded = zalo_tools._confirmed_action(zalo_tools.zalo_undo, "zalo_undo")
+        args = {"thread_id": "2054797107487294899", "thread_kind": "group"}
+        first_turn = zalo_tools._TURN.set({
+            "sender_uid": "owner-quoted", "thread_id": "2054797107487294899",
+            "is_group": True, "is_owner": True, "text": "thu hồi tin nhắn này",
+            "reply_msg_id": "8240551224624", "reply_cli_msg_id": "1788864027075",
+            "reply_is_own": True,
+        })
+        try:
+            challenge = json.loads(await guarded(args))
+        finally:
+            zalo_tools._TURN.reset(first_turn)
+
+        second_turn = zalo_tools._TURN.set({
+            "sender_uid": "owner-quoted", "thread_id": "2054797107487294899",
+            "is_group": True, "is_owner": True,
+            "text": f'XÁC NHẬN {challenge["confirmation_code"]}',
+        })
+        try:
+            result = json.loads(await guarded({
+                **args, "confirmation_code": challenge["confirmation_code"],
+            }))
+        finally:
+            zalo_tools._TURN.reset(second_turn)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(fake.calls, [(
+            "2054797107487294899", "8240551224624", "1788864027075",
+            {"chat_type": "group"}, True,
+        )])
 
     async def test_confirmation_guard_requires_code_in_a_later_owner_message(self):
         class FakeAdapter:
