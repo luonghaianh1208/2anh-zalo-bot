@@ -16,9 +16,12 @@ nhóm) hoặc chạm tới tiền bạc cố tình bị bỏ ra ngoài.
 
 import contextvars
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import secrets
+import time
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -48,6 +51,8 @@ _TURN: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar
 _CONFIRMED: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "zalo_confirmed", default=False
 )
+_PENDING_CONFIRMATIONS: Dict[tuple, Dict[str, Any]] = {}
+_CONFIRMATION_TTL_SECONDS = 300
 
 
 def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool,
@@ -1876,21 +1881,22 @@ DANGEROUS_TOOL_NAMES = frozenset({
 })
 
 _CONFIRM_SCHEMA = {
-    "type": "boolean",
-    "const": True,
-    "description": "Phải là true sau khi chủ nhân xác nhận rõ thao tác này.",
+    "type": "string",
+    "pattern": "^[A-F0-9]{6}$",
+    "description": "Mã sáu ký tự do lần gọi trước trả về; chủ nhân phải gửi lại mã trong tin nhắn XÁC NHẬN.",
 }
 
-# `detail` của zalo_group_link chỉ đọc nên confirm là tuỳ chọn; hai action
-# `enable` và `disable` được kiểm tra lúc thực thi. Các tool còn lại trong
-# danh sách đều luôn tạo thay đổi nguy hiểm nên schema bắt buộc confirm=true.
+# `detail` của zalo_group_link chỉ đọc nên không cần mã; hai action `enable`
+# và `disable` được kiểm tra lúc thực thi. Mã không bắt buộc ở schema vì lần
+# gọi đầu tiên phải tạo challenge thay vì bị JSON Schema chặn trước handler.
 for _name, _emoji, _tool_schema, _handler, _toolset in TOOLS:
     if _name not in DANGEROUS_TOOL_NAMES:
         continue
     _parameters = _tool_schema["parameters"]
-    _parameters.setdefault("properties", {})["confirm"] = dict(_CONFIRM_SCHEMA)
-    if _name != "zalo_group_link" and "confirm" not in _parameters["required"]:
-        _parameters["required"].append("confirm")
+    _properties = _parameters.setdefault("properties", {})
+    _properties.pop("confirm", None)
+    _properties["confirmation_code"] = dict(_CONFIRM_SCHEMA)
+    _parameters["required"] = [item for item in _parameters["required"] if item != "confirm"]
 
 
 # Hai công cụ này chỉ chạy trong tin nhắn riêng. Trong nhóm, tin của mọi thành
@@ -1909,9 +1915,49 @@ def _confirmation_required(tool_name: str, args: Dict[str, Any]) -> bool:
 def _confirmed_action(handler, tool_name: str):
     async def guarded(args: Dict[str, Any], **kw) -> str:
         required = _confirmation_required(tool_name, args)
-        if required and args.get("confirm") is not True:
-            return _err("thao tác này cần chủ nhân xác nhận rõ bằng confirm=true")
-        token = _CONFIRMED.set(bool(required and args.get("confirm") is True))
+        confirmed = False
+        if required:
+            turn = _turn()
+            if not turn.get("is_owner"):
+                return _err("thao tác này chỉ chủ nhân mới được xác nhận")
+            now = time.monotonic()
+            for pending_key, pending in list(_PENDING_CONFIRMATIONS.items()):
+                if pending["expires_at"] <= now:
+                    _PENDING_CONFIRMATIONS.pop(pending_key, None)
+            actor = str(turn.get("sender_uid") or "")
+            thread = str(turn.get("thread_id") or "")
+            key = (actor, thread, tool_name)
+            normalized_args = {
+                name: value for name, value in args.items()
+                if name not in {"confirm", "confirmation_code"}
+            }
+            fingerprint = hashlib.sha256(
+                json.dumps(normalized_args, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+            ).hexdigest()
+            pending = _PENDING_CONFIRMATIONS.get(key)
+            supplied = str(args.get("confirmation_code") or "").strip().upper()
+            phrase = f"XÁC NHẬN {supplied}" if supplied else ""
+            human_text = str(turn.get("text") or "").strip().upper()
+            if (pending and supplied and secrets.compare_digest(supplied, pending["code"])
+                    and secrets.compare_digest(fingerprint, pending["fingerprint"])
+                    and phrase == human_text):
+                _PENDING_CONFIRMATIONS.pop(key, None)
+                confirmed = True
+            else:
+                if not pending or pending["fingerprint"] != fingerprint:
+                    pending = {
+                        "code": secrets.token_hex(3).upper(),
+                        "fingerprint": fingerprint,
+                        "expires_at": now + _CONFIRMATION_TTL_SECONDS,
+                    }
+                    _PENDING_CONFIRMATIONS[key] = pending
+                return json.dumps({
+                    "success": False,
+                    "error": f"Cần chủ nhân gửi một tin nhắn mới: XÁC NHẬN {pending['code']}",
+                    "confirmation_required": True,
+                    "confirmation_code": pending["code"],
+                }, ensure_ascii=False)
+        token = _CONFIRMED.set(confirmed)
         try:
             return await handler(args, **kw)
         finally:

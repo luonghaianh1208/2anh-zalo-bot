@@ -80,6 +80,8 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 
 Việc phân nhóm toolset chỉ *giấu* công cụ khỏi danh sách. Rào chắn thật nằm ở tầng thực thi: mỗi công cụ thuộc nhóm chủ nhân được bọc một lớp kiểm tra danh tính người gửi, nên dù công cụ có lọt vào danh sách vì cấu hình sai thì người ngoài gọi vẫn bị từ chối.
 
+Các thao tác nguy hiểm như thu hồi tin, đổi tên nhóm, sửa thành viên hoặc quyền phó nhóm còn cần xác nhận hai lượt. Agent trả một mã sáu ký tự; chủ nhân phải gửi một tin nhắn mới đúng nguyên câu `XÁC NHẬN <MÃ>` trong vòng 5 phút. Mã được khóa theo UID chủ nhân, cuộc trò chuyện, công cụ và đúng bộ tham số nên không thể dùng lại cho người, nhóm hay thao tác khác.
+
 ### Tra cứu Internet
 
 Hai công cụ web là **bản bọc** của `web_search`/`web_extract` chứ không cấp thẳng. Lý do: mọi toolset sẵn có chứa chúng (`debugging`, `coding`) đều kèm luôn `terminal` và `read_file` — cấp một cái là cấp cả cụm.

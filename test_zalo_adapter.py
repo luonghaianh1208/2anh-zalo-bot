@@ -458,7 +458,7 @@ class ZaloToolSchemaTest(unittest.TestCase):
                 with self.subTest(tool=name, field=key):
                     self.assertEqual(errors, [])
 
-    def test_dangerous_owner_tools_require_literal_confirmation(self):
+    def test_dangerous_owner_tools_expose_human_confirmation_code(self):
         dangerous = {
             "zalo_lock_poll", "zalo_pin_conversation", "zalo_mute", "zalo_undo",
             "zalo_rename_group", "zalo_group_member_change", "zalo_group_deputy",
@@ -469,11 +469,8 @@ class ZaloToolSchemaTest(unittest.TestCase):
         schemas = {name: schema["parameters"] for name, _emoji, schema, _handler, _toolset in zalo_tools.TOOLS}
         for name in dangerous:
             with self.subTest(tool=name):
-                if name == "zalo_group_link":
-                    self.assertNotIn("confirm", schemas[name]["required"])
-                else:
-                    self.assertIn("confirm", schemas[name]["required"])
-                self.assertEqual(schemas[name]["properties"]["confirm"].get("const"), True)
+                self.assertNotIn("confirmation_code", schemas[name]["required"])
+                self.assertEqual(schemas[name]["properties"]["confirmation_code"]["type"], "string")
 
 
 class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
@@ -687,7 +684,7 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
             "9133571695356732407", None, None, {"chat_type": "group"}, False,
         ))
 
-    async def test_confirmation_guard_rejects_missing_flag_and_propagates_true(self):
+    async def test_confirmation_guard_requires_code_in_a_later_owner_message(self):
         class FakeAdapter:
             def __init__(self):
                 self.calls = []
@@ -701,18 +698,82 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
         guarded = zalo_tools._confirmed_action(
             zalo_tools.zalo_group_member_change, "zalo_group_member_change",
         )
-        denied = await guarded({
-            "group_id": "g1", "user_ids": ["u1"], "action": "remove",
+        args = {"group_id": "g1", "user_ids": ["u1"], "action": "remove"}
+        first_turn = zalo_tools._TURN.set({
+            "sender_uid": "owner", "thread_id": "dm-owner", "is_group": False,
+            "is_owner": True, "text": "xóa u1 khỏi nhóm g1",
         })
-        allowed = await guarded({
-            "group_id": "g1", "user_ids": ["u1"], "action": "remove", "confirm": True,
+        try:
+            challenge = json.loads(await guarded(args))
+            same_turn = json.loads(await guarded({**args, "confirmation_code": challenge["confirmation_code"]}))
+        finally:
+            zalo_tools._TURN.reset(first_turn)
+        second_turn = zalo_tools._TURN.set({
+            "sender_uid": "owner", "thread_id": "dm-owner", "is_group": False,
+            "is_owner": True, "text": f'XÁC NHẬN {challenge["confirmation_code"]}',
         })
+        try:
+            allowed = json.loads(await guarded({**args, "confirmation_code": challenge["confirmation_code"]}))
+        finally:
+            zalo_tools._TURN.reset(second_turn)
 
-        self.assertFalse(json.loads(denied)["success"])
-        self.assertTrue(json.loads(allowed)["success"])
+        self.assertFalse(challenge["success"])
+        self.assertFalse(same_turn["success"])
+        self.assertTrue(allowed["success"])
         self.assertEqual(fake.calls, [
             ("removeUserFromGroup", [["u1"], "g1"], True),
         ])
+
+    async def test_confirmation_code_rejects_negation_and_changed_arguments(self):
+        class FakeAdapter:
+            def __init__(self):
+                self.calls = []
+
+            async def invoke(self, method, params, *, confirmed=False):
+                self.calls.append((method, params, confirmed))
+                return {"ok": True, "result": {"status": 0}}
+
+        fake = FakeAdapter()
+        previous_adapter = zalo_tools._ACTIVE_ADAPTER
+        zalo_tools._ACTIVE_ADAPTER = fake
+        guarded = zalo_tools._confirmed_action(
+            zalo_tools.zalo_group_member_change, "zalo_group_member_change",
+        )
+        args = {"group_id": "g1", "user_ids": ["u1"], "action": "remove"}
+        first_turn = zalo_tools._TURN.set({
+            "sender_uid": "owner-2", "thread_id": "dm-owner-2", "is_group": False,
+            "is_owner": True, "text": "xóa u1 khỏi nhóm g1",
+        })
+        try:
+            challenge = json.loads(await guarded(args))
+        finally:
+            zalo_tools._TURN.reset(first_turn)
+        code = challenge["confirmation_code"]
+
+        negated_turn = zalo_tools._TURN.set({
+            "sender_uid": "owner-2", "thread_id": "dm-owner-2", "is_group": False,
+            "is_owner": True, "text": f"KHÔNG XÁC NHẬN {code}",
+        })
+        try:
+            negated = json.loads(await guarded({**args, "confirmation_code": code}))
+        finally:
+            zalo_tools._TURN.reset(negated_turn)
+
+        changed_turn = zalo_tools._TURN.set({
+            "sender_uid": "owner-2", "thread_id": "dm-owner-2", "is_group": False,
+            "is_owner": True, "text": f"XÁC NHẬN {code}",
+        })
+        try:
+            changed = json.loads(await guarded({
+                **args, "group_id": "g2", "confirmation_code": code,
+            }))
+        finally:
+            zalo_tools._TURN.reset(changed_turn)
+            zalo_tools._ACTIVE_ADAPTER = previous_adapter
+
+        self.assertFalse(negated["success"])
+        self.assertFalse(changed["success"])
+        self.assertEqual(fake.calls, [])
 
 
 if __name__ == "__main__":

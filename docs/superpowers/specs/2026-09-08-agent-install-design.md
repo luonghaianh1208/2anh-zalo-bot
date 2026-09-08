@@ -89,6 +89,7 @@ It never starts the sidecar, starts or restarts Hermes, connects to Zalo, sends 
 - The package requires Node.js 22+ because durable storage uses `node:sqlite`.
 - Installation does not expose dashboard or bridge ports beyond loopback.
 - Installation does not weaken public/owner authorization.
+- Dangerous owner actions require a fresh six-character challenge confirmed by an exact later owner message; the challenge is bound to actor, thread, tool, and arguments and expires after five minutes.
 - The separately identified bridge authentication and runtime security findings must be resolved before a public release; installer convenience is not treated as security readiness.
 - No service restart, Zalo login, message send, or GitHub push occurs automatically.
 
