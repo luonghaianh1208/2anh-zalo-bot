@@ -57,7 +57,7 @@ function layoutFromCandidate(candidate) {
 
 export function resolveHermesLayout({ hermesHome = null, env = process.env, cwd = process.cwd() } = {}) {
   const explicit = hermesHome || env.HERMES_HOME;
-  if (explicit) {
+  if (explicit && explicit.length > 0) {
     const layout = layoutFromCandidate(explicit);
     if (layout) return layout;
     throw new Error(`Không tìm thấy Hermes Agent hợp lệ tại: ${resolve(explicit)}`);

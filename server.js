@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
+import { loadRepoEnv, loadHermesEnv } from './scripts/setup-env.js';
 import { Zalo, LoginQRCallbackEventType } from 'zca-js';
 import { tryReconnect, saveSession, clearSession, fetchProfile } from './auth.js';
 import { setupBotListener } from './bot-handler.js';
@@ -15,7 +16,8 @@ import { importLegacyHermesHistory } from './legacy-history-import.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 try {
-  loadEnvFile(join(__dirname, '.env'));
+  loadRepoEnv(join(__dirname, '.env'));
+  loadHermesEnv();
 } catch (error) {
   if (error?.code !== 'ENOENT') throw error;
 }
