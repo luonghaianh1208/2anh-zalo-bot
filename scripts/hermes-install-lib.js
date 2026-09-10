@@ -81,7 +81,7 @@ function setDefault(parent, key, value) {
   if (parent[key] === undefined) parent[key] = value;
 }
 
-export function mergeHermesConfig(text, { bridgeToken, vieneu = null } = {}) {
+export function mergeHermesConfig(text, { bridgeToken, vieneu = null, styleGuide = null } = {}) {
   const config = parse(text || '') || {};
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error('config.yaml phải chứa một YAML mapping ở cấp cao nhất');
@@ -107,6 +107,13 @@ export function mergeHermesConfig(text, { bridgeToken, vieneu = null } = {}) {
   setDefault(extra, 'bridge_url', 'ws://127.0.0.1:3873');
   setDefault(extra, 'reply_only_tagged', true);
   if (bridgeToken) extra.bridge_token = bridgeToken;
+
+  if (styleGuide) {
+    const hints = ensureObject(ensureObject(config, 'platform_hints'), 'zalo');
+    // Không đè: khách có thể đã tự viết giọng điệu riêng, chỉ ghi khi trống.
+    const existingAppend = typeof hints.append === 'string' ? hints.append.trim() : '';
+    if (existingAppend === '') hints.append = styleGuide;
+  }
 
   const display = ensureObject(ensureObject(ensureObject(config, 'display'), 'platforms'), 'zalo');
   setDefault(display, 'tool_progress', 'off');
@@ -318,6 +325,16 @@ function ensureWebsockets(repoRoot, hermesHome, { skipPython = false } = {}) {
   return { python };
 }
 
+function styleGuidePath(sidecarRoot) {
+  return join(resolve(sidecarRoot), 'hermes-plugin', 'zalo-style-guide.md');
+}
+
+function readStyleGuide(sidecarRoot) {
+  const source = styleGuidePath(sidecarRoot);
+  if (!existsSync(source)) throw new Error(`Thiếu hướng dẫn trình bày Zalo trong bộ cài: ${source}`);
+  return readFileSync(source, 'utf8').trim();
+}
+
 function configObject(configPath) {
   try { return parse(readFileSync(configPath, 'utf8')) || {}; } catch { return null; }
 }
@@ -351,6 +368,17 @@ export function doctorHermes({
   const known = config?.known_plugin_toolsets?.zalo || [];
   add('config', Boolean(config) && enabled.includes(PLATFORM_KEY) && enabled.includes(TOOLS_KEY)
     && known.includes('zalo_owner') && known.includes('zalo_public'));
+  const configuredAppend = config?.platform_hints?.zalo?.append;
+  const hasAppend = typeof configuredAppend === 'string' && configuredAppend.trim() !== '';
+  if (!hasAppend) {
+    add('style-guide', false, 'chưa có platform_hints.zalo.append — chạy lại install:hermes để ghi hướng dẫn mặc định');
+  } else {
+    const canonical = existsSync(styleGuidePath(root)) ? readFileSync(styleGuidePath(root), 'utf8').trim() : null;
+    const isDefault = canonical !== null && configuredAppend.trim() === canonical;
+    add('style-guide', true, isDefault
+      ? 'đã ghi hướng dẫn trình bày mặc định'
+      : 'khách đang dùng bản hướng dẫn riêng — giữ nguyên');
+  }
   const sidecarToken = readBridgeToken(join(root, '.env'));
   const hermesToken = config?.platforms?.zalo?.extra?.bridge_token;
   add('bridge-token', Boolean(sidecarToken && hermesToken && sidecarToken === String(hermesToken)));
@@ -400,8 +428,9 @@ export async function installHermes({
   writeFileSync(manifestPath, renderPlatformManifest(readFileSync(manifestPath, 'utf8'), root), 'utf8');
 
   const vieneu = vieneuTts ? ensureVieneu(root, layout, { skipPython, commandProbe }) : null;
+  const styleGuide = readStyleGuide(root);
   const currentConfig = existsSync(layout.configPath) ? readFileSync(layout.configPath, 'utf8') : '';
-  atomicWriteText(layout.configPath, mergeHermesConfig(currentConfig, { bridgeToken: token, vieneu }));
+  atomicWriteText(layout.configPath, mergeHermesConfig(currentConfig, { bridgeToken: token, vieneu, styleGuide }));
   ensureWebsockets(layout.repoRoot, layout.home, { skipPython });
   const diagnosis = doctorHermes({
     sidecarRoot: root,

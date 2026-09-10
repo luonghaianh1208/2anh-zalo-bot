@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 
 import {
   parseCliArgs,
@@ -35,6 +35,7 @@ function fixture(t) {
   writeFileSync(join(sidecar, 'hermes-plugin', 'zalo_tools', 'plugin.yaml'), 'name: zalo-tools\n');
   writeFileSync(join(sidecar, 'hermes-plugin', 'zalo_tools', 'tools.py'), '# tools\n');
   writeFileSync(join(sidecar, 'tts', 'vieneu_provider.py'), '# vieneu provider\n');
+  writeFileSync(join(sidecar, 'hermes-plugin', 'zalo-style-guide.md'), '# Hướng dẫn trình bày Zalo\n\nNội dung mặc định dùng cho kiểm thử.\n');
   mkdirSync(join(hermesRepo, 'plugins', 'platforms'), { recursive: true });
   mkdirSync(join(hermesRepo, 'gateway'), { recursive: true });
   writeFileSync(join(hermesRepo, 'pyproject.toml'), '[project]\nname="hermes-agent"\n');
@@ -228,4 +229,43 @@ test('doctor fails when Hermes and sidecar bridge tokens drift apart', async (t)
   const diagnosis = doctorHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
   assert.equal(diagnosis.ok, false);
   assert.equal(diagnosis.checks.find((check) => check.name === 'bridge-token').ok, false);
+});
+
+test('install lần đầu ghi hướng dẫn trình bày mặc định vào platform_hints.zalo.append', async (t) => {
+  const fx = fixture(t);
+  await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  const config = parse(readFileSync(join(fx.hermesHome, 'config.yaml'), 'utf8'));
+  const guide = readFileSync(join(fx.sidecar, 'hermes-plugin', 'zalo-style-guide.md'), 'utf8').trim();
+  assert.equal(config.platform_hints.zalo.append, guide);
+});
+
+test('install không đè lên platform_hints.zalo.append mà khách đã tự viết', async (t) => {
+  const fx = fixture(t);
+  const customerText = 'Giọng điệu tự viết của khách — trang trọng, xưng "em", chào khi vào nhóm mới.';
+  writeFileSync(
+    join(fx.hermesHome, 'config.yaml'),
+    `platform_hints:\n  zalo:\n    append: ${JSON.stringify(customerText)}\n`,
+  );
+  await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  const config = parse(readFileSync(join(fx.hermesHome, 'config.yaml'), 'utf8'));
+  assert.equal(config.platform_hints.zalo.append, customerText);
+});
+
+test('doctor báo đúng mục style-guide: đã ghi bản mặc định rồi báo khách đang dùng bản riêng', async (t) => {
+  const fx = fixture(t);
+  await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  let diagnosis = doctorHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  let check = diagnosis.checks.find((c) => c.name === 'style-guide');
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /mặc định/);
+
+  const configPath = join(fx.hermesHome, 'config.yaml');
+  const config = parse(readFileSync(configPath, 'utf8'));
+  config.platform_hints.zalo.append = 'Giọng điệu riêng của khách, không phải bản mặc định.';
+  writeFileSync(configPath, stringify(config));
+
+  diagnosis = doctorHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  check = diagnosis.checks.find((c) => c.name === 'style-guide');
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /riêng/);
 });
