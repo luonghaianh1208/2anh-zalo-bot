@@ -353,7 +353,7 @@ Hermes cứ viết Markdown như bình thường; cầu nối dịch sang địn
 | `*nghiêng*` `> trích dẫn` | in nghiêng |
 | `~~gạch~~` | gạch ngang |
 | `[chữ](link)` | chữ (link) |
-| `[đỏ]…[/đỏ]` · `[xanh]` `[cam]` `[vàng]` | đổi màu chữ |
+| `[red]…[/red]` · `[do]` · `[green]` · `[xanh]` · `[orange]` · `[cam]` · `[yellow]` · `[vang]` | đổi màu chữ |
 
 ### Hai giới hạn của Zalo phải biết
 

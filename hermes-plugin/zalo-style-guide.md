@@ -22,7 +22,7 @@ Giống thể thức công văn hành chính Việt Nam — người đọc quen
 
 Dùng **màu đỏ cho chỗ cần nhấn mạnh**. Cú pháp: `[red]…[/red]`.
 
-Mã còn hỗ trợ `[green]`, `[orange]`, `[yellow]` (bí danh tiếng Việt không dấu: `[xanh]`, `[cam]`, `[vang]`) nhưng **không có quy ước dùng cố định** — tuỳ ngữ cảnh mà chọn, đừng lạm dụng. Màu dùng nhiều thì mất tác dụng nhấn mạnh, tin nhắn nhìn rối thay vì rõ.
+Mã còn hỗ trợ `[red]`/`[do]`, `[green]`/`[xanh]`, `[orange]`/`[cam]`, `[yellow]`/`[vang]` (cú pháp tiếng Anh / bí danh Việt không dấu) nhưng **không có quy ước dùng cố định** — tuỳ ngữ cảnh mà chọn, đừng lạm dụng. Màu dùng nhiều thì mất tác dụng nhấn mạnh, tin nhắn nhìn rối thay vì rõ.
 
 Lưu ý chính tả: viết đúng `[red]`/`[xanh]`/`[cam]`/`[vang]` như trên. Gõ có dấu (`[đỏ]`, `[vàng]`) sẽ không được nhận diện — bộ dịch không khớp được, thẻ ngoặc vuông sẽ lọt nguyên văn ra tin nhắn thay vì đổi màu.
 
