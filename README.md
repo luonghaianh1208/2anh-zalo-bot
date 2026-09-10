@@ -137,7 +137,20 @@ A Zalo UID is normally a long 17–21 digit value and is not a phone number.
 
 ## Agent tools
 
-The integration exposes tools for sending rich content; reading history, groups, members, friends, and user information; managing polls, notes, reminders, and groups; recalling bot messages; safe knowledge-base reading; and restricted public web lookup.
+45 tools total, split into two toolsets: 31 owner-only, 14 shared with everyone in a group. `ZALO_ALLOWED_USERS` decides who counts as the owner.
+
+| Group | Tools |
+|---|---|
+| Facebook Page | `zalo_fb_pages` `zalo_fb_posts` `zalo_fb_comments` `zalo_fb_draft` `zalo_fb_publish` |
+| Send content | `zalo_send_file` `zalo_send_voice` `zalo_send_sticker` `zalo_send_link` `zalo_forward` |
+| Read context | `zalo_read_history` `zalo_list_groups` `zalo_group_members` `zalo_find_user` `zalo_user_info` `zalo_list_friends` |
+| Zalo-specific | `zalo_create_poll` `zalo_poll_detail` `zalo_lock_poll` `zalo_create_note` `zalo_create_reminder` `zalo_list_reminders` `zalo_remove_reminder` `zalo_pin_conversation` `zalo_mute` |
+| Fix mistakes & administration | `zalo_undo` `zalo_rename_group` `zalo_group_member_change` `zalo_group_deputy` `zalo_pending_members` `zalo_review_member` |
+| Create groups & invites | `zalo_create_group` `zalo_invite_to_groups` `zalo_group_link` `zalo_join_group_link` |
+| Bot profile | `zalo_set_bio` `zalo_set_active_status` |
+| Knowledge base | `zalo_kb_list` `zalo_kb_read` |
+| Web lookup | `zalo_web_search` `zalo_web_read` |
+| People notebook | `zalo_remember_person` `zalo_recall_person` `zalo_list_people` `zalo_forget_person` |
 
 The bridge accepts only allowlisted `zca-js` operations. High-risk automation such as bulk friend requests, blocking users, dissolving groups, or money-related operations is deliberately excluded.
 

@@ -54,12 +54,16 @@ Trước đây *có* một bộ não Node dự phòng gọi thẳng LLM. Đã b�
 
 | Nhóm | Công cụ |
 |---|---|
+| Fanpage Facebook | `zalo_fb_pages` `zalo_fb_posts` `zalo_fb_comments` `zalo_fb_draft` `zalo_fb_publish` |
 | Gửi nội dung | `zalo_send_file` `zalo_send_voice` `zalo_send_sticker` `zalo_send_link` `zalo_forward` |
 | Đọc ngữ cảnh | `zalo_read_history` `zalo_list_groups` `zalo_group_members` `zalo_find_user` `zalo_user_info` `zalo_list_friends` |
 | Riêng của Zalo | `zalo_create_poll` `zalo_poll_detail` `zalo_lock_poll` `zalo_create_note` `zalo_create_reminder` `zalo_list_reminders` `zalo_remove_reminder` `zalo_pin_conversation` `zalo_mute` |
 | Sửa sai & quản trị | `zalo_undo` `zalo_rename_group` `zalo_group_member_change` `zalo_group_deputy` `zalo_pending_members` `zalo_review_member` |
 | Lập nhóm & lời mời | `zalo_create_group` `zalo_invite_to_groups` `zalo_group_link` `zalo_join_group_link` |
 | Hồ sơ bot | `zalo_set_bio` `zalo_set_active_status` |
+| Kho tài liệu | `zalo_kb_list` `zalo_kb_read` |
+| Tra cứu Internet | `zalo_web_search` `zalo_web_read` |
+| Sổ người quen | `zalo_remember_person` `zalo_recall_person` `zalo_list_people` `zalo_forget_person` |
 
 Ví dụ: *"Tạo bình chọn trong nhóm Tổ Hoá hỏi thứ mấy họp được, ba phương án thứ 3, 5, 7"* — agent tự gọi `zalo_list_groups` rồi `zalo_create_poll`.
 
