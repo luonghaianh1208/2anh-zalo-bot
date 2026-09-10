@@ -230,7 +230,9 @@ hermes plugins enable platforms/zalo
 hermes plugins enable zalo-tools
 ```
 
-**Bước 3 — khai báo cấu hình Zalo** trong `config.yaml` của Hermes:
+**Bước 3 — khai báo cấu hình Zalo** trong `config.yaml` của Hermes.
+
+`npm run install:hermes` đã tự làm mục 1 và 2 dưới đây (xem `mergeHermesConfig` trong `scripts/hermes-install-lib.js:84-134`): tự thêm `known_plugin_toolsets.zalo` gồm `zalo_owner` + `zalo_public` nếu còn thiếu, và tự ghi `display.platforms.zalo` (`tool_progress: "off"`, `long_running_notifications: false`, `busy_ack_detail: false`, `show_reasoning: false`, cùng vài khoá khác) mà không đè lên giá trị bạn đã chỉnh tay. Chỉ cần tự gõ YAML dưới đây khi cài **thủ công** (không chạy `install:hermes`) hoặc khi trình cài báo lỗi lúc cập nhật `config.yaml`:
 
 ```yaml
 # 1. Khai báo toolset là "đã biết" để Hermes không tự cấp quyền chủ cho người lạ:
@@ -258,7 +260,9 @@ platform_hints:
       cho ăn nhập. Khi tư vấn: kiên nhẫn, giải thích chi tiết, hỏi lại cho rõ nhu cầu.
 ```
 
-Bước này bắt buộc, không phải tuỳ chọn. Hermes mặc định **bật** mọi toolset plugin mà nó chưa từng thấy; thiếu khai báo thì `zalo_owner` — bộ công cụ dành riêng chủ nhân — được cấp cho cả người lạ nhắn vào nhóm, dù adapter đã giới hạn. Đồng thời cấu hình `display.platforms.zalo` giúp các bong bóng tin nhắn trong nhóm luôn sạch sẽ, không bị bắn rác thông báo hệ thống.
+Mục 1 và 2 quan trọng dù đã tự động, nên vẫn cần hiểu vì sao: Hermes mặc định **bật** mọi toolset plugin mà nó chưa từng thấy; thiếu khai báo thì `zalo_owner` — bộ công cụ dành riêng chủ nhân — được cấp cho cả người lạ nhắn vào nhóm, dù adapter đã giới hạn. Đồng thời cấu hình `display.platforms.zalo` giúp các bong bóng tin nhắn trong nhóm luôn sạch sẽ, không bị bắn rác thông báo hệ thống. Việc trình cài tự làm hai mục này không phải để bạn khỏi quan tâm — nếu tự cài thủ công mà bỏ sót, hệ quả bảo mật vẫn y như trên.
+
+Mục 3 (tính cách, `platform_hints.zalo.append`) là tuỳ chọn và trình cài **không** tự viết hộ — mặc định Hermes không có persona này, nên nếu muốn giọng điệu như trên thì luôn phải tự thêm, dù cài kiểu nào.
 
 **Bước 4 — thêm UID** vào file `.env` **của Hermes** (`%LOCALAPPDATA%\hermes\.env` trên Windows, `~/.hermes/.env` trên Linux/macOS):
 
@@ -360,12 +364,13 @@ Khi vẫn quá ngân sách, `capStyles` giữ lại theo mức quan trọng: ti�
 
 ## API
 
-Chỉ còn đúng ba route mà trang quét QR cần. Sáu route khác (đọc/ghi cấu hình, liệt kê nhóm, gửi tin tay) đã bị xoá: không giao diện nào gọi chúng, chúng không có xác thực, và hai trong số đó gửi được tin nhắn hoặc ghi đè cấu hình.
+Chỉ còn đúng bốn route mà trang quét QR và giám sát runtime cần. Sáu route khác (đọc/ghi cấu hình, liệt kê nhóm, gửi tin tay) đã bị xoá: không giao diện nào gọi chúng, chúng không có xác thực, và hai trong số đó gửi được tin nhắn hoặc ghi đè cấu hình.
 
 | Đường dẫn | Việc |
 |---|---|
 | `GET /api/status` | Trạng thái đăng nhập, chế độ, đã cắm Hermes chưa |
 | `POST /api/qr/start` | Bắt đầu đăng nhập QR |
+| `GET /api/health` | Ảnh chụp sức khoẻ runtime: trạng thái tổng (`healthy`/`degraded`/`unhealthy`), thời gian chạy, trạng thái phiên Zalo, số client bridge đang gắn và có client nào "nguội" không, tình trạng SQLite, tiến trình backfill, mốc thời gian tin gửi/nhận gần nhất, lỗi gần nhất, và `authorization.ownerConfigured` — có `ZALO_ALLOWED_USERS` hợp lệ hay chưa |
 | `POST /api/logout` | Đăng xuất, xoá phiên |
 
 Cổng WebSocket `3873` là giao thức riêng giữa sidecar và Hermes: `hello`, `message`, `ack` đi từ sidecar ra; `send`, `typing`, `ack_message`, `invoke` đi từ Hermes vào.
