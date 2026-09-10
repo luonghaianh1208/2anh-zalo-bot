@@ -119,6 +119,31 @@ async function handleIncomingMessage(api, msg) {
     return;
   }
 
+  // Cài mới chưa có allowlist nên gateway chưa thể nhìn thấy lệnh này. Chỉ tiết
+  // lộ UID của chính người nhắn; tuyệt đối không ghi .env hay tự cấp quyền chủ.
+  if (!isGroup && senderUid && content.toLowerCase() === '/sethome') {
+    try {
+      await sendSystemNotice({
+        api,
+        threadId,
+        threadType,
+        text: [
+          `UID Zalo của bạn: ${senderUid}`,
+          '',
+          'Lệnh này chỉ tiết lộ UID và chưa cấp quyền chủ cho bạn.',
+          'Thêm vào .env của Hermes:',
+          `ZALO_ALLOWED_USERS=${senderUid}`,
+          `ZALO_HOME_CHANNEL=${senderUid}  (tuỳ chọn)`,
+          '',
+          'Sau đó khởi động lại sidecar, rồi start/restart Hermes gateway.',
+        ].join('\n'),
+      });
+    } catch (err) {
+      console.error('[bot] không gửi được UID bootstrap:', err?.message || err);
+    }
+    return;
+  }
+
   // Hermes chưa cắm. Chỉ báo cho người thật sự đang gọi bot — người khác nói
   // chuyện với nhau trong nhóm thì không việc gì phải nghe.
   if (!isAddressedToBot(msg, isGroup, senderUid)) {
