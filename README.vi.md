@@ -29,6 +29,26 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 
 ---
 
+## Vì sao chọn bản này
+
+1. **Không phải chatbot riêng — là chính Hermes.** Bot dùng chung tools, trí nhớ, skills và cron với agent đang chạy trên máy chủ nhân. Nhắn Zalo là nói chuyện với đúng agent đó, ngang hàng Telegram, Discord, Slack trong Hermes.
+
+2. **Phân quyền hai lớp, không phải một.** Việc chia `zalo_owner`/`zalo_public` chỉ giấu công cụ khỏi danh sách hiển thị cho mô hình. Rào chắn thật nằm ở `_owner_only` trong `hermes-plugin/zalo_tools/tools.py` — mỗi công cụ chủ nhân được kiểm danh tính người gửi ngay tại thời điểm gọi, nên cấu hình sai cũng không lọt.
+
+3. **Xác nhận hai bước bằng mã thật cho thao tác nguy hiểm.** Thu hồi tin, đổi thành viên nhóm và các thao tác tương tự sinh một mã sáu ký tự ngẫu nhiên (`_PENDING_CONFIRMATIONS`); chủ nhân phải gửi lại đúng mã đó trong một tin nhắn mới. Mô hình không tự xác nhận thay người được.
+
+4. **Bridge xác thực bằng token.** Kênh WebSocket cục bộ giữa sidecar và Hermes chặn thẳng mọi kết nối mang header `Origin` của trình duyệt, còn lại so token bằng `timingSafeEqual` — tiến trình khác trên máy không tự nối vào để điều khiển tài khoản Zalo.
+
+5. **Thiết kế để không bị Zalo khoá tài khoản.** Token bucket bắn liền 5 tin đầu, rồi giãn về nhịp bền vững 20 tin/phút, và ưu tiên câu trả lời hội thoại hơn thao tác hàng loạt. Mất tài khoản là mất cả kênh.
+
+6. **Dịch Markdown sang định dạng gốc Zalo bằng số đo thật, không đoán.** Zalo giới hạn 3000 đơn vị mã UTF-16 mỗi tin và khoảng 256 ký tự JSON cho mảng style — vượt là chỉ nhận `"Lỗi không xác định"`, không rõ lý do. Bộ dịch cắt ở chỗ đọc được và giữ style theo mức quan trọng khi vượt ngân sách.
+
+7. **Lưu lịch sử và nhật ký thao tác.** Tin nhắn vào SQLite có dọn theo hạn (mặc định 365 ngày); mọi thao tác có tác động ghi vào `audit_log` kèm danh tính người ra lệnh và kết quả thành/bại.
+
+8. **Cài đặt chạy lại được, có chẩn đoán và gỡ sạch.** `install:hermes` merge cấu hình mà không đè giá trị khách đã tự chỉnh; `doctor` kiểm 8 mục, từ layout Hermes tới token bridge; `uninstall:hermes` chỉ xoá đúng thư mục plugin, giữ nguyên `.env`, phiên Zalo và `config.yaml`.
+
+---
+
 ## Tính năng
 
 **Kết nối**

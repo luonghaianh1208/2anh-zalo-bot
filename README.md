@@ -21,6 +21,24 @@ Zalo  <->  zca-js sidecar (Node.js)  <->  local WebSocket  <->  Python plugins  
 - Optional offline Vietnamese TTS with VieNeu v3 Nano and an Edge TTS fallback.
 - An idempotent installer and doctor command for existing Hermes deployments.
 
+## What sets this apart
+
+1. **Not a standalone chatbot — a full Hermes platform.** The bot shares tools, memory, skills, and cron jobs with the same Hermes agent running on the owner's machine. Messaging on Zalo talks to that agent directly, on equal footing with Telegram, Discord, and Slack in Hermes.
+
+2. **Two layers of authorization, not one.** Splitting tools into `zalo_owner`/`zalo_public` toolsets only hides tools from the model's tool list. The real barrier is `_owner_only` in `hermes-plugin/zalo_tools/tools.py`, which checks the sender's identity at call time for every owner tool — a misconfiguration still can't let one through.
+
+3. **Two-step confirmation with a real code for destructive actions.** Recalling a message, changing group membership, and similar actions generate a random six-character code (`_PENDING_CONFIRMATIONS`); the owner has to send that code back in a fresh message. The model cannot confirm on someone's behalf.
+
+4. **A token-authenticated bridge.** The local WebSocket channel between the sidecar and Hermes rejects any connection carrying a browser `Origin` header outright, and compares the token with `timingSafeEqual` — another process on the same machine cannot just connect and take over the Zalo account.
+
+5. **Built to avoid Zalo account bans.** The rate limiter is a token bucket: a burst of 5 messages goes out immediately, then throughput settles to a sustainable 20/minute, and conversational replies are prioritized ahead of bulk operations. Losing the account means losing the whole channel.
+
+6. **Markdown translated into Zalo's native formatting against measured limits, not guesses.** Zalo caps messages at 3000 UTF-16 code units and its style array at roughly 256 JSON characters — go over either and Zalo just returns "Unknown error" with no hint why. The formatter truncates at a readable boundary and keeps styles by importance when the budget is tight.
+
+7. **SQLite history and an audit trail.** Every message is stored in SQLite with age-based retention (365 days by default); every action with real-world effect is written to `audit_log` with the acting identity and the outcome.
+
+8. **A re-runnable installer with diagnostics and a clean uninstall.** `install:hermes` merges configuration without overwriting values the customer already changed; `doctor` runs 8 checks from the Hermes layout to the bridge token; `uninstall:hermes` removes only the managed plugin directories, leaving `.env`, the Zalo session, and `config.yaml` untouched.
+
 ## Important risk notice
 
 `zca-js` is an unofficial client built from Zalo Web behavior. Using it may violate Zalo's terms of service and can put the account at risk.
