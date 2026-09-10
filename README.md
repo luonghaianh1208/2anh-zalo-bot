@@ -153,6 +153,8 @@ ZALO_GROUP_REPLY_ONLY_TAGGED=true
 
 A Zalo UID is normally a long 17–21 digit value and is not a phone number.
 
+The installer also ships a default message style guide (`hermes-plugin/zalo-style-guide.md`), distilled from months of running the bot for real — bold labels, dash/bullet nesting, sparing color, no `---`. It writes that content into `platform_hints.zalo.append` on first install, and never overwrites it if you've already written your own. Edit `platform_hints.zalo.append` in `config.yaml` directly to change it. Tone and in-group behavior (formal vs. casual, whether it greets itself in new groups) are customer-specific, so they are not baked in — the installer asks you about those two before finishing, per `AGENTS.md`.
+
 ## Agent tools
 
 45 tools total, split into two toolsets: 31 owner-only, 14 shared with everyone in a group. `ZALO_ALLOWED_USERS` decides who counts as the owner.

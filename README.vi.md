@@ -333,6 +333,8 @@ Sidecar không còn tệp cấu hình nào. Ai được dùng bot, trả lời k
 
 > **UID Zalo là dãy số dài 17–21 chữ số, không bắt đầu bằng `0`.** Số điện thoại thì ngược lại. Điền nhầm số điện thoại vào `ZALO_ALLOWED_USERS` thì người đó đơn giản là không khớp với ai — không mở quyền cho ai khác.
 
+Sản phẩm cài sẵn một bộ hướng dẫn trình bày tin nhắn Zalo đúc từ thực chiến nhiều tháng (`hermes-plugin/zalo-style-guide.md`) — trình cài tự ghi nội dung này vào `platform_hints.zalo.append` khi cài lần đầu, không đè nếu bạn đã tự viết. Muốn sửa cách trình bày thì sửa trực tiếp `platform_hints.zalo.append` trong `config.yaml`. Còn giọng điệu và hành vi trong nhóm (trang trọng hay thân mật, có tự chào khi vào nhóm mới không) là riêng của từng khách nên không cài sẵn — trình cài sẽ hỏi bạn hai điều đó trước khi hoàn tất, theo `AGENTS.md`.
+
 ---
 
 ## Định dạng tin nhắn
