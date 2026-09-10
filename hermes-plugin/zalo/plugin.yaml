@@ -31,7 +31,7 @@ optional_env:
     prompt: "Allowed Zalo user IDs (comma-separated)"
     password: false
   - name: ZALO_ALLOW_ALL_USERS
-    description: "Allow any Zalo user to trigger the bot (dev only)"
+    description: "Allow all group members to use the bot without listing each UID"
     prompt: "Allow all Zalo users? (true/false)"
     password: false
   - name: ZALO_GROUP_REPLY_ONLY_TAGGED

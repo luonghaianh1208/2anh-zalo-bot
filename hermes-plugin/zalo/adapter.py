@@ -36,7 +36,7 @@ Environment variables (env wins over config.yaml ``extra``):
 
     ZALO_BRIDGE_URL                WebSocket URL of the sidecar
     ZALO_ALLOWED_USERS             Comma-separated Zalo user IDs
-    ZALO_ALLOW_ALL_USERS           Allow anyone — dev only
+    ZALO_ALLOW_ALL_USERS           Allow all group members to use the bot
     ZALO_GROUP_REPLY_ONLY_TAGGED   Groups: only reply when tagged (default true)
     ZALO_HOME_CHANNEL              Default thread for cron delivery
     ZALO_HOME_CHANNEL_NAME         Display name for that thread
