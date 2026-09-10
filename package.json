@@ -6,7 +6,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test",
+    "test": "npm run test:js && npm run test:py",
+    "test:js": "node --test",
+    "test:py": "node scripts/run-python-tests.js",
     "setup": "node scripts/setup.js",
     "install:hermes": "node scripts/install-hermes.js",
     "doctor": "node scripts/doctor.js",
