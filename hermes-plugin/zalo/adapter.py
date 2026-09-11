@@ -1307,11 +1307,19 @@ def _env_enablement() -> Optional[dict]:
     if not WEBSOCKETS_AVAILABLE:
         return None
 
-    extra: Dict[str, Any] = {
-        "bridge_url": _get_scoped_secret("ZALO_BRIDGE_URL", DEFAULT_BRIDGE_URL),
-        "bridge_token": _get_scoped_secret("ZALO_BRIDGE_TOKEN", ""),
-        "reply_only_tagged": _truthy(_get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "true"), True),
-    }
+    # Hermes ghi kết quả hàm này ĐÈ lên platforms.zalo.extra trong config.yaml
+    # (gateway/config.py). Chỉ trả khoá khách thật sự đặt trong env — trả giá
+    # trị mặc định ở đây là xoá mất bridge_token trình cài vừa ghi vào config.
+    extra: Dict[str, Any] = {}
+    bridge_url = (_get_scoped_secret("ZALO_BRIDGE_URL", "") or "").strip()
+    if bridge_url:
+        extra["bridge_url"] = bridge_url
+    bridge_token = (_get_scoped_secret("ZALO_BRIDGE_TOKEN", "") or "").strip()
+    if bridge_token:
+        extra["bridge_token"] = bridge_token
+    reply_only_tagged = (_get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "") or "").strip()
+    if reply_only_tagged:
+        extra["reply_only_tagged"] = _truthy(reply_only_tagged, True)
 
     home = (_get_scoped_secret("ZALO_HOME_CHANNEL", "") or "").strip()
     if home:

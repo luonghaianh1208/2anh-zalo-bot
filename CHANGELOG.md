@@ -2,6 +2,18 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.2.1] — 2026-09-11
+
+### Sửa
+
+- **Cài bằng `install:hermes` xong mà Hermes không nối được sidecar** ("Thiếu
+  ZALO_BRIDGE_TOKEN trong cấu hình Zalo"). Hermes ghi kết quả `_env_enablement`
+  của adapter đè lên `platforms.zalo.extra` trong `config.yaml`, mà hàm này luôn
+  trả `bridge_token` rỗng, `bridge_url` mặc định và `reply_only_tagged: true`
+  kể cả khi `.env` không đặt — xoá mất token trình cài vừa ghi và lờ đi
+  `reply_only_tagged: false` của khách. Nay chỉ trả những khoá thật sự có trong
+  env. Phát hiện khi nâng một máy chạy thật lên bản này.
+
 ## [1.2.0] — 2026-09-11
 
 ### Thêm

@@ -371,6 +371,24 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(adapter._guess_thread_type(owner_uid, {}), zalo_adapter.THREAD_TYPE_USER)
             self.assertEqual(adapter._guess_thread_type("9000000000000000002", {}), zalo_adapter.THREAD_TYPE_GROUP)
 
+    def test_env_enablement_does_not_blank_out_config_yaml_values(self):
+        # Hermes ghi kết quả _env_enablement ĐÈ lên extra của config.yaml. Trả
+        # về bridge_token rỗng khi .env không đặt là xoá mất token trình cài ghi.
+        keys = ("ZALO_BRIDGE_URL", "ZALO_BRIDGE_TOKEN", "ZALO_GROUP_REPLY_ONLY_TAGGED", "ZALO_HOME_CHANNEL")
+        with patch.dict(os.environ, {}):
+            for key in keys:
+                os.environ.pop(key, None)
+            seed = zalo_adapter._env_enablement() or {}
+            self.assertNotIn("bridge_token", seed)
+            self.assertNotIn("bridge_url", seed)
+            self.assertNotIn("reply_only_tagged", seed)
+
+            os.environ["ZALO_BRIDGE_TOKEN"] = "env-token"
+            os.environ["ZALO_GROUP_REPLY_ONLY_TAGGED"] = "false"
+            seed = zalo_adapter._env_enablement() or {}
+            self.assertEqual(seed["bridge_token"], "env-token")
+            self.assertIs(seed["reply_only_tagged"], False)
+
     def test_bridge_url_from_env_wins_over_config_extra(self):
         with patch.dict(os.environ, {"ZALO_BRIDGE_URL": "ws://127.0.0.1:3900"}):
             adapter = zalo_adapter.ZaloAdapter(
