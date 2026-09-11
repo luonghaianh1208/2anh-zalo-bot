@@ -2,6 +2,35 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.4.0] — 2026-09-11
+
+### Sửa
+
+- **Cron và câu trả lời gửi bù không tới được nhóm.** Tin gửi ngoài lượt chat
+  mang vai trò `system`, mà sidecar chỉ cho `system` tới chủ nhân hoặc kênh nhà
+  — kết quả cron gửi vào nhóm và câu trả lời gửi bù sau khi gateway khởi động
+  lại đều bị chặn (`auth_required`, 18 lần trên máy chạy thật 08–11/09). Nay
+  `system` gửi chữ và báo đang gõ được tới mọi hội thoại, vẫn không gọi hàm
+  Zalo, không đọc lịch sử, không thu hồi.
+- **Cron không dùng được công cụ Zalo nào.** Công cụ nay đọc `task_id` của lượt
+  cron để biết job: job tạo bằng công cụ cron gốc (chỉ chủ nhân có) chạy với
+  quyền chủ nhân trong hội thoại đích; audit ghi mã cron phát lệnh.
+- **Tin cron trong nhóm có khung tiếng Anh** `Cronjob Response… (job_id…)`.
+  Adapter Zalo bỏ khung này; nền tảng khác giữ nguyên.
+- Gắn danh tính lượt chat bị lỗi thì rơi về quyền công khai của đúng người đó,
+  không rơi về `system`.
+
+### Thêm
+
+- **`zalo_group_cron` — thành viên tự hẹn giờ cho nhóm.** Tạo, xem, xoá việc hẹn
+  giờ của nhóm đang trò chuyện. Job khoá cứng đích gửi, toolset
+  `zalo_cron_member` (tra web, kho tài liệu, `zalo_group_history` của chính
+  nhóm), không script/thư mục/skill/model; lặp tối đa 1 lần/ngày, 3 việc/người,
+  10 việc/nhóm; chỉ người tạo hoặc chủ nhân xoá được. Prompt qua bộ quét cron
+  của Hermes.
+- Trình cài khai thêm `zalo_cron` vào `known_plugin_toolsets.zalo`; `doctor`
+  kiểm cả toolset này.
+
 ## [1.3.0] — 2026-09-11
 
 ### Đổi

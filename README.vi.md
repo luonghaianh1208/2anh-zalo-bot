@@ -70,7 +70,7 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 
 Trước đây *có* một bộ não Node dự phòng gọi thẳng LLM. Đã bỏ, vì hai lý do. Nó không bao giờ chạy nên âm thầm mục ruỗng — mấy lỗi nặng nhất của dự án (định tuyến nhóm sai, kiểm chủ nhân sai) đều nằm trong đoạn đó và sống sót nhiều tháng vì không ai đi qua. Nguy hiểm hơn: khi nó *có* chạy thì lại chạy bằng bộ luật khác — Hermes phân quyền theo toolset, còn bộ não Node đọc một tệp JSON và không có tầng phân quyền nào. Hermes rớt là hệ thống lặng lẽ hạ cấp sang bộ luật lỏng hơn, đúng lúc không ai để ý.
 
-**45 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
+**47 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
 
 | Nhóm | Công cụ |
 |---|---|
@@ -84,6 +84,7 @@ Trước đây *có* một bộ não Node dự phòng gọi thẳng LLM. Đã b�
 | Kho tài liệu | `zalo_kb_list` `zalo_kb_read` |
 | Tra cứu Internet | `zalo_web_search` `zalo_web_read` |
 | Sổ người quen | `zalo_remember_person` `zalo_recall_person` `zalo_list_people` `zalo_forget_person` |
+| Hẹn giờ cho nhóm | `zalo_group_cron` `zalo_group_history` |
 
 Ví dụ: *"Tạo bình chọn trong nhóm Tổ Hoá hỏi thứ mấy họp được, ba phương án thứ 3, 5, 7"* — agent tự gọi `zalo_list_groups` rồi `zalo_create_poll`.
 
@@ -91,22 +92,34 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 
 ### Hai mức quyền
 
-45 công cụ chia làm hai nhóm, quyết định bằng `ZALO_ALLOWED_USERS`:
+47 công cụ chia làm ba nhóm, quyết định bằng `ZALO_ALLOWED_USERS` (riêng `zalo_group_history` chỉ tồn tại trong việc hẹn giờ của nhóm):
 
 | | Chủ nhân | Người khác trong nhóm |
 |---|---|---|
 | Toolset | `hermes-zalo` + `zalo_owner` + `zalo_public` | chỉ `zalo_public` |
-| Số công cụ Zalo | 45 | 14 |
+| Số công cụ Zalo | 46 | 15 |
 | `terminal`, `read_file`, `write_file` | ✅ | ❌ |
 | `browser_*`, `web_search` | ✅ | ❌ |
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
 | Nhắn riêng với bot | ✅ | ❌ mặc định (`ZALO_DM_POLICY`) |
 
-**14 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xoá lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · nhớ người quen · tra sổ người quen · **tìm kiếm web · đọc trang web**.
+**15 công cụ công khai:** gửi tệp · gửi thoại · gửi sticker · gửi liên kết · đặt lời nhắc · xem lời nhắc · xoá lời nhắc · xem thành viên nhóm · liệt kê kho tài liệu · đọc tài liệu · nhớ người quen · tra sổ người quen · **tìm kiếm web · đọc trang web · hẹn giờ cho nhóm**.
 
 Việc phân nhóm toolset chỉ *giấu* công cụ khỏi danh sách. Rào chắn thật nằm ở tầng thực thi: mỗi công cụ thuộc nhóm chủ nhân được bọc một lớp kiểm tra danh tính người gửi, nên dù công cụ có lọt vào danh sách vì cấu hình sai thì người ngoài gọi vẫn bị từ chối.
 
 Các thao tác nguy hiểm như thu hồi tin, đổi tên nhóm, sửa thành viên hoặc quyền phó nhóm: chủ nhân nhắn là bot làm ngay, trong nhóm hay nhắn riêng đều được; người khác trong nhóm nhờ thì bot từ chối. Muốn chặt hơn thì đặt `ZALO_CONFIRM_DANGEROUS=true` trong `.env` của Hermes: khi đó agent trả một mã sáu ký tự và chủ nhân phải gửi một tin nhắn mới đúng nguyên câu `XÁC NHẬN <MÃ>` trong vòng 5 phút. Mã được khóa theo UID chủ nhân, cuộc trò chuyện, công cụ và đúng bộ tham số nên không thể dùng lại cho người, nhóm hay thao tác khác.
+
+### Hẹn giờ cho nhóm
+
+Ai trong nhóm cũng nhờ bot hẹn giờ được: *"7h sáng thứ Hai hằng tuần nhắc cả nhóm nộp báo cáo"*, *"9h tối nay tóm tắt những gì nhóm đã chốt"*. `zalo_group_cron` tự tạo job cron của Hermes và khoá cứng mọi trường nguy hiểm:
+
+- Kết quả chỉ gửi vào **đúng nhóm** đó.
+- Lúc chạy chỉ cầm toolset `zalo_cron_member`: tra web, đọc web, đọc kho tài liệu, đọc lịch sử **của chính nhóm đó** — không terminal, không đọc tệp, không MCP.
+- Không nhận script, thư mục làm việc, skill hay đổi model.
+- Lặp tối đa **1 lần mỗi ngày**; mỗi người tối đa **3** việc đang bật, mỗi nhóm tối đa **10**.
+- Ai trong nhóm cũng xem được danh sách; chỉ **người tạo hoặc chủ nhân** được xoá.
+
+Cron chủ nhân tạo bằng công cụ cron gốc của Hermes vẫn giữ nguyên quyền chủ nhân, và nay gửi được vào mọi nhóm.
 
 ### Tra cứu Internet
 

@@ -160,7 +160,7 @@ The installer also ships a default message style guide (`hermes-plugin/zalo-styl
 
 ## Agent tools
 
-45 tools total, split into two toolsets: 31 owner-only, 14 shared with everyone in a group. `ZALO_ALLOWED_USERS` decides who counts as the owner.
+47 tools total, split into three toolsets: 31 owner-only, 15 shared with everyone in a group, and 1 (`zalo_group_history`) that only exists inside group cron jobs. `ZALO_ALLOWED_USERS` decides who counts as the owner.
 
 | Group | Tools |
 |---|---|
@@ -174,8 +174,13 @@ The installer also ships a default message style guide (`hermes-plugin/zalo-styl
 | Knowledge base | `zalo_kb_list` `zalo_kb_read` |
 | Web lookup | `zalo_web_search` `zalo_web_read` |
 | People notebook | `zalo_remember_person` `zalo_recall_person` `zalo_list_people` `zalo_forget_person` |
+| Group cron jobs | `zalo_group_cron` `zalo_group_history` |
 
 The bridge accepts only allowlisted `zca-js` operations. High-risk automation such as bulk friend requests, blocking users, dissolving groups, or money-related operations is deliberately excluded.
+
+### Group cron jobs
+
+Anyone in a group can ask the bot to schedule a job for that group ("remind everyone at 7am every Monday", "summarize today's chat at 9pm"). `zalo_group_cron` creates the Hermes cron job itself and locks every dangerous field: results go only to that group, the job runs with `zalo_cron_member` (web search/read, knowledge base, and that group's own history — no terminal, no files, no MCP), and scripts, working directories, skills and model overrides are never accepted. Limits: repeats at most once a day, 3 active jobs per person, 10 per group. Only the creator or the owner can remove a job. Cron jobs the owner creates with Hermes' own cron tool keep full owner authority and can now deliver to any group.
 
 ## Health and history
 

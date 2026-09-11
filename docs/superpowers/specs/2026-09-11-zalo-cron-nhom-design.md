@@ -102,10 +102,12 @@ job bằng `cron.jobs.get_job(job_id)` là biết nhóm đích và người tạ
 
 ### 5.2 Adapter — `hermes-plugin/zalo/adapter.py`
 
-1. **Bỏ đầu–đuôi tiếng Anh của tin cron.** Khi `metadata` có `job_id` và nội
-   dung mở đầu bằng `Cronjob Response:`, bỏ khối đầu tới dòng `-------------`
-   và dòng cuối `To stop or manage this job…` trước khi chia tin. Chỉ áp cho
-   Zalo; Telegram giữ nguyên (`cron.wrap_response` là cấu hình chung, không đụng).
+1. **Bỏ đầu–đuôi tiếng Anh của tin cron.** Khi nội dung khớp đúng khung Hermes
+   (dòng `Cronjob Response: …`, dòng `(job_id: …)`, dòng gạch ngang, và tuỳ chọn
+   dòng cuối `To stop or manage this job…`), chỉ giữ phần thân trước khi chia
+   tin. Nhận diện theo cả hai dòng đầu chứ không dựa vào `metadata`, để tin
+   thường tình cờ mở đầu bằng cùng chữ không bị cắt. Chỉ áp cho Zalo; Telegram
+   giữ nguyên (`cron.wrap_response` là cấu hình chung, không đụng).
 2. **Gắn danh tính hỏng thì rơi về `public`, không rơi về `system`.**
    Nhánh `except` trong `_bind_turn_for_source` hiện gọi `bind_turn(None)` →
    `_TURN = {}` → `current_authorization` trả `system`. Sau khi 5.1.1 nới
