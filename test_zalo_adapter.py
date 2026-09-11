@@ -1492,7 +1492,7 @@ class ZaloGroupCronTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(created["prompt"].endswith("Tóm tắt các việc cả nhóm đã hẹn trong ngày"))
 
     async def test_create_rejects_schedules_more_often_than_daily(self):
-        for schedule in ("every 30m", "every 12h", "0 9,10 * * *", "*/30 * * * *"):
+        for schedule in ("every 30m", "every 12h", "0 9,10 * * *", "*/30 * * * *", "R 9 * * *", "R R * * *", "H 9 * * *"):
             with self.subTest(schedule=schedule):
                 jobs = FakeCronJobs()
                 result = await self.run_tool({"action": "create", "prompt": "Nhắc họp", "schedule": schedule}, jobs, self.member_turn())
@@ -1500,7 +1500,7 @@ class ZaloGroupCronTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(jobs.created, [])
 
     async def test_create_accepts_daily_weekly_and_one_shot_schedules(self):
-        for schedule in ("every 1d", "every day at 7am", "0 7 * * 1", "in 2h"):
+        for schedule in ("every 1d", "every day at 7am", "0 7 * * 1", "0 7 * * MON", "in 2h"):
             with self.subTest(schedule=schedule):
                 jobs = FakeCronJobs()
                 result = await self.run_tool({"action": "create", "prompt": "Nhắc họp", "schedule": schedule}, jobs, self.member_turn())

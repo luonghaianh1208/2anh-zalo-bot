@@ -173,6 +173,9 @@ hiểu, vd `every day at 7am`, `2026-09-18T07:30`, `in 2h`), `name` (tuỳ chọ
    - `interval`: `minutes ≥ 1440`.
    - `cron`: lấy 20 lần chạy kế tiếp bằng `croniter`, **khoảng cách nhỏ nhất**
      giữa hai lần liền nhau phải ≥ 1440 phút (chặn kiểu `0 9,10 * * *`).
+     Trước đó chỉ nhận biểu thức đúng 5 trường, mỗi trường chỉ gồm số, `*`,
+     `,`, `-`, `/` và tên tháng/thứ tiếng Anh — từ chối `R` (ngẫu nhiên, bốc
+     lại mỗi lần chạy), `H`, `L`, `W`, `#`.
 3. Hạn mức — chỉ áp cho người không phải chủ nhân, đếm job đang bật và chưa
    kết thúc có `origin.zalo_scope == "group"`:
    - của cùng `zalo_creator_uid` trên mọi nhóm: < 3;

@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from typing import Any, Dict, List, Optional
@@ -1448,6 +1449,18 @@ GROUP_CRON_LOOKAHEAD = 20
 _GROUP_CRON_PROMPT_SEPARATOR = "\n---\n"
 _GROUP_CRON_TOO_OFTEN = "việc hẹn giờ của nhóm chỉ được lặp tối đa 1 lần mỗi ngày"
 
+# Chỉ nhận cron 5 trường gồm số, * , - / và tên tháng/thứ tiếng Anh. croniter còn
+# hiểu các ký hiệu lạ như R (ngẫu nhiên — bốc lại mỗi lần chạy, lách được giới
+# hạn 1 lần/ngày), H, L, W, # — thành viên không được dùng.
+_GROUP_CRON_FIELD_RE = re.compile(
+    r"^(?:[0-9*,/\-]|JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|MON|TUE|WED|THU|FRI|SAT|SUN)+$",
+    re.IGNORECASE,
+)
+_GROUP_CRON_BAD_EXPR = (
+    "lịch lặp chỉ nhận biểu thức cron 5 trường gồm số, *, dấu phẩy, gạch ngang, "
+    "gạch chéo và tên tháng/thứ"
+)
+
 
 def _group_cron_prompt(prompt: str, creator_name: str) -> str:
     who = creator_name or "một thành viên"
@@ -1494,7 +1507,11 @@ def _group_cron_schedule_problem(schedule: Dict[str, Any]) -> str:
         minutes = float(schedule.get("minutes") or 0)
         return "" if minutes >= GROUP_CRON_MIN_GAP_MINUTES else _GROUP_CRON_TOO_OFTEN
     if kind == "cron":
-        gap = _cron_min_gap_minutes(str(schedule.get("expr") or ""))
+        expr = str(schedule.get("expr") or "")
+        fields = expr.split()
+        if len(fields) != 5 or not all(_GROUP_CRON_FIELD_RE.match(field) for field in fields):
+            return _GROUP_CRON_BAD_EXPR
+        gap = _cron_min_gap_minutes(expr)
         if gap is None:
             return "không đọc được lịch lặp này"
         return "" if gap >= GROUP_CRON_MIN_GAP_MINUTES else _GROUP_CRON_TOO_OFTEN
