@@ -41,6 +41,15 @@ TOOLSET_PUBLIC = "zalo_public"
 # cùng tên với nền tảng cho mọi phiên, nên đặt trùng thì người ngoài cũng nhận
 # luôn bộ công cụ dành riêng cho chủ.
 TOOLSET_OWNER = "zalo_owner"
+# Công cụ chỉ có nghĩa trong lượt chạy cron. Không nằm trong bộ nào
+# toolsets_for_source trả về, nên chat thường không bao giờ thấy.
+TOOLSET_CRON = "zalo_cron"
+# Toolset ghép cho việc hẹn giờ do thành viên nhóm tạo: tra cứu và đọc lịch sử
+# chính nhóm đó, không có gì khác. Xem define_cron_member_toolset().
+TOOLSET_CRON_MEMBER = "zalo_cron_member"
+CRON_MEMBER_TOOLS = (
+    "zalo_web_search", "zalo_web_read", "zalo_kb_list", "zalo_kb_read", "zalo_group_history",
+)
 
 # Ngữ cảnh của lượt tin đang xử lý. Dùng ContextVar chứ không phải biến thường:
 # gateway xử lý nhiều lượt song song, biến thường sẽ lẫn người này sang người
@@ -517,6 +526,30 @@ async def zalo_read_history(args: Dict[str, Any], **_kw) -> str:
         return _err("Zalo chưa kết nối")
     ack = await adapter.read_history(
         str(thread_id), count, metadata={"chat_type": kind}
+    )
+    if not ack or not ack.get("ok"):
+        return _err((ack or {}).get("error", "không đọc được lịch sử Zalo"))
+    return _ok(ack.get("result"))
+
+
+async def zalo_group_history(args: Dict[str, Any], **_kw) -> str:
+    """Đọc lịch sử của đúng hội thoại mà lượt cron này gửi kết quả về.
+
+    Không nhận `thread_id` từ mô hình: hội thoại lấy từ turn do _with_cron_turn
+    dựng từ job, nên prompt của thành viên có viết gì cũng không đọc được nhóm khác.
+    """
+    turn = _turn()
+    if not turn.get("cron_job_id"):
+        return _err("công cụ này chỉ dùng trong việc hẹn giờ của nhóm")
+    thread_id = str(turn.get("thread_id") or "")
+    if not thread_id:
+        return _err("không xác định được nhóm của việc hẹn giờ")
+    adapter = _ACTIVE_ADAPTER
+    if adapter is None:
+        return _err("Zalo chưa kết nối")
+    count = max(1, min(int(args.get("count", 30) or 30), 100))
+    ack = await adapter.read_history(
+        thread_id, count, metadata={"chat_type": "group" if turn.get("is_group") else "dm"}
     )
     if not ack or not ack.get("ok"):
         return _err((ack or {}).get("error", "không đọc được lịch sử Zalo"))
@@ -1737,6 +1770,14 @@ TOOLS = [
         ["thread_id"],
     ), zalo_read_history, TOOLSET_OWNER),
 
+    ("zalo_group_history", "🗒️", _schema(
+        "zalo_group_history",
+        "Chỉ dùng trong việc hẹn giờ của nhóm: đọc các tin gần đây của chính nhóm "
+        "mà việc hẹn giờ này gửi kết quả về, để tóm tắt hay nhắc lại cho đúng.",
+        {"count": {"type": "integer", "description": "Số tin muốn đọc (tối đa 100, mặc định 30)."}},
+        [],
+    ), zalo_group_history, TOOLSET_CRON),
+
     ("zalo_list_groups", "👥", _schema(
         "zalo_list_groups",
         "Liệt kê các nhóm Zalo mà tài khoản này đang tham gia.",
@@ -2300,9 +2341,35 @@ def define_platform_composite() -> None:
                 len(core - private), len(private))
 
 
+def define_cron_member_toolset() -> None:
+    """Định nghĩa toolset ``zalo_cron_member`` cho việc hẹn giờ do thành viên tạo.
+
+    Job của thành viên ghim ``enabled_toolsets = [zalo_cron_member, no_mcp]``,
+    nên lúc chạy agent chỉ cầm đúng CRON_MEMBER_TOOLS — không terminal, không
+    đọc tệp, không MCP, không nhắm hội thoại khác.
+    """
+    try:
+        from toolsets import create_custom_toolset
+    except ImportError as exc:
+        logger.warning("[zalo] không định nghĩa được %s: %s", TOOLSET_CRON_MEMBER, exc)
+        return
+
+    create_custom_toolset(
+        name=TOOLSET_CRON_MEMBER,
+        description="Công cụ cho việc hẹn giờ do thành viên nhóm Zalo tạo.",
+        tools=list(CRON_MEMBER_TOOLS),
+        includes=[],
+    )
+    try:
+        import toolsets as _ts
+        _ts._resolve_toolset_memo.clear()
+    except Exception:
+        pass
+
+
 def register_tools(ctx) -> None:
     """Đăng ký công cụ Zalo, chia làm hai mức quyền."""
-    counts = {TOOLSET_PUBLIC: 0, TOOLSET_OWNER: 0}
+    counts = {TOOLSET_PUBLIC: 0, TOOLSET_OWNER: 0, TOOLSET_CRON: 0}
     for name, emoji, schema, handler, toolset in TOOLS:
         guarded = handler
         if toolset == TOOLSET_OWNER:
@@ -2327,6 +2394,7 @@ def register_tools(ctx) -> None:
         except Exception as exc:  # pragma: no cover — đăng ký hỏng không được làm chết plugin
             logger.warning("[zalo] không đăng ký được công cụ %s: %s", name, exc)
     logger.info(
-        "[zalo] đã đăng ký %d công cụ — %d công khai, %d chỉ chủ nhân",
+        "[zalo] đã đăng ký %d công cụ — %d công khai, %d chỉ chủ nhân, %d cho cron",
         sum(counts.values()), counts.get(TOOLSET_PUBLIC, 0), counts.get(TOOLSET_OWNER, 0),
+        counts.get(TOOLSET_CRON, 0),
     )

@@ -715,10 +715,11 @@ class ZaloToolSchemaTest(unittest.TestCase):
         assignments = [toolset for _name, _emoji, _schema, _handler, toolset in zalo_tools.TOOLS]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(set(assignments), {
-            zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER,
+            zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 14)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 31)
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 
     def test_zalo_ids_remain_strings_through_hermes_argument_coercion(self):
         import model_tools
@@ -774,6 +775,15 @@ class ZaloToolSchemaTest(unittest.TestCase):
             with self.subTest(tool=name):
                 self.assertNotIn("confirmation_code", schemas[name]["required"])
                 self.assertEqual(schemas[name]["properties"]["confirmation_code"]["type"], "string")
+
+    def test_cron_member_toolset_holds_only_safe_group_tools(self):
+        from toolsets import resolve_toolset
+
+        zalo_tools.define_cron_member_toolset()
+
+        self.assertEqual(set(resolve_toolset(zalo_tools.TOOLSET_CRON_MEMBER, include_registry=False)), {
+            "zalo_web_search", "zalo_web_read", "zalo_kb_list", "zalo_kb_read", "zalo_group_history",
+        })
 
 
 class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
@@ -1394,6 +1404,34 @@ class ZaloCronTurnTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(json.loads(response)["success"], response)
         self.assertEqual(fake.call, (self.GROUP, 5, {"chat_type": "group"}))
+
+    async def test_group_history_reads_only_the_cron_group_and_ignores_model_thread_id(self):
+        class FakeAdapter:
+            async def read_history(self, chat_id, count, metadata=None):
+                self.call = (chat_id, count, metadata)
+                return {"ok": True, "result": {"messages": [{"msgId": "m1"}]}}
+
+        ctx, fake = FakeToolContext(), FakeAdapter()
+        zalo_tools.register_tools(ctx)
+        zalo_tools._ACTIVE_ADAPTER = fake
+        with patch.object(zalo_tools, "_cron_jobs", return_value=self.fake_jobs()):
+            response = await ctx.handlers["zalo_group_history"](
+                {"count": 500, "thread_id": "other-group"}, task_id="cron:group-job:run-1",
+            )
+
+        self.assertTrue(json.loads(response)["success"], response)
+        self.assertEqual(fake.call, (self.GROUP, 100, {"chat_type": "group"}))
+
+    async def test_group_history_refuses_outside_cron(self):
+        chat = zalo_tools._TURN.set({
+            "sender_uid": self.MEMBER, "thread_id": self.GROUP, "is_group": True, "is_owner": False, "text": "đọc nhóm",
+        })
+        try:
+            response = await zalo_tools.zalo_group_history({})
+        finally:
+            zalo_tools._TURN.reset(chat)
+
+        self.assertFalse(json.loads(response)["success"])
 
 
 if __name__ == "__main__":

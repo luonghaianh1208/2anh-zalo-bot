@@ -71,7 +71,7 @@ test('mergeHermesConfig adds safe defaults and preserves customer values', async
   assert.equal(config.group_sessions_per_user, true);
   assert.equal(config.platforms.zalo.extra.reply_only_tagged, false);
   assert.equal(config.platforms.zalo.extra.bridge_token, 'bridge-secret');
-  assert.deepEqual(config.known_plugin_toolsets.zalo, ['customer_tool', 'zalo_owner', 'zalo_public']);
+  assert.deepEqual(config.known_plugin_toolsets.zalo, ['customer_tool', 'zalo_owner', 'zalo_public', 'zalo_cron']);
   assert.equal(config.display.platforms.zalo.tool_progress, 'off');
   assert.deepEqual(config.plugins.enabled, ['platforms/zalo', 'zalo-tools']);
 });

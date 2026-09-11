@@ -11,7 +11,7 @@ Plugin ``standalone`` nạp ngay lúc khám phá, nên đặt công cụ ở đ�
 Adapter nền tảng vẫn nằm bên ``platforms/zalo`` và import lại từ đây.
 """
 
-from .tools import define_platform_composite, register_tools
+from .tools import define_cron_member_toolset, define_platform_composite, register_tools
 
 __all__ = ["register"]
 
@@ -22,3 +22,4 @@ def register(ctx) -> None:
     # Phải chạy sau register_tools: định nghĩa dựa trên bộ công cụ lõi và
     # cần dọn bộ nhớ đệm của resolve_toolset sau khi registry đã đổi.
     define_platform_composite()
+    define_cron_member_toolset()

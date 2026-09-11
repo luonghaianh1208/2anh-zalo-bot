@@ -105,7 +105,7 @@ export function mergeHermesConfig(text, { bridgeToken, vieneu = null, styleGuide
     for (const name of names) if (!present.includes(name)) seq.add(name);
   };
 
-  ensureListItems(['known_plugin_toolsets', 'zalo'], ['zalo_owner', 'zalo_public']);
+  ensureListItems(['known_plugin_toolsets', 'zalo'], ['zalo_owner', 'zalo_public', 'zalo_cron']);
   setDefault(['group_sessions_per_user'], false);
 
   ensureListItems(['plugins', 'enabled'], [PLATFORM_KEY, TOOLS_KEY]);
@@ -389,7 +389,7 @@ export function doctorHermes({
   const enabled = config?.plugins?.enabled || [];
   const known = config?.known_plugin_toolsets?.zalo || [];
   add('config', Boolean(config) && enabled.includes(PLATFORM_KEY) && enabled.includes(TOOLS_KEY)
-    && known.includes('zalo_owner') && known.includes('zalo_public'));
+    && known.includes('zalo_owner') && known.includes('zalo_public') && known.includes('zalo_cron'));
   const configuredAppend = config?.platform_hints?.zalo?.append;
   const hasAppend = typeof configuredAppend === 'string' && configuredAppend.trim() !== '';
   if (!hasAppend) {
