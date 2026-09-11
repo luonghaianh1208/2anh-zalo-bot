@@ -180,7 +180,7 @@ The bridge accepts only allowlisted `zca-js` operations. High-risk automation su
 
 ### Group cron jobs
 
-Anyone in a group can ask the bot to schedule a job for that group ("remind everyone at 7am every Monday", "summarize today's chat at 9pm"). `zalo_group_cron` creates the Hermes cron job itself and locks every dangerous field: results go only to that group, the job runs with `zalo_cron_member` (web search/read, knowledge base, and that group's own history — no terminal, no files, no MCP), and scripts, working directories, skills and model overrides are never accepted. Limits: repeats at most once a day, 3 active jobs per person, 10 per group. Only the creator or the owner can remove a job. Cron jobs the owner creates with Hermes' own cron tool keep full owner authority and can now deliver to any group.
+Anyone in a group can ask the bot to schedule a job for that group ("remind everyone at 7am every Monday", "summarize today's chat at 9pm"). `zalo_group_cron` creates the Hermes cron job itself and locks every dangerous field: results go only to that group, the job runs with `zalo_cron_member` (web search/read, knowledge base, and that group's own history — no terminal, no files, no MCP), and scripts, working directories, skills and model overrides are never accepted. Limits: repeats at most once a day, 3 active jobs per person, 10 per group. Only the creator or the owner can remove a job. Cron jobs the owner creates with Hermes' own cron tool keep full owner authority for Zalo tools when the job delivers to Zalo, and can now deliver to any group.
 
 ## Health and history
 

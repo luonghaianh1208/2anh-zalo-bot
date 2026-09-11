@@ -23,6 +23,7 @@ import os
 import re
 import secrets
 import time
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,8 @@ def current_authorization(*, confirmed: bool = False) -> Dict[str, Any]:
     turn = _turn()
     if not turn:
         # Ngoài lượt chat (cron, thông báo của gateway) không có người gửi nào.
-        # Sidecar chỉ cho vai trò này gửi tới chủ nhân hoặc kênh nhà.
+        # Sidecar cho vai trò này gửi văn bản / báo đang gõ tới BẤT KỲ hội
+        # thoại nào, không được làm gì khác.
         return {
             "actorUid": "",
             "actorRole": "system",
@@ -207,7 +209,9 @@ def _allowed_owner_uids() -> List[str]:
     try:
         raw = get_secret("ZALO_ALLOWED_USERS", "")
     except UnscopedSecretError:
-        raw = os.getenv("ZALO_ALLOWED_USERS", "")
+        # Đang multiplex mà không có scope: os.environ có thể là chủ của hồ sơ
+        # khác — coi như không có chủ nhân nào thay vì đọc nhầm sang họ.
+        return []
     return [uid.strip() for uid in str(raw or "").split(",") if uid.strip()]
 
 
@@ -1462,6 +1466,17 @@ _GROUP_CRON_BAD_EXPR = (
 )
 
 
+def _sanitize_cron_creator_name(name: str) -> str:
+    """Làm sạch tên hiển thị Zalo của người tạo trước khi đưa vào prompt cron.
+
+    Tên này do thành viên trong nhóm tự đặt, không qua tay mô hình — bỏ ký tự
+    Unicode dạng định dạng (zero-width, bidi, BOM: category "Cf") để không cài
+    được ký tự ẩn vào phần đầu prompt, rồi gộp khoảng trắng và cắt bớt.
+    """
+    cleaned = "".join(ch for ch in name if unicodedata.category(ch) != "Cf")
+    return " ".join(cleaned.split())[:60]
+
+
 def _group_cron_prompt(prompt: str, creator_name: str) -> str:
     who = creator_name or "một thành viên"
     header = (
@@ -1540,13 +1555,22 @@ def _group_cron_create(args: Dict[str, Any], turn: Dict[str, Any]) -> str:
     if problem:
         return _err(problem)
 
+    creator_name = _sanitize_cron_creator_name(str(turn.get("sender_name") or ""))
+
     # Cùng bộ quét công cụ cron gốc dùng. Không import được thì từ chối, không
     # bỏ qua: đây là lớp chặn prompt cài lệnh ẩn.
+    #
+    # Quét trên PROMPT ĐÃ GHÉP (phần đầu kèm tên người tạo + prompt của người
+    # dùng), không chỉ mỗi phần người dùng gõ: Hermes quét lại đúng chuỗi đã
+    # ghép này ở mọi lần chạy, nên tên hiển thị Zalo (thành viên tự đặt, có
+    # thể cài ký tự ẩn hay từ khoá đe doạ) mà không bị soát ở đây thì job vẫn
+    # được tạo rồi bị chặn ở mọi lần chạy sau, giữ nguyên hạn mức mà không
+    # bao giờ gửi được.
     try:
         from tools.cronjob_tools import _scan_cron_prompt
     except ImportError:
         return _err("bản Hermes này không kiểm được nội dung việc hẹn giờ nên chưa tạo")
-    blocked = _scan_cron_prompt(prompt)
+    blocked = _scan_cron_prompt(_group_cron_prompt(prompt, creator_name))
     if blocked:
         return _err(blocked)
 
@@ -1563,8 +1587,10 @@ def _group_cron_create(args: Dict[str, Any], turn: Dict[str, Any]) -> str:
         if here >= GROUP_CRON_PER_GROUP:
             return _err(f"nhóm này đã có {here} việc hẹn giờ đang bật — tối đa {GROUP_CRON_PER_GROUP}")
 
-    creator_name = str(turn.get("sender_name") or "")
-    name = str(args.get("name") or "").strip()[:GROUP_CRON_NAME_MAX] or prompt[:40]
+    name = (
+        " ".join(str(args.get("name") or "").split())[:GROUP_CRON_NAME_MAX]
+        or " ".join(prompt.split())[:40]
+    )
     job = jobs.create_job(
         prompt=_group_cron_prompt(prompt, creator_name),
         schedule=raw_schedule,

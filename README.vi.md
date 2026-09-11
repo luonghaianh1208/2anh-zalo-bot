@@ -119,7 +119,7 @@ Ai trong nhóm cũng nhờ bot hẹn giờ được: *"7h sáng thứ Hai hằng
 - Lặp tối đa **1 lần mỗi ngày**; mỗi người tối đa **3** việc đang bật, mỗi nhóm tối đa **10**.
 - Ai trong nhóm cũng xem được danh sách; chỉ **người tạo hoặc chủ nhân** được xoá.
 
-Cron chủ nhân tạo bằng công cụ cron gốc của Hermes vẫn giữ nguyên quyền chủ nhân, và nay gửi được vào mọi nhóm.
+Cron chủ nhân tạo bằng công cụ cron gốc của Hermes vẫn giữ nguyên quyền chủ nhân với công cụ Zalo khi job gửi kết quả về Zalo, và nay gửi được vào mọi nhóm.
 
 ### Tra cứu Internet
 

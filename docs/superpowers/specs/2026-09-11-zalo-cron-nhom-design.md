@@ -31,7 +31,7 @@ Mọi đường gửi không gắn với tin vừa tới đều rơi vào đây:
 | Thời điểm | Vai trò | Ghi chú |
 |---|---|---|
 | 08/09 18:04, 09/09 00:15, 09/09 10:59 | public (auth rỗng, trước v1.1.1) | kèm cả tin tới DM chủ nhân |
-| 11/09 07:14 | public | 4 lần, ngay sau khi gateway khởi động |
+| 11/09 07:14 | public | 4 lần, ngay sau khi gateway khởi động — bản đang chạy lúc đó chưa có vai trò system (thêm ở aebc938 lúc 07:37), nên tin không có người gửi mang public + UID rỗng |
 | 11/09 09:10, 09:13 | system | 4 lần mỗi đợt, ngay sau khi gateway khởi động |
 
 Hai cron đang chờ chạy trên Lăng Tiêu sẽ gặp đúng lỗi này:
@@ -182,9 +182,14 @@ hiểu, vd `every day at 7am`, `2026-09-18T07:30`, `in 2h`), `name` (tuỳ chọ
    kết thúc có `origin.zalo_scope == "group"`:
    - của cùng `zalo_creator_uid` trên mọi nhóm: < 3;
    - của cùng nhóm: < 10.
-4. Quét prompt bằng `tools.cronjob_tools._scan_cron_prompt` — cùng bộ quét
-   `cronjob_manage` dùng; trả chuỗi khác rỗng nghĩa là bị chặn thì trả lỗi đó.
-   Không import được (Hermes đổi tên) thì **từ chối tạo**, không bỏ qua bước quét.
+4. Làm sạch tên hiển thị của người tạo trước khi dùng: bỏ ký tự Unicode dạng
+   định dạng (zero-width, bidi, BOM), gộp khoảng trắng, cắt còn tối đa 60 ký
+   tự. Quét bằng `tools.cronjob_tools._scan_cron_prompt` — cùng bộ quét
+   `cronjob_manage` dùng — trên **prompt đã ghép** (phần đầu kèm tên người tạo
+   đã làm sạch + prompt của người dùng), vì Hermes quét lại đúng prompt đã
+   ghép này ở mọi lần chạy. Trả chuỗi khác rỗng nghĩa là bị chặn thì trả lỗi
+   đó. Không import được (Hermes đổi tên) thì **từ chối tạo**, không bỏ qua
+   bước quét.
 5. Gọi `cron.jobs.create_job` với **mọi trường khoá cứng**:
 
    | Trường | Giá trị |

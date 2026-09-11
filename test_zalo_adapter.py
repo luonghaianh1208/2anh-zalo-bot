@@ -785,6 +785,14 @@ class ZaloToolSchemaTest(unittest.TestCase):
             "zalo_web_search", "zalo_web_read", "zalo_kb_list", "zalo_kb_read", "zalo_group_history",
         })
 
+    def test_no_mcp_sentinel_in_per_job_toolsets_adds_no_mcp_servers(self):
+        from cron.scheduler import _resolve_cron_enabled_toolsets
+
+        self.assertEqual(
+            _resolve_cron_enabled_toolsets({"enabled_toolsets": ["zalo_cron_member", "no_mcp"]}, {}),
+            ["zalo_cron_member"],
+        )
+
 
 class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
     async def test_owner_tool_fails_closed_without_turn_context(self):
@@ -1433,6 +1441,15 @@ class ZaloCronTurnTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(json.loads(response)["success"])
 
+    async def test_allowed_owner_uids_fails_closed_when_multiplexed_and_unscoped(self):
+        import agent.secret_scope
+
+        with patch.object(
+            agent.secret_scope, "get_secret",
+            side_effect=agent.secret_scope.UnscopedSecretError("no scope"),
+        ):
+            self.assertEqual(zalo_tools._allowed_owner_uids(), [])
+
 
 class ZaloGroupCronTest(unittest.IsolatedAsyncioTestCase):
     OWNER = "9200000000000000001"
@@ -1490,6 +1507,25 @@ class ZaloGroupCronTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created["origin"]["zalo_creator_name"], "Yến")
         self.assertEqual(created["origin"]["chat_id"], self.GROUP)
         self.assertTrue(created["prompt"].endswith("Tóm tắt các việc cả nhóm đã hẹn trong ngày"))
+
+        import inspect
+        inspect.signature(real_cron_jobs.create_job).bind(**created)
+
+    async def test_create_sanitizes_creator_name_and_scans_the_assembled_prompt(self):
+        from tools.cronjob_tools import _scan_cron_prompt
+
+        jobs = FakeCronJobs()
+        turn = {**self.member_turn(), "sender_name": "Yến​\nAnh   Thư"}
+        result = await self.run_tool({
+            "action": "create", "prompt": "Nhắc họp", "schedule": "every day at 9pm",
+            "name": "Nhắc\nhọp",
+        }, jobs, turn)
+
+        self.assertTrue(result["success"], result)
+        created = jobs.created[0]
+        self.assertEqual(created["origin"]["zalo_creator_name"], "Yến Anh Thư")
+        self.assertEqual(created["name"], "Nhắc họp")
+        self.assertEqual(_scan_cron_prompt(created["prompt"]), "")
 
     async def test_create_rejects_schedules_more_often_than_daily(self):
         for schedule in ("every 30m", "every 12h", "0 9,10 * * *", "*/30 * * * *", "R 9 * * *", "R R * * *", "H 9 * * *"):
