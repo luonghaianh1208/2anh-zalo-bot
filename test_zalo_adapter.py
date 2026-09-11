@@ -440,6 +440,62 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             ["THÔNG BÁO\nMai họp chi đoàn lúc 7h30.", "Em soạn xong rồi ạ, anh xem tin trên nhé."],
         )
 
+    async def test_send_split_marker_never_leaks_when_the_model_formats_it_loosely(self):
+        adapter = self.make_adapter()
+        sent = []
+
+        async def fake_command(command, expect_ack=False):
+            sent.append(command)
+            return {"ok": True, "msgId": f"m{len(sent)}"}
+
+        adapter._command = fake_command
+        for text in (
+            "Bản soạn A\n**[[NEW_MESSAGE]]**\nXác nhận A",
+            "Bản soạn B\r\n[[new_message]].\r\nXác nhận B",
+            "Bản soạn C [[NEW MESSAGE]] Xác nhận C",
+        ):
+            await adapter.send("9133571695356732407", text, metadata={"chat_type": "group"})
+
+        self.assertEqual(
+            [c["text"] for c in sent],
+            ["Bản soạn A", "Xác nhận A", "Bản soạn B", "Xác nhận B", "Bản soạn C", "Xác nhận C"],
+        )
+
+    async def test_owner_listed_in_ignore_sender_uids_is_still_answered(self):
+        owner = "5736877140444221354"
+        adapter = zalo_adapter.ZaloAdapter(
+            PlatformConfig(
+                enabled=True,
+                extra={
+                    "bridge_url": "ws://127.0.0.1:9",
+                    "reply_only_tagged": True,
+                    "ack_gestures": False,
+                    "ignore_sender_uids": [owner],
+                },
+            )
+        )
+        adapter._self_profile = {"user_id": "bot-uid", "display_name": "Lăng Tiêu"}
+        adapter._flood.check = lambda _uid: None
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+        with patch.object(adapter, "_is_owner", side_effect=lambda uid: str(uid) == owner), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message({
+                "type": "message", "id": "g-own", "threadId": "g1", "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                "senderUid": owner, "senderName": "Chủ nhân", "text": "@Lăng Tiêu tóm tắt giúp",
+                "mentions": [{"uid": "bot-uid"}],
+            })
+            await adapter._on_message({
+                "type": "message", "id": "dm-own", "threadId": owner, "threadType": zalo_adapter.THREAD_TYPE_USER,
+                "senderUid": owner, "senderName": "Chủ nhân", "text": "Chào em",
+            })
+
+        self.assertEqual([event.message_id for event in handled], ["g-own", "dm-own"])
+
     async def test_messages_from_ignored_bot_accounts_never_start_a_turn_but_stay_as_context(self):
         adapter = zalo_adapter.ZaloAdapter(
             PlatformConfig(
@@ -1923,8 +1979,10 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             "m2": {"thread_id": "another-group", "is_owner": False, "seq": 6},
         }
         public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
+        config = {"display": {"busy_input_mode": "interrupt"}}
         with patch.object(zalo_tools, "_ACTIVE_ADAPTER", adapter), \
-                patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "interrupt"}):
+                patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "interrupt"}), \
+                patch("hermes_cli.config.load_config_readonly", side_effect=lambda: config):
             zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
                                   "is_group": True, "is_owner": True, "text": "", "seq": 5})
             self.assertIsNone(self.guard("terminal"))
@@ -1934,9 +1992,15 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             self.assertEqual(self.guard("terminal")["action"], "block")
             self.assertIsNone(self.guard(public))
 
-            # Chế độ queue: tin đó chờ thành lượt riêng, lượt của chủ nhân giữ nguyên quyền.
+            # queue ở cả biến môi trường lẫn config: tin đó chờ thành lượt riêng,
+            # lượt của chủ nhân giữ nguyên quyền.
+            config["display"]["busy_input_mode"] = "queue"
             with patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "queue"}):
                 self.assertIsNone(self.guard("terminal"))
+
+                # /busy steer đổi config lúc đang chạy nhưng không đổi biến môi trường.
+                config["display"]["busy_input_mode"] = "steer"
+                self.assertEqual(self.guard("terminal")["action"], "block")
 
     def test_member_tool_call_bridge_is_judged_by_the_wrapped_tool(self):
         self.bind_member()

@@ -8,13 +8,17 @@ Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
 - **Tag thật trong nhóm.** Bot viết `@Tên hiển thị` thì sidecar gắn tag Zalo
   thật (người đó nhận thông báo) khi tên khớp trọn đúng một người — lấy từ
-  người vừa nhắn trong nhóm và danh sách thành viên. Tên trùng, không khớp thì
-  giữ dạng chữ. Hướng dẫn trình bày dặn chỉ tag khi thật sự cần gọi người đó.
+  người vừa nhắn trong nhóm và danh sách thành viên. Tên trùng, không khớp, còn
+  tiếp bằng chữ hoa ("@Trang Nguyễn"), bị cắt ở cuối chunk thì giữ dạng chữ;
+  nhóm đông hơn 200 người chỉ tag người vừa nhắn; tra thành viên quá 4 giây thì
+  gửi không tag. Hướng dẫn trình bày dặn chỉ tag khi thật sự cần gọi người đó.
 - **Bản soạn đứng riêng một tin.** Nhờ soạn thông báo/tin nhắn thì bot viết đúng
   nội dung, không lời mở đầu, rồi dòng `[[NEW_MESSAGE]]` và một câu xác nhận;
-  adapter tách thành hai tin nhắn để copy được ngay.
+  adapter tách thành hai tin nhắn để copy được ngay. Dấu được nhận cả khi in
+  đậm, viết thường, kèm dấu câu hay chung dòng, nên không lọt vào tin nhắn.
 - `platforms.zalo.extra.ignore_sender_uids` (hoặc `ZALO_IGNORE_SENDER_UIDS`):
-  tin của tài khoản bot khác vẫn giữ làm ngữ cảnh nhưng không gọi dậy bot.
+  tin của tài khoản bot khác trong nhóm vẫn giữ làm ngữ cảnh nhưng không gọi dậy
+  bot. Không áp cho tin nhắn riêng và không bao giờ áp cho chủ nhân.
 
 ### Sửa
 

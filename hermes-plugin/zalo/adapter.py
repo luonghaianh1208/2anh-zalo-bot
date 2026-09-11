@@ -213,9 +213,10 @@ _IMAGE_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Dòng bot viết riêng để tách một câu trả lời thành nhiều tin Zalo (vd. bản
-# soạn đứng một tin cho dễ copy, lời xác nhận sang tin sau).
-_NEW_MESSAGE_RE = re.compile(r"^[ \t]*\[\[NEW_MESSAGE\]\][ \t]*$", re.MULTILINE)
+# Dấu bot viết để tách một câu trả lời thành nhiều tin Zalo (vd. bản soạn đứng
+# một tin cho dễ copy, lời xác nhận sang tin sau). Nhận cả khi model lỡ in đậm,
+# viết thường, thêm dấu câu hay để chung dòng — dấu này không được lọt vào tin.
+_NEW_MESSAGE_RE = re.compile(r"[ \t]*[*_~]*\[\[\s*new[ _]message\s*\]\][*_~.:;!]*[ \t]*", re.IGNORECASE)
 
 _UNSUPPORTED_IMAGE_FORMATS = ("jxl", "heic", "heif", "avif", "tiff", "tif")
 
@@ -611,7 +612,9 @@ class ZaloAdapter(BasePlatformAdapter):
         if is_group:
             self._remember_group_message(thread_id, recent_entry)
 
-        if sender_uid in self._ignored_senders:
+        # Chỉ áp trong nhóm và không bao giờ áp cho chủ nhân: lỡ dán nhầm UID chủ
+        # nhân vào danh sách này thì bot không được im lặng với chính chủ.
+        if is_group and sender_uid in self._ignored_senders and not self._is_owner(sender_uid):
             logger.debug("[zalo] %s nằm trong ignore_sender_uids — chỉ giữ làm ngữ cảnh", sender_uid)
             return
 

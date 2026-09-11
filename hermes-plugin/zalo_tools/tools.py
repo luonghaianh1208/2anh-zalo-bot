@@ -2572,20 +2572,25 @@ _TOOL_SEARCH_READS = frozenset({"tool_search", "tool_describe"})
 
 
 def _busy_input_injects() -> bool:
-    """Hermes có chèn tin mới vào lượt đang chạy không (``interrupt``/``steer``).
+    """Hermes có thể chèn tin mới vào lượt đang chạy không (``interrupt``/``steer``).
 
     Chế độ ``queue`` thì tin mới chờ thành lượt riêng, không lẫn vào lượt này.
-    Không đọc được cấu hình thì coi như có chèn — thà hạ quyền nhầm còn hơn.
+    Chỉ tin là ``queue`` khi cả biến môi trường gateway đặt lúc khởi động lẫn
+    config.yaml hiện tại đều nói vậy: lệnh ``/busy`` đổi config lúc đang chạy mà
+    không đổi biến môi trường. Lệch nhau hoặc không đọc được thì coi như có chèn
+    — thà hạ quyền nhầm còn hơn.
     """
-    mode = os.getenv("HERMES_GATEWAY_BUSY_INPUT_MODE", "")
-    if not mode:
-        try:
-            from hermes_cli.config import load_config_readonly
+    modes = []
+    env_mode = os.getenv("HERMES_GATEWAY_BUSY_INPUT_MODE", "")
+    if env_mode:
+        modes.append(env_mode)
+    try:
+        from hermes_cli.config import load_config_readonly
 
-            mode = str(((load_config_readonly() or {}).get("display") or {}).get("busy_input_mode") or "")
-        except Exception:
-            return True
-    return mode.strip().lower() != "queue"
+        modes.append(str(((load_config_readonly() or {}).get("display") or {}).get("busy_input_mode") or ""))
+    except Exception:
+        return True
+    return not all(mode.strip().lower() == "queue" for mode in modes)
 
 
 def _outsider_spoke_after(turn: Dict[str, Any]) -> bool:

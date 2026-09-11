@@ -64,6 +64,10 @@ async function fetchGroupMembers(api, groupId) {
   };
 }
 
+// Tra thành viên để gắn tag nằm ngay trên đường gửi câu trả lời: treo quá lâu
+// thì gửi luôn không tag còn hơn để người dùng chờ.
+const MEMBER_LOOKUP_TIMEOUT_MS = 4000;
+
 // Những người bot có thể tag trong nhóm. Tên người vừa nhắn là đúng cái tên bot
 // thấy trong prompt nên lấy trước; danh sách thành viên bù cho người chưa nhắn.
 async function mentionCandidates(api, groupId) {
@@ -74,12 +78,27 @@ async function mentionCandidates(api, groupId) {
   for (const row of activeStore?.getHistory(activeAccountId, groupId, 1, 100) || []) {
     if (!row.isSelf) add(row.senderUid, row.senderName);
   }
+  let cacheable = true;
+  let timer;
   try {
-    for (const member of (await fetchGroupMembers(api, groupId)).members) add(member.id, member.displayName);
+    const lookup = await Promise.race([
+      fetchGroupMembers(api, groupId),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('quá thời gian tra thành viên')), MEMBER_LOOKUP_TIMEOUT_MS);
+      }),
+    ]);
+    // Nhóm đông hơn số hồ sơ tra được thì "tên duy nhất" không chắc đúng — chỉ
+    // tag người vừa nhắn, là những người bot đang thấy trong cuộc trò chuyện.
+    if (lookup.members.length >= lookup.total) {
+      for (const member of lookup.members) add(member.id, member.displayName);
+    }
   } catch (err) {
+    cacheable = false;
     console.warn('[bridge] không tra được thành viên nhóm để gắn tag:', err?.message || err);
+  } finally {
+    clearTimeout(timer);
   }
-  return [...candidates.values()];
+  return { members: [...candidates.values()], cacheable };
 }
 
 /**
@@ -794,7 +813,10 @@ async function handleCommand(ws, cmd) {
         const content = { msg: item.msg };
         if (item.styles && item.styles.length) content.styles = item.styles;
         // Vị trí tag tính trên chữ đã dịch Markdown của đúng chunk này.
-        const mentions = findMentions(item.msg, mentionable, { selfUid: activeAccountId });
+        const mentions = findMentions(item.msg, mentionable, {
+          selfUid: activeAccountId,
+          continuesInNextChunk: i < chunks.length - 1,
+        });
         if (mentions.length) content.mentions = mentions;
         // Chỉ trích dẫn (quote) ở tin đầu tiên nếu có
         if (i === 0 && cmd.quote) content.quote = cmd.quote;

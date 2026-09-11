@@ -236,6 +236,37 @@ test('send vào nhóm gắn tag thật cho "@Tên" khớp đúng một thành vi
   }
 });
 
+test('nhóm đông hơn số hồ sơ tra được thì không tag theo danh sách thành viên', async (t) => {
+  const sent = [];
+  const api = {
+    sendMessage(content) {
+      sent.push(content);
+      return Promise.resolve({ message: { msgId: `m${sent.length}` } });
+    },
+    async getGroupInfo() {
+      return { gridInfoMap: { g2: { memVerList: Array.from({ length: 250 }, (_, i) => `${1000 + i}_0`) } } };
+    },
+    async getGroupMembersInfo() {
+      return { profiles: { 1000: { displayName: 'Liên Lưu Thu' } } };
+    },
+  };
+  const ws = await openBridge(t, api);
+
+  try {
+    ws.send(JSON.stringify({
+      type: 'send', reqId: 'big', threadId: 'g2', threadType: 1,
+      text: 'Chị @Liên Lưu Thu xem giúp em.', auth: auth('g2', 1),
+    }));
+    const ack = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'big');
+
+    assert.equal(ack.ok, true);
+    assert.equal(sent[0].mentions, undefined);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 async function openBridge(t, api) {
   const server = startHermesBridge({ api, profile: null, port: 0, store: testStore(t) });
   await new Promise((resolve) => server.once('listening', resolve));
