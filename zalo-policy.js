@@ -67,7 +67,7 @@ function classify(command) {
   if (command.type === 'ping') return { minimumRole: 'system', category: 'health', dangerous: false };
   if (PUBLIC_COMMANDS.has(command.type)) return { minimumRole: 'public', category: 'send', dangerous: false };
   if (command.type === 'group_members') return { minimumRole: 'public', category: 'read', dangerous: false };
-  if (command.type === 'history') return { minimumRole: 'owner', category: 'read', dangerous: false };
+  if (command.type === 'history') return { minimumRole: 'public', category: 'read', dangerous: false };
   if (command.type === 'undo') return { minimumRole: 'owner', category: 'undo', dangerous: true };
   if (command.type !== 'invoke') return null;
 
@@ -81,7 +81,7 @@ function classify(command) {
   return null;
 }
 
-export function authorizeBridgeCommand(command, { ownerUids = new Set(), homeChannel = '' } = {}) {
+export function authorizeBridgeCommand(command, { ownerUids = new Set() } = {}) {
   const rule = classify(command || {});
   if (!rule) return denied('public', 'command_denied', 'unknown');
   if (rule.minimumRole === 'system') return allowed('system', rule.category);
@@ -89,11 +89,11 @@ export function authorizeBridgeCommand(command, { ownerUids = new Set(), homeCha
   const auth = command?.auth;
   const owners = ownerUids instanceof Set ? ownerUids : new Set(ownerUids || []);
   if (auth?.actorRole === 'system') {
-    // Ngoài lượt chat (cron, thông báo của gateway) không có người gửi nào.
-    // Chỉ cho gửi chữ hoặc báo đang gõ tới chủ nhân / kênh nhà, không gì khác.
-    const target = String(command.threadId ?? '');
-    const reachable = owners.has(target) || (Boolean(homeChannel) && target === String(homeChannel));
-    return ['send', 'typing'].includes(command.type) && reachable
+    // Ngoài lượt chat (cron, gửi bù sau khi gateway khởi động lại, thông báo)
+    // không có người gửi. Cầu nối chỉ nhận kết nối có token từ chính Hermes,
+    // nên vai trò này tới được mọi hội thoại — nhưng chỉ để gửi chữ hoặc báo
+    // đang gõ, không gọi hàm Zalo, không đọc lịch sử, không thu hồi.
+    return ['send', 'typing'].includes(command.type)
       ? allowed('system', rule.category)
       : denied('system', 'auth_required', rule.category);
   }

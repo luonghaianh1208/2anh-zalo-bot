@@ -79,13 +79,26 @@ test('missing and malformed authorization fail closed', () => {
   }, policyOptions).code, 'auth_required');
 });
 
-test('system actor (cron, thông báo gateway) chỉ gửi được tới chủ nhân hoặc kênh nhà', () => {
+test('system actor (cron, gửi bù, thông báo gateway) gửi chữ được tới mọi hội thoại nhưng không làm gì khác', () => {
   const system = { actorUid: '', actorRole: 'system', sourceThreadId: '', sourceThreadType: 0, confirmed: false };
-  const options = { ownerUids: new Set(['owner-1']), homeChannel: 'group-home' };
-  assert.equal(authorizeBridgeCommand({ type: 'send', threadId: 'owner-1', threadType: 0, auth: system }, options).allowed, true);
-  assert.equal(authorizeBridgeCommand({ type: 'send', threadId: 'group-home', threadType: 1, auth: system }, options).allowed, true);
-  assert.equal(authorizeBridgeCommand({ type: 'send', threadId: 'group-1', threadType: 1, auth: system }, options).code, 'auth_required');
-  assert.equal(authorizeBridgeCommand({ type: 'invoke', method: 'getAllGroups', args: [], auth: system }, options).allowed, false);
+  assert.equal(authorizeBridgeCommand({ type: 'send', threadId: 'owner-1', threadType: 0, auth: system }, policyOptions).allowed, true);
+  assert.equal(authorizeBridgeCommand({ type: 'send', threadId: 'group-1', threadType: 1, auth: system }, policyOptions).allowed, true);
+  assert.equal(authorizeBridgeCommand({ type: 'typing', threadId: 'group-1', threadType: 1, auth: system }, policyOptions).allowed, true);
+  assert.equal(authorizeBridgeCommand({ type: 'invoke', method: 'getAllGroups', args: [], auth: system }, policyOptions).code, 'auth_required');
+  assert.equal(authorizeBridgeCommand({
+    type: 'invoke', method: 'sendMessage', args: [{ msg: 'x' }, 'group-1', 1], auth: system,
+  }, policyOptions).code, 'auth_required');
+  assert.equal(authorizeBridgeCommand({ type: 'history', threadId: 'group-1', threadType: 1, auth: system }, policyOptions).code, 'auth_required');
+  assert.equal(authorizeBridgeCommand({ type: 'undo', threadId: 'group-1', threadType: 1, auth: system }, policyOptions).code, 'auth_required');
+});
+
+test('history mở cho public nhưng chỉ trong đúng hội thoại đang thao tác', () => {
+  assert.deepEqual(authorizeBridgeCommand({ type: 'history', threadId: 'group-1', threadType: 1, auth: publicAuth }, policyOptions), {
+    allowed: true, role: 'public', code: 'allowed', category: 'read',
+  });
+  assert.equal(authorizeBridgeCommand({ type: 'history', threadId: 'other-group', threadType: 1, auth: publicAuth }, policyOptions).code, 'cross_thread_denied');
+  assert.equal(authorizeBridgeCommand({ type: 'history', threadId: 'group-1', threadType: 0, auth: publicAuth }, policyOptions).code, 'cross_thread_denied');
+  assert.equal(authorizeBridgeCommand({ type: 'history', threadId: 'any-thread', threadType: 1, auth: ownerAuth }, policyOptions).allowed, true);
 });
 
 test('public group_members chỉ đọc được nhóm đang trò chuyện; tra hồ sơ theo ID là việc của chủ', () => {

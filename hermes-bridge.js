@@ -107,7 +107,6 @@ let historyListenerCallback = null;
 let historyListenerConnectedCallback = null;
 let historyListenerDisconnectedCallback = null;
 let historyListenerReady = true;
-let activeHomeChannel = '';
 const historyListenerReadyWaiters = new Set();
 
 function defaultStore() {
@@ -311,7 +310,6 @@ export function startHermesBridge({
   api, profile, port = defaultBridgePort(), store = null, maxBackfillPages: pageLimit = null,
   ownerUids = null, health = null, staleCheckIntervalMs = 15_000,
   bridgeToken = process.env.ZALO_BRIDGE_TOKEN,
-  homeChannel = process.env.ZALO_HOME_CHANNEL,
 }) {
   if (!bridgeToken) throw new Error('Thiếu ZALO_BRIDGE_TOKEN; hãy chạy npm run install:hermes');
   zaloApi = api;
@@ -322,7 +320,6 @@ export function startHermesBridge({
   activeOwnerUids = new Set(ownerUids || String(process.env.ZALO_ALLOWED_USERS || '')
     .split(',').map((value) => value.trim()).filter(Boolean));
   activeHealth = health;
-  activeHomeChannel = String(homeChannel || '').trim();
   maxBackfillPages = Math.max(1, Number(pageLimit) || Number(process.env.ZALO_BACKFILL_MAX_PAGES) || 10);
   limiter = new RateLimiter({
     capacity: Number(process.env.ZALO_RATE_BURST || 5),
@@ -649,6 +646,7 @@ function auditTargetSummary(cmd) {
     threadType: cmd.threadType == null
       ? (invokeThreadId == null ? undefined : 1)
       : Number(cmd.threadType),
+    cronJobId: cmd.auth?.cronJobId ? String(cmd.auth.cronJobId) : undefined,
   };
   if (Array.isArray(args[0])) summary.itemCount = args[0].length;
   return Object.fromEntries(Object.entries(summary).filter(([, value]) => value !== undefined));
@@ -661,7 +659,7 @@ async function handleCommand(ws, cmd) {
     return send(ws, { type: 'pong', ts: Date.now() });
   }
 
-  const authorization = authorizeBridgeCommand(cmd, { ownerUids: activeOwnerUids, homeChannel: activeHomeChannel });
+  const authorization = authorizeBridgeCommand(cmd, { ownerUids: activeOwnerUids });
   const shouldAudit = ['send', 'admin', 'undo'].includes(authorization.category);
   const auditRequestId = String(cmd.reqId || `bridge-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   let auditFinished = false;

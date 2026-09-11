@@ -797,6 +797,59 @@ test('bridge audits successful and failed owner administration without payload s
   }
 });
 
+test('tin system (kết quả cron) gửi được vào nhóm không phải kênh nhà', async (t) => {
+  const store = testStore(t);
+  const sent = [];
+  const api = {
+    sendMessage: (content, threadId, type) => {
+      sent.push([content.msg, threadId, type]);
+      return Promise.resolve({ message: { msgId: 'cron-m', cliMsgId: 'cron-c' } });
+    },
+  };
+  const server = startHermesBridge({ api, profile: { user_id: 'bot' }, port: 0, store, ownerUids: ['owner'] });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await hello;
+    ws.send(JSON.stringify({
+      type: 'send', reqId: 'cron-send', threadId: 'group-9', threadType: 1, text: 'Nhắc họp',
+      auth: { actorUid: '', actorRole: 'system', sourceThreadId: '', sourceThreadType: 0, confirmed: false },
+    }));
+    const ack = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'cron-send');
+    assert.equal(ack.ok, true);
+    assert.deepEqual(sent, [['Nhắc họp', 'group-9', 1]]);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
+test('audit ghi mã cron khi lệnh do một việc hẹn giờ phát ra', async (t) => {
+  const store = testStore(t);
+  const api = { changeGroupName: () => Promise.resolve({ ok: true }) };
+  const server = startHermesBridge({ api, profile: { user_id: 'bot' }, port: 0, store, ownerUids: ['owner'] });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await hello;
+    ws.send(JSON.stringify({
+      type: 'invoke', reqId: 'cron-admin', method: 'changeGroupName', args: ['Tên mới', 'group-1'],
+      auth: { ...auth('owner', 0, { confirmed: true }), cronJobId: 'job-9' },
+    }));
+    assert.equal((await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'cron-admin')).ok, true);
+    assert.equal(store.getAuditTrail('cron-admin')[0].targetSummary.cronJobId, 'job-9');
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 test('bridge ping returns pong and refreshes runtime heartbeat', async (t) => {
   const store = testStore(t);
   const health = createRuntimeHealth({ store });
