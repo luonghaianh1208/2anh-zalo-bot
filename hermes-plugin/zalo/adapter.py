@@ -185,6 +185,15 @@ MAX_MESSAGE_LENGTH = 2800
 # tiếng Anh này. Cầu nối đã tự gửi lại chữ thường từ trước, nên câu này chỉ làm
 # lộ thông báo nội bộ vào nhóm Zalo — adapter bỏ nó đi.
 HERMES_PLAIN_FALLBACK_MARKER = "(Response formatting failed, plain text:)"
+# Lõi Hermes bọc kết quả cron trong một khung tiếng Anh (cron.wrap_response,
+# mặc định bật cho mọi nền tảng). Trong nhóm Zalo khung đó chỉ là chữ lạ kèm mã
+# job — bỏ ở đây để Telegram vẫn giữ nguyên cấu hình chung. Bắt cả dòng
+# "(job_id: …)" để không cắt nhầm tin thường tình cờ mở đầu bằng cùng chữ.
+_CRON_WRAPPER_RE = re.compile(
+    r"\ACronjob Response: [^\n]*\n\(job_id: [^)\n]*\)\n-{5,}\n\n(?P<body>.*?)"
+    r"(?:\n\nTo stop or manage this job, send me a new message[^\n]*)?\Z",
+    re.DOTALL,
+)
 RECONNECT_BACKOFF = [2, 5, 10, 30, 60]
 ACK_TIMEOUT_SECONDS = 30
 
@@ -567,6 +576,7 @@ class ZaloAdapter(BasePlatformAdapter):
             # bot — trong nhóm phải tag thì tin mới tới được đây.
             "text": self._strip_mention(text) if text else "",
             "sender_uid": sender_uid,
+            "sender_name": sender_name,
             "thread_id": thread_id,
             "is_group": is_group,
             "is_owner": self._is_owner(sender_uid),
@@ -995,7 +1005,16 @@ class ZaloAdapter(BasePlatformAdapter):
             # cụ mặc định — không được để chuyện đó xảy ra vì lỗi ở đây.
             logger.warning("[zalo] không gắn được danh tính lượt: %s", exc)
             try:
-                _zalo_tools().bind_turn(None)
+                # Rơi về quyền công khai của đúng người và hội thoại này, KHÔNG
+                # rơi về lượt rỗng: lượt rỗng mang vai trò system, mà system gửi
+                # được tới mọi hội thoại.
+                _zalo_tools().bind_turn({
+                    "sender_uid": uid,
+                    "thread_id": str(getattr(source, "chat_id", "") or ""),
+                    "is_group": str(getattr(source, "chat_type", "") or "") == "group",
+                    "is_owner": False,
+                    "text": "",
+                })
             except Exception:
                 pass
             return False
@@ -1054,6 +1073,11 @@ class ZaloAdapter(BasePlatformAdapter):
         )
         if content and content.startswith(HERMES_PLAIN_FALLBACK_MARKER):
             content = content[len(HERMES_PLAIN_FALLBACK_MARKER):].lstrip("\n")
+
+        if content:
+            wrapped = _CRON_WRAPPER_RE.match(content)
+            if wrapped:
+                content = wrapped.group("body").strip()
 
         last: Optional[Dict[str, Any]] = None
         for chunk in self._chunk(content):

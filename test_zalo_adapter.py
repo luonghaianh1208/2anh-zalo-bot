@@ -234,6 +234,60 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(sent[-1]["text"], "Nội dung trả lời")
 
+    async def test_send_strips_hermes_cron_wrapper_but_keeps_normal_text(self):
+        adapter = self.make_adapter()
+        sent = []
+
+        async def fake_command(command, expect_ack=False):
+            sent.append(command)
+            return {"ok": True, "msgId": "cron-1"}
+
+        adapter._command = fake_command
+        wrapped = (
+            "Cronjob Response: Nhắc họp\n(job_id: abc123)\n-------------\n\n"
+            "Mai 7h30 họp chi đoàn nhé!\n\n"
+            'To stop or manage this job, send me a new message (e.g. "stop reminder Nhắc họp").'
+        )
+        await adapter.send("9133571695356732407", wrapped, metadata={"chat_type": "group", "job_id": "abc123"})
+        await adapter.send(
+            "9133571695356732407", "Cronjob Response: là tên một mục trong báo cáo",
+            metadata={"chat_type": "group"},
+        )
+
+        self.assertEqual(sent[0]["text"], "Mai 7h30 họp chi đoàn nhé!")
+        self.assertEqual(sent[1]["text"], "Cronjob Response: là tên một mục trong báo cáo")
+
+    async def test_turn_binding_failure_falls_back_to_public_not_system(self):
+        adapter = self.make_adapter()
+
+        class ExplodingTurns(dict):
+            def get(self, *_args, **_kwargs):
+                raise RuntimeError("hỏng bảng lượt")
+
+        adapter._turns = ExplodingTurns()
+        source = adapter.build_source(
+            chat_id="group-1", chat_name="group-1", chat_type="group",
+            user_id="2222222222222222222", user_name="M", message_id="m-x",
+        )
+        with patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            toolsets = adapter.toolsets_for_source(source)
+            auth = zalo_tools.current_authorization()
+
+        self.assertEqual(toolsets, [zalo_adapter.TOOLSET_PUBLIC])
+        self.assertEqual(auth["actorRole"], "public")
+        self.assertEqual(auth["actorUid"], "2222222222222222222")
+        self.assertEqual(auth["sourceThreadId"], "group-1")
+
+    async def test_turn_remembers_sender_display_name(self):
+        adapter = self.make_adapter()
+        adapter.handle_message = lambda _event: asyncio.sleep(0)
+        frame = {**self.group_frame("m-name", "2222222222222222222", "@Lăng Tiêu nhắc họp"), "senderName": "Hoàng Yến"}
+        with patch.object(adapter, "_is_owner", return_value=False), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            await adapter._on_message(frame)
+
+        self.assertEqual(zalo_tools._turn()["sender_name"], "Hoàng Yến")
+
     @staticmethod
     def group_frame(msg_id, uid, text):
         return {

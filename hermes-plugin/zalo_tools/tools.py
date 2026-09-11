@@ -58,7 +58,7 @@ _CONFIRMATION_TTL_SECONDS = 300
 def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool,
                      is_owner: bool, text: str = "", reply_msg_id: str = "",
                      reply_cli_msg_id: str = "", reply_is_own: bool = False,
-                     msg_id: str = "") -> None:
+                     msg_id: str = "", sender_name: str = "") -> None:
     """Adapter gọi trước khi đẩy tin vào agent.
 
     ``text`` là NGUYÊN VĂN tin nhắn người dùng vừa gõ, chưa qua tay mô hình.
@@ -77,6 +77,7 @@ def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool,
         "reply_cli_msg_id": str(reply_cli_msg_id or ""),
         "reply_is_own": bool(reply_is_own),
         "msg_id": str(msg_id or ""),
+        "sender_name": str(sender_name or ""),
     })
 
 
