@@ -31,6 +31,7 @@ Configuration in config.yaml::
         extra:
           bridge_url: "ws://127.0.0.1:3873"
           reply_only_tagged: true      # groups: only answer when mentioned
+          ignore_sender_uids: ["..."]  # other bot accounts: context only, never a turn
 
 Environment variables (env wins over config.yaml ``extra``):
 
@@ -212,6 +213,10 @@ _IMAGE_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Dòng bot viết riêng để tách một câu trả lời thành nhiều tin Zalo (vd. bản
+# soạn đứng một tin cho dễ copy, lời xác nhận sang tin sau).
+_NEW_MESSAGE_RE = re.compile(r"^[ \t]*\[\[NEW_MESSAGE\]\][ \t]*$", re.MULTILINE)
+
 _UNSUPPORTED_IMAGE_FORMATS = ("jxl", "heic", "heif", "avif", "tiff", "tif")
 
 
@@ -371,6 +376,13 @@ class ZaloAdapter(BasePlatformAdapter):
             extra.get("auto_react", _get_scoped_secret("ZALO_AUTO_REACT", "true")),
             default=True,
         )
+        # Tài khoản bot khác trong cùng nhóm (vd. hai bot của cùng chủ nhân):
+        # tin của họ vẫn giữ làm ngữ cảnh, nhưng không bao giờ gọi dậy bot này,
+        # để hai bot không trả lời qua lại lẫn nhau.
+        ignored = extra.get("ignore_sender_uids", _get_scoped_secret("ZALO_IGNORE_SENDER_UIDS", ""))
+        if isinstance(ignored, (list, tuple, set)):
+            ignored = ",".join(str(uid) for uid in ignored)
+        self._ignored_senders = set(_split_ids(str(ignored or "")))
 
         # Ngưỡng đặt rộng tay có chủ đích: sáu tin trong mười lăm giây nhanh
         # hơn nhịp hỏi của người thật khá nhiều, nên người dùng bình thường
@@ -598,6 +610,10 @@ class ZaloAdapter(BasePlatformAdapter):
         }
         if is_group:
             self._remember_group_message(thread_id, recent_entry)
+
+        if sender_uid in self._ignored_senders:
+            logger.debug("[zalo] %s nằm trong ignore_sender_uids — chỉ giữ làm ngữ cảnh", sender_uid)
+            return
 
         mentioned = self._is_mentioned(frame, text)
         # Trong nhóm: không trả lời khi chưa được gọi, nhưng vẫn giữ tin đó trong
@@ -1155,8 +1171,19 @@ class ZaloAdapter(BasePlatformAdapter):
             if wrapped:
                 content = wrapped.group("body").strip()
 
+        if metadata.get("_interim_send") and (content or "").lstrip().startswith("💾"):
+            # "💾 Self-improvement review / Memory updated" là việc nội bộ của
+            # bot; gửi vào hội thoại Zalo chỉ chen một tin lạ giữa cuộc trò chuyện.
+            logger.debug("[zalo] bỏ thông báo nội bộ của Hermes: %s", content[:80])
+            return SendResult(success=True)
+
+        # Bot đánh dấu [[NEW_MESSAGE]] để tách bản soạn ra một tin riêng, dễ copy.
+        parts = _NEW_MESSAGE_RE.split(content) if content else [content]
+        if len(parts) > 1:
+            parts = [part.strip() for part in parts if part.strip()]
+
         last: Optional[Dict[str, Any]] = None
-        for chunk in self._chunk(content):
+        for chunk in (chunk for part in parts for chunk in self._chunk(part)):
             last = await self._command(
                 {"type": "send", "threadId": str(chat_id), "threadType": thread_type, "text": chunk},
                 expect_ack=True,

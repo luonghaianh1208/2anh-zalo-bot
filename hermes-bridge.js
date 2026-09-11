@@ -3,6 +3,7 @@ import { ThreadType, Reactions } from 'zca-js';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { formatAndChunkZaloMarkdown } from './markdown-formatter.js';
+import { createMemberDirectory, findMentions } from './zalo-mentions.js';
 import { pickSmartReaction } from './smart-reaction.js';
 import { RateLimiter, RateLimitedError, THROTTLED_METHODS } from './rate-limiter.js';
 import { openZaloStore } from './zalo-store.js';
@@ -44,6 +45,42 @@ function defaultBridgePort() {
 // Nhóm Zalo có thể tới hàng nghìn người; tra hồ sơ chừng này là đủ để trả lời
 // "nhóm có ai" mà không làm một lệnh đọc kéo dài.
 const GROUP_MEMBERS_LIMIT = 200;
+
+// getGroupMembersInfo nhận ID THÀNH VIÊN, không nhận ID nhóm — hỏi getGroupInfo
+// lấy danh sách ID trước (dạng "uid_0").
+async function fetchGroupMembers(api, groupId) {
+  const info = await api.getGroupInfo([groupId]);
+  const memberIds = (info?.gridInfoMap?.[groupId]?.memVerList || [])
+    .map((entry) => String(entry).replace(/_\d+$/, ''))
+    .filter(Boolean);
+  const lookup = memberIds.slice(0, GROUP_MEMBERS_LIMIT);
+  const profiles = lookup.length ? (await api.getGroupMembersInfo(lookup))?.profiles || {} : {};
+  return {
+    total: memberIds.length,
+    members: lookup.map((id) => ({
+      id,
+      displayName: profiles[id]?.displayName || profiles[id]?.zaloName || '',
+    })),
+  };
+}
+
+// Những người bot có thể tag trong nhóm. Tên người vừa nhắn là đúng cái tên bot
+// thấy trong prompt nên lấy trước; danh sách thành viên bù cho người chưa nhắn.
+async function mentionCandidates(api, groupId) {
+  const candidates = new Map();
+  const add = (uid, name) => {
+    if (uid && name) candidates.set(`${uid}|${name}`, { uid: String(uid), name: String(name) });
+  };
+  for (const row of activeStore?.getHistory(activeAccountId, groupId, 1, 100) || []) {
+    if (!row.isSelf) add(row.senderUid, row.senderName);
+  }
+  try {
+    for (const member of (await fetchGroupMembers(api, groupId)).members) add(member.id, member.displayName);
+  } catch (err) {
+    console.warn('[bridge] không tra được thành viên nhóm để gắn tag:', err?.message || err);
+  }
+  return [...candidates.values()];
+}
 
 /**
  * Các API zca-js mà Hermes được phép gọi qua lệnh `invoke`.
@@ -306,6 +343,9 @@ export function isHermesAttached() {
   return false;
 }
 
+// Danh bạ để gắn tag thật cho "@Tên" trong tin gửi vào nhóm (xem zalo-mentions.js).
+let memberDirectory = null;
+
 export function startHermesBridge({
   api, profile, port = defaultBridgePort(), store = null, maxBackfillPages: pageLimit = null,
   ownerUids = null, health = null, staleCheckIntervalMs = 15_000,
@@ -313,6 +353,10 @@ export function startHermesBridge({
 }) {
   if (!bridgeToken) throw new Error('Thiếu ZALO_BRIDGE_TOKEN; hãy chạy npm run install:hermes');
   zaloApi = api;
+  memberDirectory = createMemberDirectory({
+    fetchMembers: (groupId) => mentionCandidates(api, groupId),
+    ttlMs: 5 * 60 * 1000,
+  });
   selfProfile = profile || null;
   activeAccountId = String(profile?.user_id ?? profile?.userId ?? 'unknown');
   activeStore = store || defaultStore();
@@ -443,6 +487,7 @@ export function stopHermesBridge() {
   if (ownsActiveStore && activeStore) activeStore.close();
   activeStore = null;
   ownsActiveStore = false;
+  memberDirectory = null;
   activeOwnerUids = new Set();
   activeHealth = null;
   limiter = null;
@@ -738,12 +783,19 @@ async function handleCommand(ws, cmd) {
       // (tiêu đề to + đậm, chỉ mục số đậm + to, từ khoá in đậm) mà không bị Zalo từ chối!
       const rawText = String(cmd.text ?? '');
       const chunks = formatAndChunkZaloMarkdown(rawText);
+      // Chỉ tra danh bạ khi tin vào nhóm thật sự có "@" — phần lớn tin không cần.
+      const mentionable = threadType === ThreadType.Group && rawText.includes('@') && memberDirectory
+        ? await memberDirectory.get(String(cmd.threadId))
+        : [];
 
       let lastMsgId = null;
       for (let i = 0; i < chunks.length; i++) {
         const item = chunks[i];
         const content = { msg: item.msg };
         if (item.styles && item.styles.length) content.styles = item.styles;
+        // Vị trí tag tính trên chữ đã dịch Markdown của đúng chunk này.
+        const mentions = findMentions(item.msg, mentionable, { selfUid: activeAccountId });
+        if (mentions.length) content.mentions = mentions;
         // Chỉ trích dẫn (quote) ở tin đầu tiên nếu có
         if (i === 0 && cmd.quote) content.quote = cmd.quote;
 
@@ -767,9 +819,9 @@ async function handleCommand(ws, cmd) {
           // Có mã lỗi dạng số nghĩa là máy chủ đã từ chối, tin chưa đi, nên gửi
           // lại đúng chunk này dạng chữ thường: mất định dạng còn hơn mất cả tin.
           // Lỗi mạng không có mã số thì không gửi lại, tránh tin bị lặp.
-          if (!content.styles || !/^-?\d+$/.test(String(err?.code ?? ''))) throw err;
-          console.warn(`[bridge] Zalo từ chối chunk ${i + 1}/${chunks.length} có định dạng (mã ${err.code}) — gửi lại dạng chữ thường`);
-          const { styles: _dropped, ...plain } = content;
+          if (!(content.styles || content.mentions) || !/^-?\d+$/.test(String(err?.code ?? ''))) throw err;
+          console.warn(`[bridge] Zalo từ chối chunk ${i + 1}/${chunks.length} có định dạng/tag (mã ${err.code}) — gửi lại dạng chữ thường`);
+          const { styles: _dropped, mentions: _droppedMentions, ...plain } = content;
           res = await zaloApi.sendMessage(plain, String(cmd.threadId), threadType);
         }
         rememberOutboundResult(res, cmd.threadId, threadType, item.msg);
@@ -817,21 +869,9 @@ async function handleCommand(ws, cmd) {
     }
 
     case 'group_members': {
-      // getGroupMembersInfo nhận ID thành viên, không nhận ID nhóm — hỏi
-      // getGroupInfo lấy danh sách ID trước (dạng "uid_0").
-      const groupId = String(cmd.threadId);
-      const info = await zaloApi.getGroupInfo([groupId]);
-      const memberIds = (info?.gridInfoMap?.[groupId]?.memVerList || [])
-        .map((entry) => String(entry).replace(/_\d+$/, ''))
-        .filter(Boolean);
-      const lookup = memberIds.slice(0, GROUP_MEMBERS_LIMIT);
-      const profiles = lookup.length ? (await zaloApi.getGroupMembersInfo(lookup))?.profiles || {} : {};
-      const members = lookup.map((id) => ({
-        id,
-        displayName: profiles[id]?.displayName || profiles[id]?.zaloName || '',
-      }));
+      const result = await fetchGroupMembers(zaloApi, String(cmd.threadId));
       if (cmd.reqId) {
-        send(ws, { type: 'ack', reqId: cmd.reqId, ok: true, result: { total: memberIds.length, members } });
+        send(ws, { type: 'ack', reqId: cmd.reqId, ok: true, result });
       }
       break;
     }

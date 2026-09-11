@@ -2571,6 +2571,23 @@ _PUBLIC_TOOL_NAMES = frozenset(name for name, _e, _s, _h, toolset in TOOLS if to
 _TOOL_SEARCH_READS = frozenset({"tool_search", "tool_describe"})
 
 
+def _busy_input_injects() -> bool:
+    """Hermes có chèn tin mới vào lượt đang chạy không (``interrupt``/``steer``).
+
+    Chế độ ``queue`` thì tin mới chờ thành lượt riêng, không lẫn vào lượt này.
+    Không đọc được cấu hình thì coi như có chèn — thà hạ quyền nhầm còn hơn.
+    """
+    mode = os.getenv("HERMES_GATEWAY_BUSY_INPUT_MODE", "")
+    if not mode:
+        try:
+            from hermes_cli.config import load_config_readonly
+
+            mode = str(((load_config_readonly() or {}).get("display") or {}).get("busy_input_mode") or "")
+        except Exception:
+            return True
+    return mode.strip().lower() != "queue"
+
+
 def _outsider_spoke_after(turn: Dict[str, Any]) -> bool:
     """Có người ngoài gọi bot trong cùng hội thoại sau khi lượt này bắt đầu không.
 
@@ -2578,7 +2595,7 @@ def _outsider_spoke_after(turn: Dict[str, Any]) -> bool:
     đang chạy, nên lượt của chủ nhân có thể đang xử lý cả lời của người ngoài.
     """
     adapter, seq = _ACTIVE_ADAPTER, turn.get("seq")
-    if adapter is None or seq is None:
+    if adapter is None or seq is None or not _busy_input_injects():
         return False
     return any(
         other.get("thread_id") == turn.get("thread_id")

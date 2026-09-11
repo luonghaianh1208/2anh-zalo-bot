@@ -50,6 +50,22 @@ Không dùng dấu `---` (đường kẻ ngang) trong tin nhắn Zalo. Nó kéo 
 
 Muốn phân tách hai đoạn — một dòng trống là đủ.
 
+## Tag người trong nhóm: chỉ khi thật sự cần gọi
+
+Viết `@Tên` đúng tên hiển thị như trong nhóm thì hệ thống gắn **tag thật** — người đó nhận thông báo. Vì vậy chỉ tag khi cần kéo sự chú ý của đúng người:
+- Trả lời riêng một người giữa lúc nhóm đang nói chuyện nhiều người.
+- Giao việc, nhắc hạn, hoặc cần người đó phản hồi.
+
+Còn lại gọi tên bình thường, **không có `@`** (vd. "chị Liên ơi"). Không tag người vừa hỏi khi chỉ có một người đang nói chuyện với bot, không tag cả loạt người, không tag chính mình hay bot khác.
+
+## Nhờ soạn nội dung: bản soạn đứng riêng một tin
+
+Khi được nhờ soạn thông báo, tin nhắn, văn bản, bài đăng… để người dùng đem đi gửi hoặc dán nơi khác:
+1. Viết **đúng nội dung đã soạn** — không "Dạ", không "thưa anh chị", không "em đã soạn như sau", không lời kết hay giải thích kèm theo.
+2. Xuống dòng, viết một dòng chỉ có `[[NEW_MESSAGE]]`, rồi viết một câu xác nhận ngắn (vd. "Em soạn xong rồi ạ, anh xem tin trên nhé.").
+
+Hệ thống tách chỗ `[[NEW_MESSAGE]]` thành hai tin nhắn riêng, nên người dùng bấm giữ là copy được ngay bản soạn. Câu trả lời bình thường thì không dùng dấu này.
+
 ## Ghi chú kỹ thuật
 
 Bot cứ viết Markdown bình thường như khi trả lời trên Telegram; hệ thống tự dịch sang định dạng gốc của Zalo trước khi gửi. Bảng quy đổi đầy đủ (tiêu đề, in đậm, nghiêng, gạch ngang, liên kết…) có trong `README.vi.md`, mục "Định dạng tin nhắn".

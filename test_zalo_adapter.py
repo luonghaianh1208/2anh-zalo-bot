@@ -400,6 +400,80 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[0]["text"], "Mai 7h30 họp chi đoàn nhé!")
         self.assertEqual(sent[1]["text"], "Cronjob Response: là tên một mục trong báo cáo")
 
+    async def test_send_drops_hermes_self_improvement_notice_but_keeps_normal_text(self):
+        adapter = self.make_adapter()
+        sent = []
+
+        async def fake_command(command, expect_ack=False):
+            sent.append(command)
+            return {"ok": True, "msgId": "m1"}
+
+        adapter._command = fake_command
+        result = await adapter.send(
+            "9133571695356732407", "💾 Self-improvement review: Skill 'zalo-chat-operations' patched",
+            metadata={"chat_type": "group", "_interim_send": True},
+        )
+        self.assertTrue(result.success)
+        self.assertEqual(sent, [])
+
+        await adapter.send("9133571695356732407", "💾 là biểu tượng lưu tệp", metadata={"chat_type": "group"})
+        self.assertEqual([c["text"] for c in sent], ["💾 là biểu tượng lưu tệp"])
+
+    async def test_send_splits_new_message_marker_into_separate_messages(self):
+        adapter = self.make_adapter()
+        sent = []
+
+        async def fake_command(command, expect_ack=False):
+            sent.append(command)
+            return {"ok": True, "msgId": f"m{len(sent)}"}
+
+        adapter._command = fake_command
+        result = await adapter.send(
+            "9133571695356732407",
+            "THÔNG BÁO\nMai họp chi đoàn lúc 7h30.\n\n[[NEW_MESSAGE]]\nEm soạn xong rồi ạ, anh xem tin trên nhé.",
+            metadata={"chat_type": "group"},
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(
+            [c["text"] for c in sent],
+            ["THÔNG BÁO\nMai họp chi đoàn lúc 7h30.", "Em soạn xong rồi ạ, anh xem tin trên nhé."],
+        )
+
+    async def test_messages_from_ignored_bot_accounts_never_start_a_turn_but_stay_as_context(self):
+        adapter = zalo_adapter.ZaloAdapter(
+            PlatformConfig(
+                enabled=True,
+                extra={
+                    "bridge_url": "ws://127.0.0.1:9",
+                    "reply_only_tagged": True,
+                    "ack_gestures": False,
+                    "ignore_sender_uids": ["5736877140444221354"],
+                },
+            )
+        )
+        adapter._self_profile = {"user_id": "bot-uid", "display_name": "Lăng Tiêu"}
+        adapter._flood.check = lambda _uid: None
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+        frame = {
+            "type": "message", "threadId": "g1", "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+            "text": "@Lăng Tiêu soi giúp ảnh này", "mentions": [{"uid": "bot-uid"}],
+        }
+        with patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message({**frame, "id": "b1", "senderUid": "5736877140444221354", "senderName": "Uyển Nhi"})
+            await adapter._on_message({**frame, "id": "m1", "senderUid": "3915070541883948642", "senderName": "Liên"})
+
+        self.assertEqual([event.source.user_id for event in handled], ["3915070541883948642"])
+        self.assertEqual(
+            [entry["sender_uid"] for entry in adapter._recent_group_messages["g1"]],
+            ["5736877140444221354", "3915070541883948642"],
+        )
+
     async def test_turn_binding_failure_falls_back_to_public_not_system(self):
         adapter = self.make_adapter()
 
@@ -1849,7 +1923,8 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             "m2": {"thread_id": "another-group", "is_owner": False, "seq": 6},
         }
         public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
-        with patch.object(zalo_tools, "_ACTIVE_ADAPTER", adapter):
+        with patch.object(zalo_tools, "_ACTIVE_ADAPTER", adapter), \
+                patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "interrupt"}):
             zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
                                   "is_group": True, "is_owner": True, "text": "", "seq": 5})
             self.assertIsNone(self.guard("terminal"))
@@ -1858,6 +1933,10 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             adapter._turns["m3"] = {"thread_id": self.GROUP, "is_owner": False, "seq": 7}
             self.assertEqual(self.guard("terminal")["action"], "block")
             self.assertIsNone(self.guard(public))
+
+            # Chế độ queue: tin đó chờ thành lượt riêng, lượt của chủ nhân giữ nguyên quyền.
+            with patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "queue"}):
+                self.assertIsNone(self.guard("terminal"))
 
     def test_member_tool_call_bridge_is_judged_by_the_wrapped_tool(self):
         self.bind_member()

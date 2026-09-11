@@ -2,6 +2,27 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.5.0] — 2026-09-11
+
+### Thêm
+
+- **Tag thật trong nhóm.** Bot viết `@Tên hiển thị` thì sidecar gắn tag Zalo
+  thật (người đó nhận thông báo) khi tên khớp trọn đúng một người — lấy từ
+  người vừa nhắn trong nhóm và danh sách thành viên. Tên trùng, không khớp thì
+  giữ dạng chữ. Hướng dẫn trình bày dặn chỉ tag khi thật sự cần gọi người đó.
+- **Bản soạn đứng riêng một tin.** Nhờ soạn thông báo/tin nhắn thì bot viết đúng
+  nội dung, không lời mở đầu, rồi dòng `[[NEW_MESSAGE]]` và một câu xác nhận;
+  adapter tách thành hai tin nhắn để copy được ngay.
+- `platforms.zalo.extra.ignore_sender_uids` (hoặc `ZALO_IGNORE_SENDER_UIDS`):
+  tin của tài khoản bot khác vẫn giữ làm ngữ cảnh nhưng không gọi dậy bot.
+
+### Sửa
+
+- Thông báo nội bộ "💾 Self-improvement review / Memory updated" của Hermes không
+  còn gửi vào hội thoại Zalo.
+- Chế độ `busy_input_mode: queue` thì tin người ngoài xếp hàng thành lượt riêng,
+  nên lượt đang chạy của chủ nhân không bị hạ quyền nữa.
+
 ## [1.4.1] — 2026-09-11
 
 ### Bảo mật
