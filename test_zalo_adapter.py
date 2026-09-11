@@ -3,6 +3,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -707,6 +709,39 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             audio_path,
             {"chat_type": "group"},
         ))
+
+    async def test_ack_wakes_a_command_waiting_on_another_event_loop(self):
+        # Công cụ chạy trên vòng lặp riêng của luồng agent, ack tới trên vòng lặp
+        # gateway. Ack phải đánh thức lệnh ngay, không để nó chờ hết thời gian chờ.
+        adapter = self.make_adapter()
+        socket = CapturingSocket()
+        adapter._ws = socket
+        result = {}
+
+        def tool_thread():
+            loop = asyncio.new_event_loop()
+            try:
+                started = time.monotonic()
+                result["ack"] = loop.run_until_complete(adapter._command(
+                    {"type": "history", "threadId": "g1", "threadType": 1}, expect_ack=True,
+                ))
+                result["seconds"] = time.monotonic() - started
+            finally:
+                loop.close()
+
+        with patch.object(zalo_adapter, "ACK_TIMEOUT_SECONDS", 3), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            thread = threading.Thread(target=tool_thread)
+            thread.start()
+            for _ in range(200):
+                if socket.frames:
+                    break
+                await asyncio.sleep(0.01)
+            await adapter._dispatch({"type": "ack", "reqId": socket.frames[0]["reqId"], "ok": True})
+            await asyncio.to_thread(thread.join)
+
+        self.assertEqual(result["ack"], {"type": "ack", "reqId": socket.frames[0]["reqId"], "ok": True})
+        self.assertLess(result["seconds"], 1.0)
 
 
 class ZaloToolSchemaTest(unittest.TestCase):

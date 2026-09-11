@@ -273,6 +273,33 @@ def is_connected(config) -> bool:
     return bool(extra.get("bridge_url") or _get_scoped_secret("ZALO_BRIDGE_URL") or DEFAULT_BRIDGE_URL)
 
 
+def _resolve_pending(fut: "asyncio.Future", value: Any) -> None:
+    """Trả kết quả cho lệnh đang chờ ack, kể cả khi lệnh chờ trên vòng lặp khác.
+
+    Công cụ Zalo chạy trên vòng lặp riêng của luồng agent, còn ack tới trên vòng
+    lặp gateway. Gọi thẳng set_result từ luồng khác không đánh thức vòng lặp đang
+    chờ — nó chỉ thấy kết quả khi hết ACK_TIMEOUT_SECONDS, nên mỗi lệnh Zalo từng
+    chậm đúng 30 giây dù sidecar làm xong ngay.
+    """
+    def settle() -> None:
+        if not fut.done():
+            fut.set_result(value)
+
+    loop = fut.get_loop()
+    try:
+        current = asyncio.get_running_loop()
+    except RuntimeError:
+        current = None
+    if loop is current:
+        settle()
+        return
+    try:
+        loop.call_soon_threadsafe(settle)
+    except RuntimeError:
+        # Vòng lặp của lệnh đã đóng (lệnh đã bỏ cuộc vì hết giờ) — không còn ai chờ.
+        pass
+
+
 class ZaloAdapter(BasePlatformAdapter):
     """Bridges the zca-js sidecar into the Hermes gateway."""
 
@@ -494,8 +521,8 @@ class ZaloAdapter(BasePlatformAdapter):
 
         if kind == "ack":
             fut = self._pending.pop(frame.get("reqId", ""), None)
-            if fut and not fut.done():
-                fut.set_result(frame)
+            if fut is not None:
+                _resolve_pending(fut, frame)
             return
 
         if kind == "pong":

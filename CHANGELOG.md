@@ -19,6 +19,12 @@ Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
   Adapter Zalo bỏ khung này; nền tảng khác giữ nguyên.
 - Gắn danh tính lượt chat bị lỗi thì rơi về quyền công khai của đúng người đó,
   không rơi về `system`.
+- **Mỗi lệnh Zalo của công cụ chậm đúng 30 giây.** Ack của sidecar tới trên vòng lặp
+  gateway nhưng được trả cho lệnh đang chờ trên vòng lặp của luồng agent bằng
+  `set_result` gọi thẳng từ luồng khác, nên lệnh chỉ thấy kết quả khi hết thời gian
+  chờ — sticker mất 60 giây, gửi tệp, nhắc hẹn, đọc lịch sử, cron mỗi lệnh 30 giây.
+  Nay ack đánh thức đúng vòng lặp của lệnh; giới hạn chờ 30 giây và nhịp gửi chống
+  khoá tài khoản giữ nguyên.
 
 ### Thêm
 
