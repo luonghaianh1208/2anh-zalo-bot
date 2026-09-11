@@ -1397,6 +1397,16 @@ async def zalo_fb_publish(args: Dict[str, Any], **_kw) -> str:
             "họ. Hãy hỏi lại chủ nhân và chờ họ nhắn mã, đừng tự điền."
         )
 
+    # Kiểm giờ hẹn TRƯỚC khi lấy bản nháp: take_draft dùng một lần là mất.
+    scheduled_time = args.get("scheduled_publish_time")
+    if scheduled_time in (None, ""):
+        scheduled_time = None
+    else:
+        try:
+            scheduled_time = int(scheduled_time)
+        except (TypeError, ValueError):
+            return _err("`scheduled_publish_time` phải là UNIX timestamp tính bằng giây")
+
     draft, err = fb.take_draft(code)
     if err:
         return _err(err)
@@ -1415,15 +1425,23 @@ async def zalo_fb_publish(args: Dict[str, Any], **_kw) -> str:
     for i, mid in enumerate(media_ids):
         params[f"attached_media[{i}]"] = json.dumps({"media_fbid": mid})
 
+    # Facebook chỉ nhận giờ hẹn từ 10 phút tới 75 ngày sau; ngoài khoảng đó
+    # Graph API trả lỗi rõ ràng nên không tự kiểm lại ở đây.
+    if scheduled_time is not None:
+        params["published"] = "false"
+        params["scheduled_publish_time"] = scheduled_time
+
     r = fb.graph(f"{page['id']}/feed", "POST", timeout=300, **params)
     if "error" in r:
         return _err(f"Facebook: {r['error'].get('message', '')[:160]}")
 
     post_id = r.get("id")
     info = fb.graph(post_id, access_token=page["token"], fields="permalink_url")
-    logger.info("[fb] đã đăng %s lên %s", post_id, page.get("name"))
+    logger.info("[fb] đã %s %s lên %s", "lên lịch" if scheduled_time else "đăng", post_id, page.get("name"))
     return _ok({
         "da_dang": True,
+        "len_lich": scheduled_time is not None,
+        "thoi_gian_hen": scheduled_time,
         "page": page.get("name"),
         "post_id": post_id,
         "so_anh": len(media_ids),
@@ -1482,10 +1500,15 @@ TOOLS = [
 
     ("zalo_fb_publish", "🚀", _schema(
         "zalo_fb_publish",
-        "Đăng bản nháp lên Fanpage. CHỈ gọi sau khi chính chủ nhân đã nhắn mã "
-        "duyệt trong tin nhắn của họ — không bao giờ tự điền mã thay họ.",
+        "Đăng hoặc hẹn giờ đăng bản nháp lên Fanpage. CHỈ gọi sau khi chính chủ "
+        "nhân đã nhắn mã duyệt trong tin nhắn của họ — không bao giờ tự điền mã thay họ.",
         {
             "code": {"type": "string", "description": "Mã duyệt chủ nhân vừa nhắn."},
+            "scheduled_publish_time": {
+                "type": "integer",
+                "description": "Hẹn giờ đăng: UNIX timestamp tính bằng giây, từ 10 phút tới "
+                               "75 ngày sau. Bỏ trống để đăng ngay.",
+            },
         },
         ["code"],
     ), zalo_fb_publish, TOOLSET_OWNER),

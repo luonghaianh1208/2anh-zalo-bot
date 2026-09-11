@@ -737,6 +737,38 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(json.loads(response)["success"], response)
         self.assertEqual(fake.calls, ["group-1"])
 
+    async def test_fb_publish_can_schedule_a_post(self):
+        from plugins.zalo_tools import facebook as zalo_fb
+
+        calls = []
+
+        def fake_graph(path, method="GET", **params):
+            params.pop("timeout", None)
+            calls.append((path, method, params))
+            return {"id": "page-1_post-1"} if method == "POST" else {"permalink_url": "https://fb.test/p"}
+
+        draft = {"page": {"id": "page-1", "token": "page-token", "name": "Trang thử"}, "message": "Nội dung", "photos": []}
+        with patch.object(zalo_fb, "confirmed_in_message", return_value=True), \
+                patch.object(zalo_fb, "take_draft", return_value=(draft, None)), \
+                patch.object(zalo_fb, "graph", side_effect=fake_graph):
+            response = await zalo_tools.zalo_fb_publish({"code": "ABC123", "scheduled_publish_time": "1790000000"})
+
+        result = json.loads(response)
+        self.assertTrue(result["success"], response)
+        self.assertTrue(result["result"]["len_lich"])
+        self.assertEqual(calls[0][1], "POST")
+        self.assertEqual(calls[0][2]["published"], "false")
+        self.assertEqual(calls[0][2]["scheduled_publish_time"], 1790000000)
+
+    async def test_fb_publish_rejects_bad_schedule_before_consuming_draft(self):
+        from plugins.zalo_tools import facebook as zalo_fb
+
+        with patch.object(zalo_fb, "confirmed_in_message", return_value=True), \
+                patch.object(zalo_fb, "take_draft", side_effect=AssertionError("draft consumed")):
+            response = await zalo_tools.zalo_fb_publish({"code": "ABC123", "scheduled_publish_time": "ngày mai"})
+
+        self.assertFalse(json.loads(response)["success"])
+
     def test_authorization_outside_a_chat_turn_is_system(self):
         token = zalo_tools._TURN.set(None)
         try:

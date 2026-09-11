@@ -2,6 +2,16 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.2.0] — 2026-09-11
+
+### Thêm
+
+- **Hẹn giờ đăng Fanpage.** `zalo_fb_publish` nhận thêm `scheduled_publish_time`
+  (UNIX timestamp tính bằng giây, từ 10 phút tới 75 ngày sau); bỏ trống thì đăng
+  ngay như trước. Giờ hẹn sai định dạng bị từ chối trước khi bản nháp bị dùng
+  mất. Tính năng này trước chỉ có trên một máy chạy riêng — nay gộp vào sản phẩm,
+  bỏ lời gọi `upload_photo(..., published=False)` sai chữ ký đi kèm bản đó.
+
 ## [1.1.1] — 2026-09-11
 
 ### Bảo mật
