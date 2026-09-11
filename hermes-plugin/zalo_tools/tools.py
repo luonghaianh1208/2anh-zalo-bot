@@ -108,13 +108,16 @@ def current_authorization(*, confirmed: bool = False) -> Dict[str, Any]:
             "sourceThreadType": THREAD_USER,
             "confirmed": False,
         }
-    return {
+    auth = {
         "actorUid": str(turn.get("sender_uid") or ""),
         "actorRole": "owner" if turn.get("is_owner") else "public",
         "sourceThreadId": str(turn.get("thread_id") or ""),
         "sourceThreadType": THREAD_GROUP if turn.get("is_group") else THREAD_USER,
         "confirmed": bool(confirmed),
     }
+    if turn.get("cron_job_id"):
+        auth["cronJobId"] = str(turn["cron_job_id"])
+    return auth
 
 
 def _current_thread() -> Optional[str]:
@@ -142,6 +145,140 @@ def clear_active_adapter(adapter=None) -> None:
     global _ACTIVE_ADAPTER
     if adapter is None or _ACTIVE_ADAPTER is adapter:
         _ACTIVE_ADAPTER = None
+
+
+# =====================================================================
+#  Lượt chạy cron — gắn danh tính khi không có tin nhắn nào
+# =====================================================================
+#
+# Cron chạy không kèm tin nhắn nên _TURN rỗng và mọi công cụ Zalo tự chặn.
+# Hermes truyền `task_id = "cron:<job_id>:<lần chạy>"` vào từng lời gọi công
+# cụ (cron/scheduler.py), nên đọc lại job là biết cron này gửi về đâu, do ai tạo.
+#
+# Job tạo bằng công cụ cron gốc của Hermes — chỉ chủ nhân cầm công cụ đó — chạy
+# với quyền chủ nhân. Job do zalo_group_cron tạo mang `origin.zalo_scope =
+# "group"` và chạy với quyền công khai của người tạo, khoá trong đúng nhóm.
+# KHÔNG dựa vào origin.user_id: trong nhóm dùng chung phiên, Hermes có thể ghi
+# vào đó UID của một thành viên khác.
+
+GROUP_CRON_SCOPE = "group"
+
+
+def _cron_jobs():
+    """Module quản lý job cron của Hermes — tách thành hàm để test thay được."""
+    from cron import jobs
+    return jobs
+
+
+def _cron_job_id(kw: Dict[str, Any]) -> str:
+    parts = str(kw.get("task_id") or "").split(":")
+    return parts[1] if len(parts) >= 2 and parts[0] == "cron" and parts[1] else ""
+
+
+def _cron_target(job: Dict[str, Any]) -> str:
+    """Hội thoại Zalo mà job gửi kết quả về; rỗng nếu job không gửi về Zalo."""
+    for part in str(job.get("deliver") or "").split(","):
+        part = part.strip()
+        if part.startswith("zalo:"):
+            return part[len("zalo:"):].split(":", 1)[0]
+    origin = job.get("origin")
+    if isinstance(origin, dict) and str(origin.get("platform") or "") == "zalo":
+        return str(origin.get("chat_id") or "")
+    return ""
+
+
+def _is_group_cron(job: Dict[str, Any]) -> bool:
+    origin = job.get("origin")
+    return isinstance(origin, dict) and origin.get("zalo_scope") == GROUP_CRON_SCOPE
+
+
+def _allowed_owner_uids() -> List[str]:
+    from agent.secret_scope import UnscopedSecretError, get_secret
+    try:
+        raw = get_secret("ZALO_ALLOWED_USERS", "")
+    except UnscopedSecretError:
+        raw = os.getenv("ZALO_ALLOWED_USERS", "")
+    return [uid.strip() for uid in str(raw or "").split(",") if uid.strip()]
+
+
+def _cron_is_group(target: str, origin: Dict[str, Any], owners: List[str]) -> bool:
+    known = getattr(_ACTIVE_ADAPTER, "_known_thread_types", None) or {}
+    if target in known:
+        return known[target] == THREAD_GROUP
+    chat_type = str(origin.get("chat_type") or "").lower()
+    if chat_type in {"group", "dm"}:
+        return chat_type == "group"
+    if target in owners:
+        return False
+    return len(target) >= 19
+
+
+def _cron_turn(kw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Dựng turn cho lời gọi công cụ đến từ cron; None nghĩa là không gắn gì."""
+    job_id = _cron_job_id(kw)
+    if not job_id:
+        return None
+    try:
+        job = _cron_jobs().get_job(job_id)
+    except Exception as exc:
+        logger.warning("[zalo] không đọc được job cron %s: %s", job_id, exc)
+        return None
+    if not job:
+        return None
+    target = _cron_target(job)
+    if not target:
+        return None
+    origin = job.get("origin") if isinstance(job.get("origin"), dict) else {}
+
+    if _is_group_cron(job):
+        creator = str(origin.get("zalo_creator_uid") or "")
+        if not creator:
+            return None
+        return {
+            "sender_uid": creator,
+            "sender_name": str(origin.get("zalo_creator_name") or ""),
+            "thread_id": target,
+            "is_group": True,
+            "is_owner": False,
+            "text": "",
+            "cron_job_id": job_id,
+        }
+
+    owners = _allowed_owner_uids()
+    if not owners:
+        return None
+    return {
+        "sender_uid": owners[0],
+        "sender_name": "",
+        "thread_id": target,
+        "is_group": _cron_is_group(target, origin, owners),
+        "is_owner": True,
+        # Không có tin người thật gõ: mã duyệt đăng Fanpage không bao giờ khớp.
+        "text": "",
+        "cron_job_id": job_id,
+    }
+
+
+def _with_cron_turn(handler, tool_name: str):
+    """Lớp bọc ngoài cùng: gắn danh tính cho lời gọi công cụ từ một lượt cron.
+
+    Lượt chat đang có thì giữ nguyên — không bao giờ ghi đè người gửi thật.
+    """
+    async def guarded(args: Dict[str, Any], **kw) -> str:
+        if _turn():
+            return await handler(args, **kw)
+        turn = _cron_turn(kw)
+        if turn is None:
+            return await handler(args, **kw)
+        token = _TURN.set(turn)
+        try:
+            return await handler(args, **kw)
+        finally:
+            _TURN.reset(token)
+
+    guarded.__name__ = getattr(handler, "__name__", tool_name)
+    guarded.__doc__ = getattr(handler, "__doc__", None)
+    return guarded
 
 
 def _err(message: str) -> str:
@@ -2162,18 +2299,21 @@ def register_tools(ctx) -> None:
     """Đăng ký công cụ Zalo, chia làm hai mức quyền."""
     counts = {TOOLSET_PUBLIC: 0, TOOLSET_OWNER: 0}
     for name, emoji, schema, handler, toolset in TOOLS:
+        guarded = handler
+        if toolset == TOOLSET_OWNER:
+            guarded = _owner_only(
+                _confirmed_action(
+                    _dm_only(handler, name) if name in DM_ONLY_TOOLS else handler,
+                    name,
+                ),
+                name,
+            )
         try:
             ctx.register_tool(
                 name=name,
                 toolset=toolset,
                 schema=schema,
-                handler=(handler if toolset == TOOLSET_PUBLIC
-                         else _owner_only(
-                             _confirmed_action(
-                                 _dm_only(handler, name) if name in DM_ONLY_TOOLS else handler,
-                                 name,
-                             ),
-                             name)),
+                handler=_with_cron_turn(guarded, name),
                 is_async=True,
                 description=schema["description"],
                 emoji=emoji,

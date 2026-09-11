@@ -22,6 +22,7 @@ plugins.__path__ = [os.path.join(ROOT, "hermes-plugin"), *list(plugins.__path__)
 plugins.platforms.__path__ = [os.path.join(ROOT, "hermes-plugin"), *list(plugins.platforms.__path__)]
 from plugins.platforms.zalo import adapter as zalo_adapter
 from plugins.zalo_tools import tools as zalo_tools
+from cron import jobs as real_cron_jobs
 
 
 class DummyZaloTools:
@@ -35,6 +36,54 @@ class CapturingSocket:
 
     async def send(self, raw):
         self.frames.append(json.loads(raw))
+
+
+class FakeToolContext:
+    def __init__(self):
+        self.handlers = {}
+
+    def register_tool(self, **kwargs):
+        self.handlers[kwargs["name"]] = kwargs["handler"]
+
+
+class FakeCronJobs:
+    """Thay module cron.jobs của Hermes trong test — giữ job trong bộ nhớ."""
+
+    parse_schedule = staticmethod(real_cron_jobs.parse_schedule)
+    is_terminal_job = staticmethod(real_cron_jobs.is_terminal_job)
+    effective_job_state = staticmethod(real_cron_jobs.effective_job_state)
+    _ensure_croniter = staticmethod(real_cron_jobs._ensure_croniter)
+
+    def __init__(self, jobs=None):
+        self.jobs = [dict(job) for job in (jobs or [])]
+        self.created = []
+        self.removed = []
+
+    @property
+    def croniter(self):
+        return real_cron_jobs.croniter
+
+    def get_job(self, job_id):
+        return next((job for job in self.jobs if job["id"] == job_id), None)
+
+    def list_jobs(self, include_disabled=False):
+        return [job for job in self.jobs if include_disabled or job.get("enabled", True)]
+
+    def create_job(self, **kwargs):
+        self.created.append(kwargs)
+        job = {
+            "id": f"new-{len(self.created)}", "enabled": True, "name": kwargs.get("name"),
+            "schedule_display": kwargs["schedule"], "next_run_at": None,
+            "prompt": kwargs["prompt"], "deliver": kwargs["deliver"], "origin": kwargs["origin"],
+        }
+        self.jobs.append(job)
+        return job
+
+    def remove_job(self, job_id):
+        self.removed.append(job_id)
+        before = len(self.jobs)
+        self.jobs = [job for job in self.jobs if job["id"] != job_id]
+        return len(self.jobs) < before
 
 
 class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
@@ -1224,6 +1273,113 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(negated["success"])
         self.assertFalse(changed["success"])
         self.assertEqual(fake.calls, [])
+
+
+class ZaloCronTurnTest(unittest.IsolatedAsyncioTestCase):
+    OWNER = "9200000000000000001"
+    GROUP = "9133000000000000001"
+    MEMBER = "3900000000000000001"
+
+    def setUp(self):
+        self.turn_token = zalo_tools._TURN.set(None)
+        self.previous_adapter = zalo_tools._ACTIVE_ADAPTER
+        zalo_tools._ACTIVE_ADAPTER = None
+        self.enterContext(patch.dict(os.environ, {"ZALO_ALLOWED_USERS": self.OWNER}))
+
+    def tearDown(self):
+        zalo_tools._TURN.reset(self.turn_token)
+        zalo_tools._ACTIVE_ADAPTER = self.previous_adapter
+
+    def fake_jobs(self):
+        return FakeCronJobs([
+            {"id": "owner-job", "deliver": f"zalo:{self.GROUP}",
+             "origin": {"platform": "zalo", "chat_id": self.GROUP, "user_id": "someone-else"}},
+            {"id": "group-job", "deliver": f"zalo:{self.GROUP}",
+             "origin": {"platform": "zalo", "chat_id": self.GROUP, "chat_type": "group",
+                        "zalo_scope": "group", "zalo_creator_uid": self.MEMBER, "zalo_creator_name": "Yến"}},
+            {"id": "telegram-job", "deliver": "telegram:8617174143",
+             "origin": {"platform": "telegram", "chat_id": "8617174143"}},
+        ])
+
+    @staticmethod
+    async def probe(_args, **_kw):
+        return json.dumps({"turn": zalo_tools._turn(), "auth": zalo_tools.current_authorization()})
+
+    async def call(self, task_id, jobs):
+        guarded = zalo_tools._with_cron_turn(self.probe, "probe")
+        with patch.object(zalo_tools, "_cron_jobs", return_value=jobs):
+            return json.loads(await guarded({}, task_id=task_id))
+
+    async def test_owner_created_cron_runs_as_owner_in_its_target_chat(self):
+        seen = await self.call("cron:owner-job:run-1", self.fake_jobs())
+
+        self.assertTrue(seen["turn"]["is_owner"])
+        self.assertEqual(seen["turn"]["sender_uid"], self.OWNER)
+        self.assertEqual(seen["turn"]["thread_id"], self.GROUP)
+        self.assertTrue(seen["turn"]["is_group"])
+        self.assertEqual(seen["turn"]["text"], "")
+        self.assertEqual(seen["auth"]["actorRole"], "owner")
+        self.assertEqual(seen["auth"]["sourceThreadType"], zalo_tools.THREAD_GROUP)
+        self.assertEqual(seen["auth"]["cronJobId"], "owner-job")
+
+    async def test_group_cron_runs_as_its_creator_locked_to_that_group(self):
+        seen = await self.call("cron:group-job:run-1", self.fake_jobs())
+
+        self.assertFalse(seen["turn"]["is_owner"])
+        self.assertEqual(seen["turn"]["sender_uid"], self.MEMBER)
+        self.assertEqual(seen["turn"]["sender_name"], "Yến")
+        self.assertEqual(seen["auth"]["actorRole"], "public")
+        self.assertEqual(seen["auth"]["sourceThreadId"], self.GROUP)
+        self.assertEqual(seen["auth"]["cronJobId"], "group-job")
+
+    async def test_non_cron_task_missing_job_or_non_zalo_job_get_no_turn(self):
+        jobs = self.fake_jobs()
+        for task_id in ("session-abc", "cron:missing:run-1", "cron:telegram-job:run-1", ""):
+            with self.subTest(task_id=task_id):
+                seen = await self.call(task_id, jobs)
+                self.assertEqual(seen["turn"], {})
+                self.assertEqual(seen["auth"]["actorRole"], "system")
+
+    async def test_owner_cron_without_allowlist_gets_no_owner_turn(self):
+        with patch.dict(os.environ, {"ZALO_ALLOWED_USERS": ""}):
+            seen = await self.call("cron:owner-job:run-1", self.fake_jobs())
+
+        self.assertEqual(seen["turn"], {})
+
+    async def test_existing_chat_turn_is_never_replaced(self):
+        chat = zalo_tools._TURN.set({
+            "sender_uid": self.MEMBER, "thread_id": "other", "is_group": True, "is_owner": False, "text": "hi",
+        })
+        try:
+            seen = await self.call("cron:owner-job:run-1", self.fake_jobs())
+        finally:
+            zalo_tools._TURN.reset(chat)
+
+        self.assertFalse(seen["turn"]["is_owner"])
+        self.assertEqual(seen["turn"]["thread_id"], "other")
+
+    async def test_turn_is_restored_after_the_cron_call(self):
+        await self.call("cron:owner-job:run-1", self.fake_jobs())
+
+        self.assertEqual(zalo_tools._turn(), {})
+
+    async def test_registered_owner_tool_works_inside_owner_cron(self):
+        class FakeAdapter:
+            async def read_history(self, chat_id, count, metadata=None):
+                self.call = (chat_id, count, metadata)
+                return {"ok": True, "result": {"messages": []}}
+
+        ctx, fake = FakeToolContext(), FakeAdapter()
+        zalo_tools.register_tools(ctx)
+        zalo_tools._ACTIVE_ADAPTER = fake
+        with patch.object(zalo_tools, "_cron_jobs", return_value=self.fake_jobs()):
+            response = await ctx.handlers["zalo_read_history"](
+                {"thread_id": self.GROUP, "thread_kind": "group", "count": 5},
+                task_id="cron:owner-job:run-1",
+            )
+
+        self.assertTrue(json.loads(response)["success"], response)
+        self.assertEqual(fake.call, (self.GROUP, 5, {"chat_type": "group"}))
 
 
 if __name__ == "__main__":
