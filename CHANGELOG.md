@@ -2,6 +2,17 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.3.0] — 2026-09-11
+
+### Đổi
+
+- **Thao tác nguy hiểm không còn bắt nhập mã xác nhận.** Thu hồi tin, đổi tên
+  nhóm, thêm/xoá thành viên, phó nhóm, link nhóm… chủ nhân nhắn là bot làm
+  ngay, trong nhóm hay nhắn riêng đều được. Người ngoài vẫn bị chặn: các công cụ
+  này chỉ nằm trong bộ của chủ, adapter kiểm `is_owner` và sidecar kiểm lại.
+  Ai muốn giữ lớp mã sáu ký tự (chặn cả lệnh ẩn trong tài liệu hay trang web
+  bot đọc) thì đặt `ZALO_CONFIRM_DANGEROUS=true` trong `.env` của Hermes.
+
 ## [1.2.1] — 2026-09-11
 
 ### Sửa

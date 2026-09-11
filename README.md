@@ -27,7 +27,7 @@ Zalo  <->  zca-js sidecar (Node.js)  <->  local WebSocket  <->  Python plugins  
 
 2. **Two layers of authorization, not one.** Splitting tools into `zalo_owner`/`zalo_public` toolsets only hides tools from the model's tool list. The real barrier is `_owner_only` in `hermes-plugin/zalo_tools/tools.py`, which checks the sender's identity at call time for every owner tool — a misconfiguration still can't let one through.
 
-3. **Two-step confirmation with a real code for destructive actions.** Recalling a message, changing group membership, and similar actions generate a random six-character code (`_PENDING_CONFIRMATIONS`); the owner has to send that code back in a fresh message. The model cannot confirm on someone's behalf.
+3. **Destructive actions stay owner-only, with optional two-step codes.** Recalling a message, renaming a group, changing membership and similar actions exist only in the owner toolset and are checked again by the sidecar — the owner just asks, in a group or a direct message. Set `ZALO_CONFIRM_DANGEROUS=true` to also require a random six-character code (`_PENDING_CONFIRMATIONS`) that the owner sends back in a fresh message, which blocks instructions hidden in documents or web pages the bot reads.
 
 4. **A token-authenticated bridge.** The local WebSocket channel between the sidecar and Hermes rejects any connection carrying a browser `Origin` header outright, and compares the token with `timingSafeEqual` — another process on the same machine cannot just connect and take over the Zalo account.
 
@@ -130,7 +130,7 @@ The response should report `"status": "logged-in"` and `"hermesAttached": true`.
 | Target another conversation | Yes | No |
 | Direct-message access | Yes | Disabled by default |
 
-Public tools are removed before the model sees the tool list, scoped to the current conversation, and checked again in the backend. Destructive owner actions also require a fresh six-character confirmation code.
+Public tools are removed before the model sees the tool list, scoped to the current conversation, and checked again in the backend. Destructive owner actions run as soon as the owner asks; set `ZALO_CONFIRM_DANGEROUS=true` in the Hermes `.env` to require a fresh six-character confirmation code as well.
 
 Identity is re-bound on every agent turn from the message that started it, so a member's message queued behind the owner's turn never inherits owner rights. Because a group shares one session, an owner message that was still waiting while a non-owner spoke in the same conversation runs with public tools — Hermes may have merged their text into it.
 

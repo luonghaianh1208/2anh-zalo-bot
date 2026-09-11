@@ -35,7 +35,7 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 
 2. **Phân quyền hai lớp, không phải một.** Việc chia `zalo_owner`/`zalo_public` chỉ giấu công cụ khỏi danh sách hiển thị cho mô hình. Rào chắn thật nằm ở `_owner_only` trong `hermes-plugin/zalo_tools/tools.py` — mỗi công cụ chủ nhân được kiểm danh tính người gửi ngay tại thời điểm gọi, nên cấu hình sai cũng không lọt.
 
-3. **Xác nhận hai bước bằng mã thật cho thao tác nguy hiểm.** Thu hồi tin, đổi thành viên nhóm và các thao tác tương tự sinh một mã sáu ký tự ngẫu nhiên (`_PENDING_CONFIRMATIONS`); chủ nhân phải gửi lại đúng mã đó trong một tin nhắn mới. Mô hình không tự xác nhận thay người được.
+3. **Thao tác nguy hiểm chỉ chủ nhân làm được, có tuỳ chọn xác nhận bằng mã.** Thu hồi tin, đổi tên nhóm, đổi thành viên và các thao tác tương tự chỉ nằm trong bộ công cụ của chủ và được sidecar kiểm lại lần nữa — chủ nhân nhắn là bot làm, trong nhóm hay nhắn riêng đều được. Đặt `ZALO_CONFIRM_DANGEROUS=true` để bắt thêm một mã sáu ký tự ngẫu nhiên (`_PENDING_CONFIRMATIONS`) mà chủ nhân phải gửi lại trong tin nhắn mới — chặn cả lệnh ẩn cài trong tài liệu hay trang web bot đọc.
 
 4. **Bridge xác thực bằng token.** Kênh WebSocket cục bộ giữa sidecar và Hermes chặn thẳng mọi kết nối mang header `Origin` của trình duyệt, còn lại so token bằng `timingSafeEqual` — tiến trình khác trên máy không tự nối vào để điều khiển tài khoản Zalo.
 
@@ -106,7 +106,7 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 
 Việc phân nhóm toolset chỉ *giấu* công cụ khỏi danh sách. Rào chắn thật nằm ở tầng thực thi: mỗi công cụ thuộc nhóm chủ nhân được bọc một lớp kiểm tra danh tính người gửi, nên dù công cụ có lọt vào danh sách vì cấu hình sai thì người ngoài gọi vẫn bị từ chối.
 
-Các thao tác nguy hiểm như thu hồi tin, đổi tên nhóm, sửa thành viên hoặc quyền phó nhóm còn cần xác nhận hai lượt. Agent trả một mã sáu ký tự; chủ nhân phải gửi một tin nhắn mới đúng nguyên câu `XÁC NHẬN <MÃ>` trong vòng 5 phút. Mã được khóa theo UID chủ nhân, cuộc trò chuyện, công cụ và đúng bộ tham số nên không thể dùng lại cho người, nhóm hay thao tác khác.
+Các thao tác nguy hiểm như thu hồi tin, đổi tên nhóm, sửa thành viên hoặc quyền phó nhóm: chủ nhân nhắn là bot làm ngay, trong nhóm hay nhắn riêng đều được; người khác trong nhóm nhờ thì bot từ chối. Muốn chặt hơn thì đặt `ZALO_CONFIRM_DANGEROUS=true` trong `.env` của Hermes: khi đó agent trả một mã sáu ký tự và chủ nhân phải gửi một tin nhắn mới đúng nguyên câu `XÁC NHẬN <MÃ>` trong vòng 5 phút. Mã được khóa theo UID chủ nhân, cuộc trò chuyện, công cụ và đúng bộ tham số nên không thể dùng lại cho người, nhóm hay thao tác khác.
 
 ### Tra cứu Internet
 

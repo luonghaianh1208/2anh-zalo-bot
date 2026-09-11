@@ -992,7 +992,49 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
             {"chat_type": "group"}, False,
         ))
 
+    async def test_owner_dangerous_action_runs_immediately_by_default(self):
+        class FakeAdapter:
+            def __init__(self):
+                self.calls = []
+
+            async def invoke(self, method, args, *, confirmed=False):
+                self.calls.append((method, args, confirmed))
+                return {"ok": True, "result": {"status": 0}}
+
+        self.enterContext(patch.dict(os.environ, {}))
+        os.environ.pop("ZALO_CONFIRM_DANGEROUS", None)
+        fake = FakeAdapter()
+        zalo_tools._ACTIVE_ADAPTER = fake
+        guarded = zalo_tools._confirmed_action(
+            zalo_tools.zalo_group_member_change, "zalo_group_member_change",
+        )
+        args = {"group_id": "g1", "user_ids": ["u1"], "action": "remove"}
+
+        owner_turn = zalo_tools._TURN.set({
+            "sender_uid": "owner", "thread_id": "g1", "is_group": True,
+            "is_owner": True, "text": "xoá u1 khỏi nhóm",
+        })
+        try:
+            owner = json.loads(await guarded(args))
+        finally:
+            zalo_tools._TURN.reset(owner_turn)
+
+        member_turn = zalo_tools._TURN.set({
+            "sender_uid": "member", "thread_id": "g1", "is_group": True,
+            "is_owner": False, "text": "xoá u1 khỏi nhóm",
+        })
+        try:
+            member = json.loads(await guarded(args))
+        finally:
+            zalo_tools._TURN.reset(member_turn)
+
+        self.assertTrue(owner["success"], owner)
+        self.assertFalse(member["success"])
+        self.assertEqual(fake.calls, [("removeUserFromGroup", [["u1"], "g1"], True)])
+
     async def test_undo_confirmation_keeps_the_quoted_target_on_the_later_turn(self):
+        self.enterContext(patch.dict(os.environ, {"ZALO_CONFIRM_DANGEROUS": "true"}))
+
         class FakeAdapter:
             def __init__(self):
                 self.calls = []
@@ -1035,6 +1077,8 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
         )])
 
     async def test_confirmation_guard_requires_code_in_a_later_owner_message(self):
+        self.enterContext(patch.dict(os.environ, {"ZALO_CONFIRM_DANGEROUS": "true"}))
+
         class FakeAdapter:
             def __init__(self):
                 self.calls = []
@@ -1075,6 +1119,8 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
         ])
 
     async def test_confirmation_code_rejects_negation_and_changed_arguments(self):
+        self.enterContext(patch.dict(os.environ, {"ZALO_CONFIRM_DANGEROUS": "true"}))
+
         class FakeAdapter:
             def __init__(self):
                 self.calls = []

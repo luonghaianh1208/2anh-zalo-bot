@@ -1958,12 +1958,13 @@ DANGEROUS_TOOL_NAMES = frozenset({
 _CONFIRM_SCHEMA = {
     "type": "string",
     "pattern": "^[A-F0-9]{6}$",
-    "description": "Mã sáu ký tự do lần gọi trước trả về; chủ nhân phải gửi lại mã trong tin nhắn XÁC NHẬN.",
+    "description": "Chỉ dùng khi lần gọi trước trả về confirmation_required: truyền đúng mã sáu ký tự đó sau khi chủ nhân nhắn XÁC NHẬN <MÃ>.",
 }
 
 # `detail` của zalo_group_link chỉ đọc nên không cần mã; hai action `enable`
-# và `disable` được kiểm tra lúc thực thi. Mã không bắt buộc ở schema vì lần
-# gọi đầu tiên phải tạo challenge thay vì bị JSON Schema chặn trước handler.
+# và `disable` được kiểm tra lúc thực thi. Mã không bắt buộc ở schema: mặc định
+# không cần mã, còn khi bật thì lần gọi đầu phải tạo challenge thay vì bị JSON
+# Schema chặn trước handler.
 for _name, _emoji, _tool_schema, _handler, _toolset in TOOLS:
     if _name not in DANGEROUS_TOOL_NAMES:
         continue
@@ -1987,12 +1988,31 @@ def _confirmation_required(tool_name: str, args: Dict[str, Any]) -> bool:
     return tool_name in DANGEROUS_TOOL_NAMES
 
 
+def _confirmation_codes_enabled() -> bool:
+    """Có bắt chủ nhân gửi lại mã xác nhận cho thao tác nguy hiểm không (mặc định: không).
+
+    Tắt thì chủ nhân nhắn là bot làm luôn, trong nhóm hay nhắn riêng đều vậy —
+    người ngoài vẫn không chạm được vì các công cụ này chỉ nằm trong bộ của chủ
+    và sidecar kiểm lại lần nữa. Bật ``ZALO_CONFIRM_DANGEROUS=true`` thì mỗi thao
+    tác cần chủ nhân gửi lại ``XÁC NHẬN <MÃ>``, chặn thêm trường hợp tài liệu hay
+    trang web bot đọc có cài lệnh ẩn dụ bot tự làm ngay trong lượt chat của chủ.
+    Đọc lúc gọi chứ không lúc nạp module, để đổi .env rồi khởi động lại là ăn.
+    """
+    return str(os.getenv("ZALO_CONFIRM_DANGEROUS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _confirmed_action(handler, tool_name: str):
     async def guarded(args: Dict[str, Any], **kw) -> str:
         call_args = dict(args)
         required = _confirmation_required(tool_name, call_args)
         confirmed = False
-        if required:
+        if required and not _confirmation_codes_enabled():
+            if not _turn().get("is_owner"):
+                return _err("thao tác này chỉ chủ nhân mới được thực hiện")
+            if tool_name == "zalo_undo":
+                call_args = _with_quoted_undo_target(call_args)
+            confirmed = True
+        elif required:
             turn = _turn()
             if not turn.get("is_owner"):
                 return _err("thao tác này chỉ chủ nhân mới được xác nhận")
