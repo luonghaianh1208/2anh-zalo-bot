@@ -1431,6 +1431,210 @@ async def zalo_forget_person(args: Dict[str, Any], **_kw) -> str:
 
 
 # =====================================================================
+#  Nhóm 11 — Việc hẹn giờ do thành viên nhóm tạo
+# =====================================================================
+#
+# Công cụ cron gốc của Hermes nhận script, thư mục làm việc, bộ công cụ tuỳ ý —
+# đưa cho người ngoài là cho chạy lệnh trên máy. Công cụ này chỉ mở đúng một
+# việc: hẹn giờ để bot soạn nội dung rồi gửi vào chính nhóm đang trò chuyện.
+# Mọi trường nguy hiểm của job bị khoá cứng ở đây, không nhận từ mô hình.
+
+GROUP_CRON_PROMPT_MAX = 1000
+GROUP_CRON_NAME_MAX = 80
+GROUP_CRON_MIN_GAP_MINUTES = 1440
+GROUP_CRON_PER_CREATOR = 3
+GROUP_CRON_PER_GROUP = 10
+GROUP_CRON_LOOKAHEAD = 20
+_GROUP_CRON_PROMPT_SEPARATOR = "\n---\n"
+_GROUP_CRON_TOO_OFTEN = "việc hẹn giờ của nhóm chỉ được lặp tối đa 1 lần mỗi ngày"
+
+
+def _group_cron_prompt(prompt: str, creator_name: str) -> str:
+    who = creator_name or "một thành viên"
+    header = (
+        f"Việc hẹn giờ do {who} tạo trong nhóm Zalo này. Chỉ viết đúng nội dung "
+        "sẽ gửi vào nhóm, không chào hỏi thừa, không nhắc tới việc hẹn giờ."
+    )
+    return f"{header}{_GROUP_CRON_PROMPT_SEPARATOR}{prompt}"
+
+
+def _cron_min_gap_minutes(expr: str) -> Optional[float]:
+    """Khoảng cách ngắn nhất (phút) giữa hai lần chạy liền nhau của biểu thức cron.
+
+    Đo nhiều lần chứ không chỉ hai lần đầu: `0 9,10 * * *` có lần cách 23 giờ
+    nhưng cũng có lần cách 1 giờ.
+    """
+    from datetime import datetime
+
+    jobs = _cron_jobs()
+    if not jobs._ensure_croniter():
+        return None
+    try:
+        it = jobs.croniter(expr, datetime.now())
+        times = [it.get_next(datetime) for _ in range(GROUP_CRON_LOOKAHEAD)]
+    except Exception:
+        return None
+    gaps = [(later - earlier).total_seconds() / 60 for earlier, later in zip(times, times[1:])]
+    return min(gaps) if gaps else None
+
+
+def _group_cron_schedule_problem(schedule: Dict[str, Any]) -> str:
+    """Lịch này có vượt giới hạn của việc hẹn giờ nhóm không. Rỗng là hợp lệ."""
+    from datetime import datetime
+
+    kind = schedule.get("kind")
+    if kind == "once":
+        try:
+            run_at = datetime.fromisoformat(str(schedule.get("run_at")))
+        except ValueError:
+            return "không đọc được thời điểm hẹn"
+        now = datetime.now(run_at.tzinfo) if run_at.tzinfo else datetime.now()
+        return "" if run_at > now else "thời điểm hẹn đã qua — chọn một giờ trong tương lai"
+    if kind == "interval":
+        minutes = float(schedule.get("minutes") or 0)
+        return "" if minutes >= GROUP_CRON_MIN_GAP_MINUTES else _GROUP_CRON_TOO_OFTEN
+    if kind == "cron":
+        gap = _cron_min_gap_minutes(str(schedule.get("expr") or ""))
+        if gap is None:
+            return "không đọc được lịch lặp này"
+        return "" if gap >= GROUP_CRON_MIN_GAP_MINUTES else _GROUP_CRON_TOO_OFTEN
+    return "không hỗ trợ kiểu lịch này"
+
+
+def _group_cron_create(args: Dict[str, Any], turn: Dict[str, Any]) -> str:
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        return _err("cần `prompt` — việc bot sẽ làm khi đến giờ")
+    if len(prompt) > GROUP_CRON_PROMPT_MAX:
+        return _err(f"`prompt` dài quá {GROUP_CRON_PROMPT_MAX} ký tự")
+    raw_schedule = str(args.get("schedule") or "").strip()
+    if not raw_schedule:
+        return _err("cần `schedule`, ví dụ 'every day at 7am' hoặc '2026-09-18T07:30'")
+    creator = str(turn.get("sender_uid") or "")
+    if not creator:
+        return _err("không xác định được người tạo")
+
+    jobs = _cron_jobs()
+    try:
+        schedule = jobs.parse_schedule(raw_schedule)
+    except ValueError as exc:
+        return _err(str(exc))
+    problem = _group_cron_schedule_problem(schedule)
+    if problem:
+        return _err(problem)
+
+    # Cùng bộ quét công cụ cron gốc dùng. Không import được thì từ chối, không
+    # bỏ qua: đây là lớp chặn prompt cài lệnh ẩn.
+    try:
+        from tools.cronjob_tools import _scan_cron_prompt
+    except ImportError:
+        return _err("bản Hermes này không kiểm được nội dung việc hẹn giờ nên chưa tạo")
+    blocked = _scan_cron_prompt(prompt)
+    if blocked:
+        return _err(blocked)
+
+    group = str(turn.get("thread_id") or "")
+    if not turn.get("is_owner"):
+        active = [
+            job for job in jobs.list_jobs(include_disabled=False)
+            if _is_group_cron(job) and not jobs.is_terminal_job(job)
+        ]
+        mine = sum(1 for job in active if str(job["origin"].get("zalo_creator_uid") or "") == creator)
+        if mine >= GROUP_CRON_PER_CREATOR:
+            return _err(f"bạn đã có {mine} việc hẹn giờ đang bật — tối đa {GROUP_CRON_PER_CREATOR}. Xoá bớt rồi tạo lại")
+        here = sum(1 for job in active if _cron_target(job) == group)
+        if here >= GROUP_CRON_PER_GROUP:
+            return _err(f"nhóm này đã có {here} việc hẹn giờ đang bật — tối đa {GROUP_CRON_PER_GROUP}")
+
+    creator_name = str(turn.get("sender_name") or "")
+    name = str(args.get("name") or "").strip()[:GROUP_CRON_NAME_MAX] or prompt[:40]
+    job = jobs.create_job(
+        prompt=_group_cron_prompt(prompt, creator_name),
+        schedule=raw_schedule,
+        name=name,
+        repeat=1 if schedule.get("kind") == "once" else None,
+        deliver=f"zalo:{group}",
+        origin={
+            "platform": "zalo",
+            "chat_id": group,
+            "chat_name": group,
+            "chat_type": "group",
+            "thread_id": None,
+            "user_id": creator,
+            "zalo_scope": GROUP_CRON_SCOPE,
+            "zalo_creator_uid": creator,
+            "zalo_creator_name": creator_name,
+        },
+        enabled_toolsets=[TOOLSET_CRON_MEMBER, "no_mcp"],
+    )
+    return _ok({
+        "job_id": job.get("id"),
+        "ten": job.get("name"),
+        "lich": job.get("schedule_display") or schedule.get("display"),
+        "lan_toi": job.get("next_run_at"),
+    })
+
+
+def _group_cron_list(turn: Dict[str, Any]) -> str:
+    group = str(turn.get("thread_id") or "")
+    jobs = _cron_jobs()
+    items = []
+    for job in jobs.list_jobs(include_disabled=True):
+        if _cron_target(job) != group:
+            continue
+        item = {
+            "job_id": job.get("id"),
+            "ten": job.get("name"),
+            "lich": job.get("schedule_display"),
+            "lan_toi": job.get("next_run_at"),
+            "trang_thai": jobs.effective_job_state(job),
+        }
+        if _is_group_cron(job):
+            origin = job["origin"]
+            item["nguoi_tao"] = origin.get("zalo_creator_name") or origin.get("zalo_creator_uid")
+            item["noi_dung"] = str(job.get("prompt") or "").split(_GROUP_CRON_PROMPT_SEPARATOR, 1)[-1]
+        else:
+            # Việc của chủ nhân: cho biết là có, không lộ nội dung giao việc.
+            item["nguoi_tao"] = "chủ nhân"
+        items.append(item)
+    return _ok({"count": len(items), "jobs": items})
+
+
+def _group_cron_remove(args: Dict[str, Any], turn: Dict[str, Any]) -> str:
+    job_id = str(args.get("job_id") or "").strip()
+    if not job_id:
+        return _err("cần `job_id` — lấy từ action 'list'")
+    group = str(turn.get("thread_id") or "")
+    jobs = _cron_jobs()
+    job = jobs.get_job(job_id)
+    if not job or _cron_target(job) != group:
+        return _err("nhóm này không có việc hẹn giờ đó")
+    if _is_group_cron(job):
+        creator = str(job["origin"].get("zalo_creator_uid") or "")
+        if not (turn.get("is_owner") or creator == str(turn.get("sender_uid") or "")):
+            return _err("chỉ người tạo hoặc chủ nhân được xoá việc hẹn giờ này")
+    elif not turn.get("is_owner"):
+        return _err("việc hẹn giờ của chủ nhân chỉ chủ nhân xoá được")
+    return _ok({"job_id": job["id"], "da_xoa": bool(jobs.remove_job(job["id"]))})
+
+
+async def zalo_group_cron(args: Dict[str, Any], **_kw) -> str:
+    turn = _turn()
+    if turn.get("cron_job_id"):
+        return _err("việc hẹn giờ không được tự tạo, xem hay xoá việc hẹn giờ khác")
+    if not turn.get("is_group") or not turn.get("thread_id"):
+        return _err("chỉ dùng được trong nhóm Zalo")
+    action = str(args.get("action") or "").strip().lower()
+    if action == "create":
+        return _group_cron_create(args, turn)
+    if action == "list":
+        return _group_cron_list(turn)
+    if action == "remove":
+        return _group_cron_remove(args, turn)
+    return _err("`action` phải là create, list hoặc remove")
+
+
+# =====================================================================
 #  Khai báo công cụ
 # =====================================================================
 
@@ -1688,6 +1892,27 @@ TOOLS = [
         },
         ["code"],
     ), zalo_fb_publish, TOOLSET_OWNER),
+
+    # --- Nhóm 11: việc hẹn giờ của nhóm ---
+    ("zalo_group_cron", "⏲️", _schema(
+        "zalo_group_cron",
+        "Hẹn giờ cho nhóm Zalo đang trò chuyện: đến giờ bot tự soạn và gửi nội "
+        "dung vào nhóm (nhắc họp, bản tin, tóm tắt nhóm). `create` tạo việc mới, "
+        "`list` xem các việc của nhóm, `remove` xoá theo `job_id`. Lặp tối đa 1 "
+        "lần mỗi ngày; mỗi người tối đa 3 việc, mỗi nhóm tối đa 10.",
+        {
+            "action": {"type": "string", "enum": ["create", "list", "remove"]},
+            "prompt": {"type": "string", "description":
+                       "Việc bot làm khi đến giờ, tối đa 1000 ký tự. Viết đủ ý vì lúc "
+                       "chạy bot không nhớ cuộc trò chuyện này."},
+            "schedule": {"type": "string", "description":
+                         "Lịch: 'every day at 7am', 'every monday 9am', '0 7 * * *', "
+                         "'2026-09-18T07:30' (một lần), 'in 2h' (một lần)."},
+            "name": {"type": "string", "description": "Tên ngắn cho việc hẹn giờ."},
+            "job_id": {"type": "string", "description": "Mã việc hẹn giờ cần xoá, lấy từ action 'list'."},
+        },
+        ["action"],
+    ), zalo_group_cron, TOOLSET_PUBLIC),
 
     # --- Nhóm 1: gửi nội dung ---
     ("zalo_send_file", "📎", _schema(

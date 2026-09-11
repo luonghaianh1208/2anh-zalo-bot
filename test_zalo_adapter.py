@@ -717,7 +717,7 @@ class ZaloToolSchemaTest(unittest.TestCase):
         self.assertEqual(set(assignments), {
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 14)
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 15)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 31)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 
@@ -1432,6 +1432,188 @@ class ZaloCronTurnTest(unittest.IsolatedAsyncioTestCase):
             zalo_tools._TURN.reset(chat)
 
         self.assertFalse(json.loads(response)["success"])
+
+
+class ZaloGroupCronTest(unittest.IsolatedAsyncioTestCase):
+    OWNER = "9200000000000000001"
+    GROUP = "9133000000000000001"
+    OTHER_GROUP = "9133000000000000002"
+    MEMBER = "3900000000000000001"
+    OTHER_MEMBER = "3900000000000000002"
+
+    def setUp(self):
+        self.turn_token = zalo_tools._TURN.set(None)
+        self.enterContext(patch.dict(os.environ, {"ZALO_ALLOWED_USERS": self.OWNER}))
+
+    def tearDown(self):
+        zalo_tools._TURN.reset(self.turn_token)
+
+    def member_turn(self, uid=None, *, is_owner=False, is_group=True, group=None, **extra):
+        return {
+            "sender_uid": uid or self.MEMBER, "sender_name": "Yến", "thread_id": group or self.GROUP,
+            "is_group": is_group, "is_owner": is_owner, "text": "hẹn giờ", **extra,
+        }
+
+    async def run_tool(self, args, jobs, turn):
+        token = zalo_tools._TURN.set(turn)
+        try:
+            with patch.object(zalo_tools, "_cron_jobs", return_value=jobs):
+                return json.loads(await zalo_tools.zalo_group_cron(args))
+        finally:
+            zalo_tools._TURN.reset(token)
+
+    @staticmethod
+    def group_job(job_id, group, creator, **extra):
+        return {
+            "id": job_id, "enabled": True, "name": job_id, "deliver": f"zalo:{group}",
+            "prompt": "Việc hẹn giờ do Yến tạo\n---\nNhắc họp",
+            "origin": {"platform": "zalo", "chat_id": group, "chat_type": "group",
+                       "zalo_scope": "group", "zalo_creator_uid": creator, "zalo_creator_name": "Yến"},
+            **extra,
+        }
+
+    async def test_create_locks_every_dangerous_field(self):
+        jobs = FakeCronJobs()
+        result = await self.run_tool({
+            "action": "create", "prompt": "Tóm tắt các việc cả nhóm đã hẹn trong ngày",
+            "schedule": "every day at 9pm", "name": "Tóm tắt tối",
+        }, jobs, self.member_turn())
+
+        self.assertTrue(result["success"], result)
+        created = jobs.created[0]
+        self.assertEqual(set(created), {"prompt", "schedule", "name", "repeat", "deliver", "origin", "enabled_toolsets"})
+        self.assertEqual(created["deliver"], f"zalo:{self.GROUP}")
+        self.assertEqual(created["enabled_toolsets"], ["zalo_cron_member", "no_mcp"])
+        self.assertIsNone(created["repeat"])
+        self.assertEqual(created["origin"]["zalo_scope"], "group")
+        self.assertEqual(created["origin"]["zalo_creator_uid"], self.MEMBER)
+        self.assertEqual(created["origin"]["zalo_creator_name"], "Yến")
+        self.assertEqual(created["origin"]["chat_id"], self.GROUP)
+        self.assertTrue(created["prompt"].endswith("Tóm tắt các việc cả nhóm đã hẹn trong ngày"))
+
+    async def test_create_rejects_schedules_more_often_than_daily(self):
+        for schedule in ("every 30m", "every 12h", "0 9,10 * * *", "*/30 * * * *"):
+            with self.subTest(schedule=schedule):
+                jobs = FakeCronJobs()
+                result = await self.run_tool({"action": "create", "prompt": "Nhắc họp", "schedule": schedule}, jobs, self.member_turn())
+                self.assertFalse(result["success"])
+                self.assertEqual(jobs.created, [])
+
+    async def test_create_accepts_daily_weekly_and_one_shot_schedules(self):
+        for schedule in ("every 1d", "every day at 7am", "0 7 * * 1", "in 2h"):
+            with self.subTest(schedule=schedule):
+                jobs = FakeCronJobs()
+                result = await self.run_tool({"action": "create", "prompt": "Nhắc họp", "schedule": schedule}, jobs, self.member_turn())
+                self.assertTrue(result["success"], result)
+        one_shot = FakeCronJobs()
+        await self.run_tool({"action": "create", "prompt": "Nhắc họp", "schedule": "in 2h"}, one_shot, self.member_turn())
+        self.assertEqual(one_shot.created[0]["repeat"], 1)
+
+    async def test_create_rejects_past_one_shot_long_prompt_and_bad_schedule(self):
+        cases = (
+            {"prompt": "Nhắc họp", "schedule": "2020-01-01T07:30"},
+            {"prompt": "x" * 1001, "schedule": "every day at 7am"},
+            {"prompt": "Nhắc họp", "schedule": "hôm nào đó"},
+            {"prompt": "", "schedule": "every day at 7am"},
+        )
+        for case in cases:
+            with self.subTest(case=case["schedule"]):
+                jobs = FakeCronJobs()
+                result = await self.run_tool({"action": "create", **case}, jobs, self.member_turn())
+                self.assertFalse(result["success"])
+                self.assertEqual(jobs.created, [])
+
+    async def test_create_enforces_quota_per_member_and_per_group_but_not_for_owner(self):
+        mine = FakeCronJobs([self.group_job(f"m{i}", self.OTHER_GROUP, self.MEMBER) for i in range(3)])
+        result = await self.run_tool({"action": "create", "prompt": "Nhắc họp", "schedule": "every day at 7am"}, mine, self.member_turn())
+        self.assertFalse(result["success"])
+        self.assertIn("3", result["error"])
+
+        crowded = [self.group_job(f"g{i}", self.GROUP, f"39000000000000001{i:02d}") for i in range(10)]
+        result = await self.run_tool({"action": "create", "prompt": "Nhắc họp", "schedule": "every day at 7am"}, FakeCronJobs(crowded), self.member_turn())
+        self.assertFalse(result["success"])
+        self.assertIn("10", result["error"])
+
+        finished = FakeCronJobs([
+            self.group_job("m0", self.OTHER_GROUP, self.MEMBER),
+            self.group_job("m1", self.OTHER_GROUP, self.MEMBER),
+            self.group_job("m2", self.OTHER_GROUP, self.MEMBER, state="completed"),
+        ])
+        result = await self.run_tool({"action": "create", "prompt": "Nhắc họp", "schedule": "every day at 7am"}, finished, self.member_turn())
+        self.assertTrue(result["success"], result)
+
+        owner = await self.run_tool(
+            {"action": "create", "prompt": "Nhắc họp", "schedule": "every day at 7am"},
+            FakeCronJobs(crowded), self.member_turn(self.OWNER, is_owner=True),
+        )
+        self.assertTrue(owner["success"], owner)
+
+    async def test_tool_works_only_in_groups_and_never_inside_cron(self):
+        args = {"action": "create", "prompt": "Nhắc họp", "schedule": "every day at 7am"}
+        dm = await self.run_tool(args, FakeCronJobs(), self.member_turn(is_group=False))
+        in_cron = await self.run_tool(args, FakeCronJobs(), self.member_turn(cron_job_id="group-job"))
+        listing_in_cron = await self.run_tool({"action": "list"}, FakeCronJobs(), self.member_turn(cron_job_id="group-job"))
+
+        self.assertFalse(dm["success"])
+        self.assertFalse(in_cron["success"])
+        self.assertFalse(listing_in_cron["success"])
+
+    async def test_create_uses_hermes_prompt_scanner_and_refuses_when_it_is_missing(self):
+        args = {"action": "create", "prompt": "Nhắc họp", "schedule": "every day at 7am"}
+        with patch("tools.cronjob_tools._scan_cron_prompt", return_value="Blocked: threat"):
+            blocked = await self.run_tool(args, FakeCronJobs(), self.member_turn())
+        with patch.dict(sys.modules, {"tools.cronjob_tools": None}):
+            missing = await self.run_tool(args, FakeCronJobs(), self.member_turn())
+
+        self.assertFalse(blocked["success"])
+        self.assertIn("Blocked", blocked["error"])
+        self.assertFalse(missing["success"])
+
+    async def test_list_shows_this_group_and_hides_owner_prompts(self):
+        jobs = FakeCronJobs([
+            {"id": "owner-job", "enabled": True, "name": "Bản tin", "deliver": f"zalo:{self.GROUP}",
+             "prompt": "bí mật của chủ nhân", "origin": {"platform": "zalo", "chat_id": self.GROUP}},
+            self.group_job("group-job", self.GROUP, self.MEMBER),
+            self.group_job("elsewhere", self.OTHER_GROUP, self.MEMBER),
+        ])
+        result = await self.run_tool({"action": "list"}, jobs, self.member_turn(self.OTHER_MEMBER))
+
+        self.assertTrue(result["success"], result)
+        items = {item["job_id"]: item for item in result["result"]["jobs"]}
+        self.assertEqual(set(items), {"owner-job", "group-job"})
+        self.assertEqual(items["owner-job"]["nguoi_tao"], "chủ nhân")
+        self.assertNotIn("noi_dung", items["owner-job"])
+        self.assertEqual(items["group-job"]["noi_dung"], "Nhắc họp")
+        self.assertNotIn("bí mật", json.dumps(result, ensure_ascii=False))
+
+    async def test_remove_follows_creator_or_owner_rule(self):
+        def jobs():
+            return FakeCronJobs([
+                {"id": "owner-job", "enabled": True, "deliver": f"zalo:{self.GROUP}",
+                 "origin": {"platform": "zalo", "chat_id": self.GROUP}},
+                self.group_job("group-job", self.GROUP, self.MEMBER),
+                self.group_job("elsewhere", self.OTHER_GROUP, self.MEMBER),
+            ])
+
+        other = jobs()
+        self.assertFalse((await self.run_tool({"action": "remove", "job_id": "group-job"}, other, self.member_turn(self.OTHER_MEMBER)))["success"])
+        self.assertEqual(other.removed, [])
+
+        creator = jobs()
+        self.assertTrue((await self.run_tool({"action": "remove", "job_id": "group-job"}, creator, self.member_turn()))["success"])
+        self.assertEqual(creator.removed, ["group-job"])
+
+        member_vs_owner = jobs()
+        self.assertFalse((await self.run_tool({"action": "remove", "job_id": "owner-job"}, member_vs_owner, self.member_turn()))["success"])
+        self.assertEqual(member_vs_owner.removed, [])
+
+        owner = jobs()
+        self.assertTrue((await self.run_tool({"action": "remove", "job_id": "owner-job"}, owner, self.member_turn(self.OWNER, is_owner=True)))["success"])
+        self.assertEqual(owner.removed, ["owner-job"])
+
+        wrong_group = jobs()
+        self.assertFalse((await self.run_tool({"action": "remove", "job_id": "elsewhere"}, wrong_group, self.member_turn()))["success"])
+        self.assertEqual(wrong_group.removed, [])
 
 
 if __name__ == "__main__":
