@@ -57,7 +57,8 @@ _CONFIRMATION_TTL_SECONDS = 300
 
 def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool,
                      is_owner: bool, text: str = "", reply_msg_id: str = "",
-                     reply_cli_msg_id: str = "", reply_is_own: bool = False) -> None:
+                     reply_cli_msg_id: str = "", reply_is_own: bool = False,
+                     msg_id: str = "") -> None:
     """Adapter gọi trước khi đẩy tin vào agent.
 
     ``text`` là NGUYÊN VĂN tin nhắn người dùng vừa gõ, chưa qua tay mô hình.
@@ -75,7 +76,18 @@ def set_turn_context(*, sender_uid: str, thread_id: str, is_group: bool,
         "reply_msg_id": str(reply_msg_id or ""),
         "reply_cli_msg_id": str(reply_cli_msg_id or ""),
         "reply_is_own": bool(reply_is_own),
+        "msg_id": str(msg_id or ""),
     })
+
+
+def bind_turn(turn: Optional[Dict[str, Any]]) -> None:
+    """Gắn lại danh tính cho lượt agent sắp chạy.
+
+    Hermes xử lý tin xếp hàng trong task tạo ra từ task của lượt trước, nên
+    ContextVar kế thừa danh tính người gửi trước. Adapter gọi hàm này mỗi lượt
+    để lượt nào cũng mang đúng người gửi của nó. Rỗng nghĩa là không ai.
+    """
+    _TURN.set(dict(turn) if turn else {})
 
 
 def _turn() -> Dict[str, Any]:
@@ -85,6 +97,16 @@ def _turn() -> Dict[str, Any]:
 def current_authorization(*, confirmed: bool = False) -> Dict[str, Any]:
     """Return the non-model authority envelope attached to a bridge frame."""
     turn = _turn()
+    if not turn:
+        # Ngoài lượt chat (cron, thông báo của gateway) không có người gửi nào.
+        # Sidecar chỉ cho vai trò này gửi tới chủ nhân hoặc kênh nhà.
+        return {
+            "actorUid": "",
+            "actorRole": "system",
+            "sourceThreadId": "",
+            "sourceThreadType": THREAD_USER,
+            "confirmed": False,
+        }
     return {
         "actorUid": str(turn.get("sender_uid") or ""),
         "actorRole": "owner" if turn.get("is_owner") else "public",
@@ -269,6 +291,10 @@ async def zalo_send_voice(args: Dict[str, Any], **_kw) -> str:
         if not result.success:
             return _err(result.error or "gửi voice thất bại")
         return _ok({"message_id": result.message_id})
+    # Với URL, sidecar tự gửi yêu cầu HEAD tới địa chỉ đó từ máy chủ. Người
+    # ngoài mà truyền địa chỉ nội bộ là dò được mạng LAN/localhost.
+    if not _turn().get("is_owner") and not _is_public_url(url):
+        return _err("chỉ gửi được voice từ địa chỉ web công cộng (http/https)")
     return await _invoke("sendVoice", [
         {"voiceUrl": url, "ttl": args.get("ttl", 0)}, thread_id, _thread_type(kind),
     ])
@@ -396,10 +422,19 @@ async def zalo_list_groups(args: Dict[str, Any], **_kw) -> str:
 
 
 async def zalo_group_members(args: Dict[str, Any], **_kw) -> str:
+    # getGroupMembersInfo của zca-js nhận ID THÀNH VIÊN, không nhận ID nhóm —
+    # truyền ID nhóm vào là luôn ra rỗng. Sidecar lo cả hai bước qua lệnh
+    # group_members: hỏi getGroupInfo lấy danh sách ID rồi mới tra hồ sơ.
     thread_id, _kind, err = _scoped_thread(args)
     if err:
         return err
-    return await _invoke("getGroupMembersInfo", [thread_id])
+    adapter = _ACTIVE_ADAPTER
+    if adapter is None:
+        return _err("Zalo chưa kết nối")
+    ack = await adapter.group_members(str(thread_id))
+    if not ack or not ack.get("ok"):
+        return _err((ack or {}).get("error", "không lấy được danh sách thành viên"))
+    return _ok(ack.get("result"))
 
 
 async def zalo_find_user(args: Dict[str, Any], **_kw) -> str:
@@ -1544,7 +1579,7 @@ TOOLS = [
 
     ("zalo_group_members", "🧑‍🤝‍🧑", _schema(
         "zalo_group_members",
-        "Xem danh sách thành viên một nhóm, kèm tên và vai trò.",
+        "Xem danh sách thành viên một nhóm, kèm tên hiển thị.",
         {"thread_id": _GROUP_ID},
         ["thread_id"],
     ), zalo_group_members, TOOLSET_PUBLIC),
@@ -1676,7 +1711,7 @@ TOOLS = [
     # --- Nhóm 4: sửa sai & quản trị ---
     ("zalo_undo", "↩️", _schema(
         "zalo_undo",
-        "Thu hồi một tin do chính Lăng Tiêu gửi. Bỏ trống mã tin để thu hồi tin "
+        "Thu hồi một tin do chính bot gửi. Bỏ trống mã tin để thu hồi tin "
         "gần nhất của bot trong hội thoại; có thể truyền msg_id/cli_msg_id cụ thể.",
         {
             "thread_id": _THREAD_ID,
@@ -1966,7 +2001,8 @@ def _confirmed_action(handler, tool_name: str):
             ).hexdigest()
             supplied = str(call_args.get("confirmation_code") or "").strip().upper()
             phrase = f"XÁC NHẬN {supplied}" if supplied else ""
-            human_text = str(turn.get("text") or "").strip().upper()
+            # Gộp khoảng trắng: gõ trên điện thoại hay lọt dấu cách đôi.
+            human_text = " ".join(str(turn.get("text") or "").split()).upper()
             if (pending and supplied and secrets.compare_digest(supplied, pending["code"])
                     and secrets.compare_digest(fingerprint, pending["fingerprint"])
                     and phrase == human_text):

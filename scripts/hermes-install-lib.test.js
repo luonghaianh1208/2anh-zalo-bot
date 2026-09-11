@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,6 +74,39 @@ test('mergeHermesConfig adds safe defaults and preserves customer values', async
   assert.deepEqual(config.known_plugin_toolsets.zalo, ['customer_tool', 'zalo_owner', 'zalo_public']);
   assert.equal(config.display.platforms.zalo.tool_progress, 'off');
   assert.deepEqual(config.plugins.enabled, ['platforms/zalo', 'zalo-tools']);
+});
+
+test('mergeHermesConfig giữ comment và số nguyên lớn của khách', () => {
+  const input = '# cấu hình của khách\nmodel:\n  provider: custom # đừng xoá\ndiscord:\n  channel: 1234567890123456789\n';
+  const output = mergeHermesConfig(input, { bridgeToken: 'bridge-secret' });
+
+  assert.match(output, /# cấu hình của khách/);
+  assert.match(output, /# đừng xoá/);
+  assert.match(output, /channel: 1234567890123456789\b/);
+  assert.equal(parse(output).platforms.zalo.extra.bridge_token, 'bridge-secret');
+});
+
+test('install giữ bản sao lưu config.yaml trước khi ghi đè', async (t) => {
+  const fx = fixture(t);
+  const original = readFileSync(join(fx.hermesHome, 'config.yaml'), 'utf8');
+
+  await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+
+  const backups = readdirSync(fx.hermesHome).filter((name) => name.startsWith('config.yaml.bak-'));
+  assert.equal(backups.length, 1);
+  assert.equal(readFileSync(join(fx.hermesHome, backups[0]), 'utf8'), original);
+});
+
+test('cài lại với --hermes-home khác thì cập nhật HERMES_HOME trong .env của sidecar', async (t) => {
+  const fx = fixture(t);
+  writeFileSync(join(fx.sidecar, '.env'), 'ZALO_BRIDGE_TOKEN=fixed-token\nHERMES_HOME=C:/nham/cho\n');
+
+  await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+
+  const env = readFileSync(join(fx.sidecar, '.env'), 'utf8');
+  assert.match(env, new RegExp(`^HERMES_HOME=${fx.hermesHome.replaceAll('\\', '/')}$`, 'm'));
+  assert.doesNotMatch(env, /nham\/cho/);
+  assert.match(env, /^ZALO_BRIDGE_TOKEN=fixed-token$/m);
 });
 
 test('renderPlatformManifest replaces the portable placeholder with a quoted absolute server path', (t) => {

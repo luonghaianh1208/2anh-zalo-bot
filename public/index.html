@@ -161,7 +161,7 @@
         <div class="row"><span class="k">Hermes Agent</span>
           <span class="v ${attached ? 'on' : 'off'}">${attached ? 'đã kết nối' : 'chưa kết nối'}</span></div>
         <div class="row"><span class="k">Chế độ</span>
-          <span class="v">${attached ? 'đầy đủ công cụ' : 'chatbot đơn giản'}</span></div>`;
+          <span class="v">${attached ? 'đầy đủ công cụ' : 'chưa sẵn sàng'}</span></div>`;
       el.panel.hidden = false;
 
       el.hint.innerHTML = attached
@@ -169,10 +169,13 @@
            Tạo bình chọn, ghim ghi chú, đọc lịch sử nhóm, gửi tệp, đặt lời nhắc…
            đều nói bằng lời, không cần mở trang nào nữa.
            <br><br>Chưa nhận chủ thì nhắn <code>/sethome</code> cho tài khoản này
-           từ Zalo cá nhân của bạn.`
+           từ Zalo cá nhân: bot trả về UID của bạn. Thêm UID đó vào
+           <code>ZALO_ALLOWED_USERS</code> trong <code>.env</code> của Hermes, rồi khởi động lại
+           sidecar và gateway.`
         : `Zalo đã đăng nhập nhưng <strong>Hermes chưa cắm vào</strong>.
            Chạy <code>hermes gateway run</code> để dùng đầy đủ công cụ.
-           <br><br>Trong lúc đó bot vẫn trả lời được, nhưng chỉ ở mức trò chuyện.`;
+           <br><br>Trong lúc đó bot chưa trả lời câu hỏi nào — chỉ báo bận cho người
+           gọi bot, và trả UID khi có người nhắn riêng <code>/sethome</code>.`;
       el.hint.hidden = false;
 
       el.start.hidden = true;

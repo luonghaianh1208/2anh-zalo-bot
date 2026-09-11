@@ -64,7 +64,9 @@ if (!python) {
 console.log(`[test:py] Dùng Python: ${python}`);
 
 const suites = [
-  { label: 'test_zalo_adapter.py', module: 'test_zalo_adapter', cwd: REPO_ROOT },
+  // Suite adapter import lõi Hermes (gateway) và jsonschema. Python hệ thống trên
+  // bản clone mới không có hai thứ đó — bỏ qua kèm cảnh báo thay vì báo đỏ cả npm test.
+  { label: 'test_zalo_adapter.py', module: 'test_zalo_adapter', cwd: REPO_ROOT, requires: 'import gateway, jsonschema' },
   { label: 'scripts/test_lay_token_facebook.py', module: 'scripts.test_lay_token_facebook', cwd: REPO_ROOT },
   { label: 'tts/test_vieneu_provider.py', module: 'test_vieneu_provider', cwd: join(REPO_ROOT, 'tts') },
 ];
@@ -74,6 +76,13 @@ let anyFailed = false;
 
 for (const suite of suites) {
   console.log(`\n[test:py] === ${suite.label} ===`);
+  if (suite.requires && spawnSync(python, ['-c', suite.requires], { cwd: suite.cwd, encoding: 'utf8' }).status !== 0) {
+    console.warn(
+      `[test:py] CẢNH BÁO: BỎ QUA ${suite.label} — Python này chưa import được lõi Hermes (gateway) hoặc jsonschema.\n`
+      + '[test:py]   Đặt biến PYTHON trỏ tới Python trong venv của Hermes, hoặc HERMES_HOME, rồi chạy lại `npm run test:py`.',
+    );
+    continue;
+  }
   const result = spawnSync(python, ['-m', 'unittest', suite.module, '-v'], {
     cwd: suite.cwd,
     encoding: 'utf8',

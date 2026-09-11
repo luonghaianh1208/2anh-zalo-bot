@@ -273,9 +273,12 @@ class ZaloAdapter(BasePlatformAdapter):
         super().__init__(config=config, platform=Platform("zalo"))
 
         extra = config.extra or {}
+        # Env thắng config.yaml (đúng như docstring đầu tệp): trình cài luôn ghi
+        # extra.bridge_url, nên để extra thắng thì khách đổi cổng qua env không ăn.
         self._bridge_url: str = (
-            extra.get("bridge_url")
-            or _get_scoped_secret("ZALO_BRIDGE_URL", DEFAULT_BRIDGE_URL)
+            _get_scoped_secret("ZALO_BRIDGE_URL", "")
+            or extra.get("bridge_url")
+            or DEFAULT_BRIDGE_URL
         )
         self._bridge_token: str = str(
             extra.get("bridge_token")
@@ -327,6 +330,11 @@ class ZaloAdapter(BasePlatformAdapter):
 
         # msgId -> seen-at, to survive sidecar reconnect replays
         self._seen: Dict[str, float] = {}
+
+        # msgId -> danh tính người gửi tin đó. Mỗi lượt agent chạy, adapter tra
+        # bảng này để gắn lại đúng người (xem _bind_turn_for_source).
+        self._turns: Dict[str, Dict[str, Any]] = {}
+        self._turn_seq = 0
 
         # Zalo user IDs and group IDs can both be 19 digits, so length is not
         # enough to classify a reply target.  Remember the authoritative type
@@ -539,6 +547,9 @@ class ZaloAdapter(BasePlatformAdapter):
         # cửa nhắn riêng thì không — một tin nhắn riêng là hội thoại kín, không
         # có ai khác trong nhóm nhìn thấy để mà kiểm chứng.
         if not is_group and self._dm_policy != "open" and not self._is_owner(sender_uid):
+            if text.strip().lower() == "/sethome":
+                await self._reply_sethome(thread_id, sender_uid, msg_id, text)
+                return
             logger.info("[zalo] bỏ qua tin nhắn riêng từ %s (%s) — không phải chủ nhân",
                         sender_name, sender_uid)
             return
@@ -551,16 +562,21 @@ class ZaloAdapter(BasePlatformAdapter):
             and str(quote.get("authorId") or "")
             == str(self._self_profile.get("user_id") or "")
         )
-        _zalo_tools().set_turn_context(
-            text=text,
-            sender_uid=sender_uid,
-            thread_id=thread_id,
-            is_group=is_group,
-            is_owner=self._is_owner(sender_uid),
-            reply_msg_id=str(quote.get("id") or "") if quote else "",
-            reply_cli_msg_id=str(quote.get("cliMsgId") or "") if quote else "",
-            reply_is_own=quote_is_own,
-        )
+        turn = {
+            # Chữ đem đối chiếu mã xác nhận phải là chữ người gõ, bỏ phần tag
+            # bot — trong nhóm phải tag thì tin mới tới được đây.
+            "text": self._strip_mention(text) if text else "",
+            "sender_uid": sender_uid,
+            "thread_id": thread_id,
+            "is_group": is_group,
+            "is_owner": self._is_owner(sender_uid),
+            "reply_msg_id": str(quote.get("id") or "") if quote else "",
+            "reply_cli_msg_id": str(quote.get("cliMsgId") or "") if quote else "",
+            "reply_is_own": quote_is_own,
+            "msg_id": msg_id,
+        }
+        self._remember_turn(turn)
+        _zalo_tools().set_turn_context(**turn)
 
         # Chặn nhắn dồn dập. Đặt sau cổng kiểm quyền (chỉ đếm tin thật sự
         # dành cho bot) nhưng TRƯỚC cả thả cảm xúc lẫn gọi mô hình — người
@@ -678,6 +694,42 @@ class ZaloAdapter(BasePlatformAdapter):
             )
 
         await self.handle_message(event)
+
+    def _remember_turn(self, turn: Dict[str, Any]) -> None:
+        """Nhớ danh tính theo mã tin để mỗi lượt agent gắn lại đúng người."""
+        msg_id = str(turn.get("msg_id") or "")
+        if not msg_id:
+            return
+        self._turn_seq += 1
+        self._turns[msg_id] = {**turn, "seq": self._turn_seq}
+        while len(self._turns) > 1000:
+            self._turns.pop(next(iter(self._turns)))
+
+    async def _reply_sethome(self, thread_id: str, sender_uid: str, msg_id: str, text: str) -> None:
+        """Cho người chưa là chủ biết UID của chính họ, kể cả khi Hermes đã cắm.
+
+        Gateway đã cắm thì tin riêng của người lạ bị bỏ qua, nên không trả lời
+        ở đây thì khách cài mới không có đường nào lấy UID để điền allowlist.
+        Chỉ tiết lộ UID của chính người nhắn, không cấp quyền gì.
+        """
+        if self._flood.check(sender_uid) in (FLOOD_MUTED, FLOOD_JUST_MUTED):
+            return
+        _zalo_tools().set_turn_context(
+            sender_uid=sender_uid, thread_id=thread_id, is_group=False,
+            is_owner=False, text=text, msg_id=msg_id,
+        )
+        await self.send(
+            thread_id,
+            "\n".join([
+                f"UID Zalo của bạn: {sender_uid}",
+                "",
+                "Lệnh này chỉ cho biết UID, chưa cấp quyền chủ.",
+                "Muốn làm chủ bot: thêm dòng sau vào .env của Hermes",
+                f"ZALO_ALLOWED_USERS={sender_uid}",
+                "rồi khởi động lại sidecar, sau đó khởi động lại gateway.",
+            ]),
+            metadata={"chat_type": "dm"},
+        )
 
     def _is_mentioned(self, frame: Dict[str, Any], text: str) -> bool:
         """True only when *this bot* is addressed.
@@ -874,6 +926,7 @@ class ZaloAdapter(BasePlatformAdapter):
         cụ tác động trong đúng cuộc trò chuyện của họ, không hơn.
         """
         uid = str(getattr(source, "user_id", "") or "")
+        owner = self._bind_turn_for_source(source, uid)
 
         # Dùng khoá nền tảng, KHÔNG dùng ``self.name``: thuộc tính đó trả về
         # ``platform.value.title()`` — "Zalo" chứ không phải "zalo" — nên
@@ -886,12 +939,66 @@ class ZaloAdapter(BasePlatformAdapter):
         # define_platform_composite() để người trong nhóm không với tới. Liệt
         # kê tường minh là đường duy nhất còn lại để chủ nhân vẫn dùng được.
         chosen = ([f"hermes-{platform_key}", "kanban", TOOLSET_OWNER, TOOLSET_PUBLIC]
-                  if self._is_owner(uid) else [TOOLSET_PUBLIC])
+                  if owner else [TOOLSET_PUBLIC])
 
         logger.debug("[zalo] %s (%s) → %s",
-                     "chủ nhân" if self._is_owner(uid) else "người trong nhóm",
+                     "chủ nhân" if owner else "người trong nhóm",
                      uid, chosen)
         return chosen
+
+    def _bind_turn_for_source(self, source, uid: str) -> bool:
+        """Gắn danh tính đúng của lượt này trước khi agent chạy.
+
+        Hermes chạy tin xếp hàng trong task tạo ra từ lượt trước, nên ContextVar
+        còn giữ người gửi trước: một thành viên tag bot đúng lúc chủ nhân đang
+        giao việc sẽ chạy công cụ bằng quyền chủ nhân. Gateway gọi
+        toolsets_for_source mỗi lượt, ngay trong task sắp chạy agent, nên gắn
+        ở đây thì lượt nào cũng mang đúng người. Không khớp tin nào đã nhận thì
+        coi là người ngoài.
+
+        Trả về lượt này có được dùng bộ công cụ chủ nhân không.
+        """
+        try:
+            turn = self._turns.get(str(getattr(source, "message_id", "") or ""))
+            if not turn or str(turn.get("sender_uid") or "") != uid:
+                _zalo_tools().bind_turn({
+                    "sender_uid": uid,
+                    "thread_id": str(getattr(source, "chat_id", "") or ""),
+                    "is_group": str(getattr(source, "chat_type", "") or "") == "group",
+                    "is_owner": False,
+                    "text": "",
+                })
+                # Không phải lượt của một tin nhắn (vd. việc nền của chủ nhân):
+                # giữ bộ công cụ theo UID, còn công cụ Zalo của chủ vẫn khoá.
+                return self._is_owner(uid)
+            if turn.get("is_owner") and "bound_as_owner" not in turn:
+                # Nhóm dùng chung một phiên: tin của chủ nhân phải chờ lượt thì
+                # Hermes có thể gộp chữ của người nhắn sau vào chung tin đó, rồi
+                # chạy cả khối với bộ công cụ của chủ (kể cả terminal). Có người
+                # ngoài nhắn chen vào hội thoại này trước khi lượt bắt đầu thì
+                # chạy với quyền người ngoài cho chắc. Quyết một lần mỗi tin.
+                turn["bound_as_owner"] = not any(
+                    other.get("thread_id") == turn.get("thread_id")
+                    and not other.get("is_owner")
+                    and other.get("seq", 0) > turn.get("seq", 0)
+                    for other in self._turns.values()
+                )
+                if not turn["bound_as_owner"]:
+                    logger.info("[zalo] lượt của chủ nhân %s có tin người ngoài chen vào — chạy với quyền công khai",
+                                turn.get("msg_id"))
+            if turn.get("is_owner") and not turn.get("bound_as_owner"):
+                turn = {**turn, "is_owner": False, "text": ""}
+            _zalo_tools().bind_turn(turn)
+            return bool(turn.get("is_owner"))
+        except Exception as exc:
+            # Gateway nuốt ngoại lệ của toolsets_for_source rồi rơi về bộ công
+            # cụ mặc định — không được để chuyện đó xảy ra vì lỗi ở đây.
+            logger.warning("[zalo] không gắn được danh tính lượt: %s", exc)
+            try:
+                _zalo_tools().bind_turn(None)
+            except Exception:
+                pass
+            return False
 
     def _is_owner(self, sender_uid: str) -> bool:
         """Người này có nằm trong ZALO_ALLOWED_USERS không.
@@ -1051,6 +1158,12 @@ class ZaloAdapter(BasePlatformAdapter):
             expect_ack=True,
         )
 
+    async def group_members(self, chat_id: str) -> Optional[Dict[str, Any]]:
+        return await self._command(
+            {"type": "group_members", "threadId": str(chat_id), "threadType": THREAD_TYPE_GROUP},
+            expect_ack=True,
+        )
+
     async def undo_message(
         self,
         chat_id: str,
@@ -1091,6 +1204,11 @@ class ZaloAdapter(BasePlatformAdapter):
         known_type = self._known_thread_types.get(str(chat_id))
         if known_type is not None:
             return known_type
+        if self._is_owner(str(chat_id)):
+            # UID chủ nhân cũng dài 19 chữ số như mã nhóm. Sau khi gateway khởi
+            # động lại, báo cáo cron gửi chủ mà đoán theo độ dài là thành gửi
+            # vào một "nhóm" không tồn tại.
+            return THREAD_TYPE_USER
         return THREAD_TYPE_GROUP if self._looks_like_group(chat_id) else THREAD_TYPE_USER
 
     def _looks_like_group(self, chat_id: str) -> bool:
@@ -1229,8 +1347,8 @@ def register(ctx) -> None:
             "You are talking to someone on Zalo, a Vietnamese messaging app. "
             "Write normal Markdown — the bridge converts it to Zalo's native "
             "text styles before sending, so formatting renders properly:\n"
-            "  # or ## heading  → bold red (use for the main heading)\n"
-            "  ### heading      → bold orange (sub-heading)\n"
+            "  # / ## / ### heading → bold + large (whole line)\n"
+            "  1. 2. 3.         → bold + large number\n"
             "  **text**         → bold (key terms, numbers, names)\n"
             "  *text*           → italic\n"
             "  `text`           → bold\n"
@@ -1241,7 +1359,7 @@ def register(ctx) -> None:
             "For a colour Markdown has no syntax for, wrap it in tags: "
             "[green]done[/green], [red]warning[/red], [yellow]note[/yellow], "
             "[orange]caution[/orange]. Zalo has no code-block styling, so keep "
-            "code short. Use emoji freely — they render natively. Keep replies "
-            "under 4000 characters."
+            "code short. Use emoji freely — they render natively. Long replies "
+            "are split into several messages automatically."
         ),
     )

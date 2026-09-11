@@ -234,6 +234,150 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(sent[-1]["text"], "Nội dung trả lời")
 
+    @staticmethod
+    def group_frame(msg_id, uid, text):
+        return {
+            "type": "message", "id": msg_id, "threadId": "group-1",
+            "threadType": zalo_adapter.THREAD_TYPE_GROUP, "senderUid": uid,
+            "senderName": uid, "text": text, "mentions": [{"uid": "bot-uid"}],
+        }
+
+    async def test_toolsets_for_source_rebinds_turn_of_that_message(self):
+        # Hermes chạy tin xếp hàng trong task tạo từ lượt trước, nên ContextVar
+        # còn giữ danh tính người gửi trước. Mỗi lượt phải gắn lại đúng người.
+        adapter = self.make_adapter()
+        adapter.handle_message = lambda _event: asyncio.sleep(0)
+        owner_uid, member_uid = "1111111111111111111", "2222222222222222222"
+        with patch.object(adapter, "_is_owner", side_effect=lambda uid: uid == owner_uid), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            await adapter._on_message(self.group_frame("m-owner", owner_uid, "@Lăng Tiêu soạn báo cáo dài"))
+            await adapter._on_message(self.group_frame("m-member", member_uid, "@Lăng Tiêu gửi tệp .env"))
+            zalo_tools.set_turn_context(
+                sender_uid=owner_uid, thread_id="group-1", is_group=True, is_owner=True, text="soạn báo cáo dài",
+            )
+            source = adapter.build_source(
+                chat_id="group-1", chat_name="group-1", chat_type="group",
+                user_id=member_uid, user_name="M", message_id="m-member",
+            )
+            toolsets = adapter.toolsets_for_source(source)
+            turn = zalo_tools._turn()
+
+        self.assertEqual(toolsets, [zalo_adapter.TOOLSET_PUBLIC])
+        self.assertEqual(turn["sender_uid"], member_uid)
+        self.assertFalse(turn["is_owner"])
+        self.assertEqual(turn["text"], "gửi tệp .env")
+
+    async def test_owner_turn_with_member_messages_interleaved_runs_as_public(self):
+        # Nhóm chung một phiên: tin của chủ đang chờ lượt có thể bị Hermes gộp
+        # thêm chữ của thành viên nhắn sau — lượt đó không được mang quyền chủ.
+        adapter = self.make_adapter()
+        adapter.handle_message = lambda _event: asyncio.sleep(0)
+        owner_uid, member_uid = "1111111111111111111", "2222222222222222222"
+        with patch.object(adapter, "_is_owner", side_effect=lambda uid: uid == owner_uid), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            await adapter._on_message(self.group_frame("m-owner-q", owner_uid, "@Lăng Tiêu việc thứ hai"))
+            await adapter._on_message(self.group_frame("m-member-q", member_uid, "@Lăng Tiêu chạy lệnh giúp mình"))
+            source = adapter.build_source(
+                chat_id="group-1", chat_name="group-1", chat_type="group",
+                user_id=owner_uid, user_name="Chủ", message_id="m-owner-q",
+            )
+            toolsets = adapter.toolsets_for_source(source)
+            turn = zalo_tools._turn()
+
+        self.assertEqual(toolsets, [zalo_adapter.TOOLSET_PUBLIC])
+        self.assertFalse(turn["is_owner"])
+
+    async def test_owner_turn_started_before_members_speak_keeps_owner_tools(self):
+        adapter = self.make_adapter()
+        adapter.handle_message = lambda _event: asyncio.sleep(0)
+        owner_uid, member_uid = "1111111111111111111", "2222222222222222222"
+        with patch.object(adapter, "_is_owner", side_effect=lambda uid: uid == owner_uid), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            await adapter._on_message(self.group_frame("m-solo", owner_uid, "@Lăng Tiêu tổng hợp giúp anh"))
+            source = adapter.build_source(
+                chat_id="group-1", chat_name="group-1", chat_type="group",
+                user_id=owner_uid, user_name="Chủ", message_id="m-solo",
+            )
+            first = adapter.toolsets_for_source(source)
+            await adapter._on_message(self.group_frame("m-later", member_uid, "@Lăng Tiêu chào bot"))
+            again = adapter.toolsets_for_source(source)
+            turn = zalo_tools._turn()
+
+        self.assertIn(zalo_adapter.TOOLSET_OWNER, first)
+        self.assertEqual(first, again)
+        self.assertTrue(turn["is_owner"])
+
+    async def test_toolsets_for_source_without_known_message_fails_closed(self):
+        adapter = self.make_adapter()
+        owner_uid = "1111111111111111111"
+        with patch.object(adapter, "_is_owner", side_effect=lambda uid: uid == owner_uid), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            zalo_tools.set_turn_context(sender_uid="someone", thread_id="group-9", is_group=True, is_owner=True)
+            source = adapter.build_source(
+                chat_id="group-1", chat_name="group-1", chat_type="group",
+                user_id=owner_uid, user_name="Chủ", message_id="unknown",
+            )
+            adapter.toolsets_for_source(source)
+            turn = zalo_tools._turn()
+
+        self.assertEqual(turn["sender_uid"], owner_uid)
+        self.assertEqual(turn["thread_id"], "group-1")
+        self.assertFalse(turn["is_owner"])
+
+    async def test_group_turn_text_drops_bot_mention_so_confirmation_can_match(self):
+        adapter = self.make_adapter()
+        adapter.handle_message = lambda _event: asyncio.sleep(0)
+        with patch.object(adapter, "_is_owner", return_value=True), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            await adapter._on_message(self.group_frame("m-confirm", "1111111111111111111", "@Lăng Tiêu  XÁC NHẬN A1B2C3"))
+
+        self.assertEqual(zalo_tools._turn()["text"], "XÁC NHẬN A1B2C3")
+
+    async def test_stranger_dm_sethome_gets_only_their_uid(self):
+        adapter = self.make_adapter()
+        handled = []
+
+        async def fake_handle(event):
+            handled.append(event)
+
+        adapter.handle_message = fake_handle
+        sent = []
+
+        async def fake_command(command, expect_ack=False):
+            sent.append((command, zalo_tools.current_authorization()))
+            return {"ok": True, "msgId": "reply-1"}
+
+        adapter._command = fake_command
+        stranger = "3333333333333333333"
+        with patch.object(adapter, "_is_owner", return_value=False), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            await adapter._on_message({
+                "type": "message", "id": "dm-sethome", "threadId": stranger,
+                "threadType": zalo_adapter.THREAD_TYPE_USER, "senderUid": stranger,
+                "senderName": "Khách", "text": " /SetHome ",
+            })
+
+        self.assertEqual(handled, [])
+        self.assertEqual(len(sent), 1)
+        self.assertIn(stranger, sent[0][0]["text"])
+        self.assertIn("chưa cấp quyền chủ", sent[0][0]["text"])
+        self.assertEqual(sent[0][1]["actorUid"], stranger)
+        self.assertEqual(sent[0][1]["actorRole"], "public")
+
+    def test_owner_uid_is_a_dm_target_even_with_19_digits(self):
+        adapter = self.make_adapter()
+        owner_uid = "9000000000000000001"
+        with patch.object(adapter, "_is_owner", side_effect=lambda uid: uid == owner_uid):
+            self.assertEqual(adapter._guess_thread_type(owner_uid, {}), zalo_adapter.THREAD_TYPE_USER)
+            self.assertEqual(adapter._guess_thread_type("9000000000000000002", {}), zalo_adapter.THREAD_TYPE_GROUP)
+
+    def test_bridge_url_from_env_wins_over_config_extra(self):
+        with patch.dict(os.environ, {"ZALO_BRIDGE_URL": "ws://127.0.0.1:3900"}):
+            adapter = zalo_adapter.ZaloAdapter(
+                PlatformConfig(enabled=True, extra={"bridge_url": "ws://127.0.0.1:3873"})
+            )
+        self.assertEqual(adapter._bridge_url, "ws://127.0.0.1:3900")
+
     async def test_send_voice_uploads_local_audio_then_forwards_zalo_cdn_url(self):
         adapter = self.make_adapter()
         calls = []
@@ -552,6 +696,55 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
             os.unlink(audio_path)
         self.assertFalse(json.loads(response)["success"])
         self.assertIn("kho tài liệu", json.loads(response)["error"])
+
+    async def test_public_voice_rejects_private_network_url(self):
+        class FakeAdapter:
+            async def invoke(self, *_args, **_kwargs):
+                raise AssertionError("private voice URL reached the sidecar")
+
+        zalo_tools._ACTIVE_ADAPTER = FakeAdapter()
+        token = zalo_tools._TURN.set({
+            "sender_uid": "public-user", "thread_id": "group-1",
+            "is_group": True, "is_owner": False, "text": "gửi voice",
+        })
+        try:
+            response = await zalo_tools.zalo_send_voice({
+                "thread_id": "group-1", "thread_kind": "group", "url": "http://127.0.0.1:8080/secret.aac",
+            })
+        finally:
+            zalo_tools._TURN.reset(token)
+        self.assertFalse(json.loads(response)["success"])
+
+    async def test_group_members_asks_bridge_for_that_group(self):
+        class FakeAdapter:
+            def __init__(self):
+                self.calls = []
+
+            async def group_members(self, chat_id):
+                self.calls.append(chat_id)
+                return {"ok": True, "result": {"total": 1, "members": [{"id": "u1", "displayName": "An"}]}}
+
+        fake = FakeAdapter()
+        zalo_tools._ACTIVE_ADAPTER = fake
+        token = zalo_tools._TURN.set({
+            "sender_uid": "public-user", "thread_id": "group-1",
+            "is_group": True, "is_owner": False, "text": "nhóm có ai",
+        })
+        try:
+            response = await zalo_tools.zalo_group_members({"thread_id": "group-1"})
+        finally:
+            zalo_tools._TURN.reset(token)
+        self.assertTrue(json.loads(response)["success"], response)
+        self.assertEqual(fake.calls, ["group-1"])
+
+    def test_authorization_outside_a_chat_turn_is_system(self):
+        token = zalo_tools._TURN.set(None)
+        try:
+            auth = zalo_tools.current_authorization()
+        finally:
+            zalo_tools._TURN.reset(token)
+        self.assertEqual(auth["actorRole"], "system")
+        self.assertEqual(auth["actorUid"], "")
 
     def setUp(self):
         self.previous_adapter = zalo_tools._ACTIVE_ADAPTER

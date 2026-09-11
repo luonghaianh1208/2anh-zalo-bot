@@ -37,7 +37,7 @@ Zalo  <->  zca-js sidecar (Node.js)  <->  local WebSocket  <->  Python plugins  
 
 7. **SQLite history and an audit trail.** Every message is stored in SQLite with age-based retention (365 days by default); every action with real-world effect is written to `audit_log` with the acting identity and the outcome.
 
-8. **A re-runnable installer with diagnostics and a clean uninstall.** `install:hermes` merges configuration without overwriting values the customer already changed; `doctor` runs 8 checks from the Hermes layout to the bridge token; `uninstall:hermes` removes only the managed plugin directories, leaving `.env`, the Zalo session, and `config.yaml` untouched.
+8. **A re-runnable installer with diagnostics and a clean uninstall.** `install:hermes` merges configuration without overwriting values the customer already changed; `doctor` runs 9 checks from the Hermes layout to the bridge token; `uninstall:hermes` removes only the managed plugin directories, leaving `.env`, the Zalo session, and `config.yaml` untouched.
 
 ## Important risk notice
 
@@ -108,8 +108,9 @@ npm start
 
 1. Open `http://127.0.0.1:3872`.
 2. Create and scan the QR code with the secondary Zalo account.
-3. From the owner's personal Zalo account, send `/sethome` to the secondary account.
-4. Start or restart the Hermes gateway using the service manager used by that installation.
+3. From the owner's personal Zalo account, send `/sethome` as a direct message to the secondary account. The bot replies with your UID — this does **not** grant owner rights yet.
+4. Add `ZALO_ALLOWED_USERS=<that UID>` to the **Hermes** `.env`.
+5. Restart the sidecar (`npm start`), then start or restart the Hermes gateway using the service manager used by that installation.
 
 Verify the bridge:
 
@@ -130,6 +131,8 @@ The response should report `"status": "logged-in"` and `"hermesAttached": true`.
 | Direct-message access | Yes | Disabled by default |
 
 Public tools are removed before the model sees the tool list, scoped to the current conversation, and checked again in the backend. Destructive owner actions also require a fresh six-character confirmation code.
+
+Identity is re-bound on every agent turn from the message that started it, so a member's message queued behind the owner's turn never inherits owner rights. Because a group shares one session, an owner message that was still waiting while a non-owner spoke in the same conversation runs with public tools — Hermes may have merged their text into it.
 
 ## Configuration
 
@@ -199,7 +202,7 @@ Sidecar logs are printed by `npm start` and also copied with timestamps to `logs
 npm run uninstall:hermes -- --hermes-home <path-to-Hermes-home>
 ```
 
-The uninstaller removes only the managed Zalo plugin directories. It preserves the sidecar `.env`, Zalo session/history, Hermes `config.yaml`, and optional TTS environment so it never leaves a configuration pointing at deleted files.
+The uninstaller removes only the managed Zalo plugin directories. It preserves the sidecar `.env`, Zalo session/history, and optional TTS environment, and does not edit Hermes `config.yaml` — the `plugins.enabled`, `platforms.zalo`, and `known_plugin_toolsets.zalo` entries stay behind, so remove them by hand if you are not reinstalling. Each install also keeps the previous file as `config.yaml.bak-<timestamp>`.
 
 ## License
 

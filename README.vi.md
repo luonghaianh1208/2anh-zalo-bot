@@ -45,7 +45,7 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 
 7. **Lưu lịch sử và nhật ký thao tác.** Tin nhắn vào SQLite có dọn theo hạn (mặc định 365 ngày); mọi thao tác có tác động ghi vào `audit_log` kèm danh tính người ra lệnh và kết quả thành/bại.
 
-8. **Cài đặt chạy lại được, có chẩn đoán và gỡ sạch.** `install:hermes` merge cấu hình mà không đè giá trị khách đã tự chỉnh; `doctor` kiểm 8 mục, từ layout Hermes tới token bridge; `uninstall:hermes` chỉ xoá đúng thư mục plugin, giữ nguyên `.env`, phiên Zalo và `config.yaml`.
+8. **Cài đặt chạy lại được, có chẩn đoán và gỡ sạch.** `install:hermes` merge cấu hình mà không đè giá trị khách đã tự chỉnh; `doctor` kiểm 9 mục, từ layout Hermes tới token bridge; `uninstall:hermes` chỉ xoá đúng thư mục plugin, giữ nguyên `.env`, phiên Zalo và `config.yaml`.
 
 ---
 
@@ -57,7 +57,7 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 * Tự nối lại khi mất kết nối (2 → 5 → 10 → 30 → 60 giây)
 
 **Phân quyền — mặc định đóng**
-* Người lạ nhắn riêng thì bot im lặng (`dmPolicy: owner-only`)
+* Người lạ nhắn riêng thì bot im lặng (`ZALO_DM_POLICY=owner-only`) — trừ lệnh `/sethome`, bot chỉ trả về UID của chính người nhắn
 * Trong nhóm chỉ trả lời khi được tag đúng tên bot
 * Nhận diện UID Zalo thật, loại bỏ số điện thoại điền nhầm chỗ
 
@@ -151,6 +151,8 @@ Mỗi nhóm Zalo là một phiên riêng — chuyện ở nhóm này không lẫ
 
 Đặt bằng `group_sessions_per_user: false` ở **cấp cao nhất** của `config.yaml` (Hermes ưu tiên cấp này hơn khoá cùng tên trong mục `gateway:`).
 
+Chung một phiên thì tin của người này có thể phải xếp hàng sau lượt của người kia, thậm chí bị Hermes gộp chữ vào chung. Adapter chặn hai đường rò quyền từ đó: danh tính được gắn lại **mỗi lượt** theo đúng tin khởi động lượt ấy, và lượt của chủ nhân mà có người ngoài nhắn chen vào trước khi kịp chạy thì chạy với **quyền công khai**. Hệ quả duy nhất bạn có thể gặp: thỉnh thoảng một lệnh của chủ nhân rơi đúng lúc nhóm đang nhắn dồn sẽ bị từ chối quyền — nhắn lại là được.
+
 Cả nhóm dùng được bot mà **không phải khai báo từng UID** — đặt `ZALO_ALLOW_ALL_USERS=true` để gateway mở cổng vào, rào chắn thật nằm ở tầng toolset. Cờ đó **không** phong ai làm chủ: `ZALO_ALLOWED_USERS` mới quyết định điều đó.
 
 Nhắn riêng vẫn chỉ dành cho chủ (`ZALO_DM_POLICY=owner-only`). Một tin nhắn riêng là hội thoại kín, không ai trong nhóm nhìn thấy để kiểm chứng — nên cửa đó đóng chặt hơn.
@@ -167,7 +169,7 @@ Hai lớp riêng biệt, bảo vệ hai thứ khác nhau.
 
 **Giãn nhịp gửi (`rate-limiter.js`)** bảo vệ tài khoản Zalo. Hermes trả lời xong thường bắn liền mấy thứ sát nhau — đoạn văn bản, sticker, có khi cả tệp — mà Zalo thì quét hành vi spam trên tài khoản cá nhân, và mất tài khoản là mất luôn cả kênh.
 
-Dùng token bucket chứ không phải "ngủ 3 giây sau mỗi tin", vì ngủ cố định làm chậm cả những lượt trả lời bình thường. Bucket có sẵn 5 token nên **một lượt trả lời thông thường đi ra ngay, không trễ mili giây nào**; chỉ khi gửi dồn kéo dài mới bị giãn về 20 tin/phút. Câu trả lời chỉ bị tách khi dài hơn 4000 ký tự, nên phải viết hơn 20.000 ký tự mới chạm hạn mức.
+Dùng token bucket chứ không phải "ngủ 3 giây sau mỗi tin", vì ngủ cố định làm chậm cả những lượt trả lời bình thường. Bucket có sẵn 5 token nên **một lượt trả lời thông thường đi ra ngay, không trễ mili giây nào**; chỉ khi gửi dồn kéo dài mới bị giãn về 20 tin/phút. Câu trả lời dài được tách thành nhiều tin (mỗi tin tối đa 2000 ký tự), nên chỉ những lượt trả lời rất dài hoặc gửi dồn liên tục mới chạm hạn mức.
 
 Hai chi tiết để không hỏng trải nghiệm:
 
@@ -231,8 +233,10 @@ npm start
 
 1. Mở `http://127.0.0.1:3872`
 2. Bấm **Tạo QR**, quét bằng Zalo trên điện thoại *(dùng tài khoản phụ)*
-3. Từ Zalo cá nhân của bạn, nhắn `/sethome` cho tài khoản vừa quét
-   → bot ghi nhận bạn là chủ và in ra UID
+3. Từ Zalo cá nhân của bạn, nhắn riêng `/sethome` cho tài khoản vừa quét
+   → bot trả về UID của bạn (lệnh này **chưa** cấp quyền chủ)
+4. Thêm `ZALO_ALLOWED_USERS=<UID vừa nhận>` vào `.env` **của Hermes**
+5. Khởi động lại sidecar (`npm start`), rồi khởi động lại gateway Hermes
 
 ### Nối vào Hermes thủ công
 
@@ -286,7 +290,7 @@ platform_hints:
 
 Mục 1 và 2 quan trọng dù đã tự động, nên vẫn cần hiểu vì sao: Hermes mặc định **bật** mọi toolset plugin mà nó chưa từng thấy; thiếu khai báo thì `zalo_owner` — bộ công cụ dành riêng chủ nhân — được cấp cho cả người lạ nhắn vào nhóm, dù adapter đã giới hạn. Đồng thời cấu hình `display.platforms.zalo` giúp các bong bóng tin nhắn trong nhóm luôn sạch sẽ, không bị bắn rác thông báo hệ thống. Việc trình cài tự làm hai mục này không phải để bạn khỏi quan tâm — nếu tự cài thủ công mà bỏ sót, hệ quả bảo mật vẫn y như trên.
 
-Mục 3 (tính cách, `platform_hints.zalo.append`) là tuỳ chọn và trình cài **không** tự viết hộ — mặc định Hermes không có persona này, nên nếu muốn giọng điệu như trên thì luôn phải tự thêm, dù cài kiểu nào.
+Mục 3 (`platform_hints.zalo.append`): trình cài tự ghi bộ hướng dẫn trình bày mặc định (`hermes-plugin/zalo-style-guide.md`) khi mục này còn trống, và không đè nếu bạn đã tự viết. Giọng điệu như ví dụ trên là riêng của từng khách nên trình cài không viết hộ — muốn thì tự thêm vào cùng mục này.
 
 **Bước 4 — thêm UID** vào file `.env` **của Hermes** (`%LOCALAPPDATA%\hermes\.env` trên Windows, `~/.hermes/.env` trên Linux/macOS):
 
@@ -329,7 +333,7 @@ Sidecar không còn tệp cấu hình nào. Ai được dùng bot, trả lời k
 | Tính cách | `platform_hints.zalo.append` trong `config.yaml` |
 | Công cụ mỗi mức quyền được dùng | `known_plugin_toolsets.zalo` + `toolsets_for_source()` |
 
-`data/` của sidecar chỉ giữ phiên đăng nhập Zalo và tệp pid — cả hai do chương trình tự tạo.
+`data/` của sidecar do chương trình tự tạo, gồm phiên đăng nhập Zalo, tệp pid và `zalo.sqlite` — lịch sử tin nhắn (kể cả tin nhóm không gọi bot, để bot đọc lại ngữ cảnh) cùng nhật ký thao tác, tự xoá tin cũ hơn 365 ngày (đổi bằng `ZALO_HISTORY_RETENTION_DAYS`).
 
 > **UID Zalo là dãy số dài 17–21 chữ số, không bắt đầu bằng `0`.** Số điện thoại thì ngược lại. Điền nhầm số điện thoại vào `ZALO_ALLOWED_USERS` thì người đó đơn giản là không khớp với ai — không mở quyền cho ai khác.
 
@@ -390,7 +394,7 @@ Chỉ còn đúng bốn route mà trang quét QR và giám sát runtime cần. S
 | `GET /api/health` | Ảnh chụp sức khoẻ runtime: trạng thái tổng (`healthy`/`degraded`/`unhealthy`), thời gian chạy, trạng thái phiên Zalo và kết nối nghe tin (`zalo.listener`: `connected`/`reconnecting`/`closed` — khác `connected` là báo `degraded`, vì đăng nhập mà không nghe được tin thì bot vẫn "điếc"), số client bridge đang gắn và có client nào "nguội" không, tình trạng SQLite, tiến trình backfill, mốc thời gian tin gửi/nhận gần nhất, lỗi gần nhất, và `authorization.ownerConfigured` — có `ZALO_ALLOWED_USERS` hợp lệ hay chưa |
 | `POST /api/logout` | Đăng xuất, xoá phiên |
 
-Cổng WebSocket `3873` là giao thức riêng giữa sidecar và Hermes: `hello`, `message`, `ack` đi từ sidecar ra; `send`, `typing`, `ack_message`, `invoke` đi từ Hermes vào.
+Cổng WebSocket `3873` là giao thức riêng giữa sidecar và Hermes: `hello`, `message`, `ack` đi từ sidecar ra; `send`, `typing`, `reaction`, `seen`, `ack_message`, `history`, `group_members`, `undo`, `invoke`, `ping` đi từ Hermes vào.
 
 ---
 
@@ -400,7 +404,7 @@ Cổng WebSocket `3873` là giao thức riêng giữa sidecar và Hermes: `hello
 
 * **Luôn dùng tài khoản phụ.** Đừng đăng nhập tài khoản chính hay tài khoản công việc.
 * Đừng gửi tin hàng loạt, đừng tự động kết bạn — đó là những hành vi dễ bị đánh dấu nhất.
-* Giữ `replyOnlyTagged: true` trong nhóm.
+* Giữ `ZALO_GROUP_REPLY_ONLY_TAGGED=true` trong nhóm.
 
 **Bảo mật:** thư mục `data/` chứa cookie và IMEI của phiên Zalo. Ai lấy được file đó là đăng nhập được vào tài khoản đó. `.gitignore` đã chặn sẵn — đừng gỡ ra.
 

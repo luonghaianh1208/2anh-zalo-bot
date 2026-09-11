@@ -273,6 +273,51 @@ test('lỗi mạng khi gửi thì không tự gửi lại để tránh trùng ti
   }
 });
 
+test('group_members hỏi getGroupInfo lấy ID thành viên rồi mới tra hồ sơ', async (t) => {
+  const calls = [];
+  const api = {
+    async getGroupInfo(ids) {
+      calls.push(['getGroupInfo', ids]);
+      return { gridInfoMap: { g1: { memVerList: ['u1_0', 'u2_0'] } } };
+    },
+    async getGroupMembersInfo(ids) {
+      calls.push(['getGroupMembersInfo', ids]);
+      return { profiles: { u1: { id: 'u1', displayName: 'An' }, u2: { id: 'u2', zaloName: 'Bình' } } };
+    },
+  };
+  const ws = await openBridge(t, api);
+
+  try {
+    ws.send(JSON.stringify({
+      type: 'group_members', reqId: 'gm1', threadId: 'g1', threadType: 1,
+      auth: { actorUid: 'member-1', actorRole: 'public', sourceThreadId: 'g1', sourceThreadType: 1, confirmed: false },
+    }));
+    const ack = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'gm1');
+
+    assert.equal(ack.ok, true, ack.error);
+    assert.deepEqual(calls, [['getGroupInfo', ['g1']], ['getGroupMembersInfo', ['u1', 'u2']]]);
+    assert.equal(ack.result.total, 2);
+    assert.deepEqual(ack.result.members.map((m) => m.displayName), ['An', 'Bình']);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
+test('cổng bridge đọc ZALO_BRIDGE_PORT lúc khởi động chứ không phải lúc nạp module', async (t) => {
+  const previous = process.env.ZALO_BRIDGE_PORT;
+  process.env.ZALO_BRIDGE_PORT = String(40_000 + Math.floor(Math.random() * 20_000));
+  try {
+    const server = startHermesBridge({ api: {}, profile: null, store: testStore(t) });
+    await new Promise((resolve) => server.once('listening', resolve));
+    assert.equal(server.address().port, Number(process.env.ZALO_BRIDGE_PORT));
+  } finally {
+    stopHermesBridge();
+    if (previous === undefined) delete process.env.ZALO_BRIDGE_PORT;
+    else process.env.ZALO_BRIDGE_PORT = previous;
+  }
+});
+
 test('gửi lại dạng chữ thường vẫn bị từ chối thì báo thất bại', async (t) => {
   const sent = [];
   const api = {

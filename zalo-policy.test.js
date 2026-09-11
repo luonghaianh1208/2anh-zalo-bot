@@ -39,6 +39,14 @@ test('claimed owner role cannot elevate a uid absent from the allowlist', () => 
   assert.equal(result.code, 'owner_required');
 });
 
+test('uid chủ nhân mà adapter hạ xuống public thì sidecar không tự nâng lại', () => {
+  const result = authorizeBridgeCommand({
+    type: 'invoke', method: 'getAllGroups', args: [], auth: { ...ownerAuth, actorRole: 'public' },
+  }, policyOptions);
+  assert.equal(result.role, 'public');
+  assert.equal(result.code, 'owner_required');
+});
+
 test('allowlisted owner can call owner read operations', () => {
   assert.deepEqual(authorizeBridgeCommand({
     type: 'invoke', method: 'getAllGroups', args: [], auth: ownerAuth,
@@ -69,6 +77,23 @@ test('missing and malformed authorization fail closed', () => {
     type: 'send', threadId: 'group-1', threadType: 1,
     auth: { actorUid: '', sourceThreadId: 'group-1', sourceThreadType: 1 },
   }, policyOptions).code, 'auth_required');
+});
+
+test('system actor (cron, thông báo gateway) chỉ gửi được tới chủ nhân hoặc kênh nhà', () => {
+  const system = { actorUid: '', actorRole: 'system', sourceThreadId: '', sourceThreadType: 0, confirmed: false };
+  const options = { ownerUids: new Set(['owner-1']), homeChannel: 'group-home' };
+  assert.equal(authorizeBridgeCommand({ type: 'send', threadId: 'owner-1', threadType: 0, auth: system }, options).allowed, true);
+  assert.equal(authorizeBridgeCommand({ type: 'send', threadId: 'group-home', threadType: 1, auth: system }, options).allowed, true);
+  assert.equal(authorizeBridgeCommand({ type: 'send', threadId: 'group-1', threadType: 1, auth: system }, options).code, 'auth_required');
+  assert.equal(authorizeBridgeCommand({ type: 'invoke', method: 'getAllGroups', args: [], auth: system }, options).allowed, false);
+});
+
+test('public group_members chỉ đọc được nhóm đang trò chuyện; tra hồ sơ theo ID là việc của chủ', () => {
+  assert.equal(authorizeBridgeCommand({ type: 'group_members', threadId: 'group-1', threadType: 1, auth: publicAuth }, policyOptions).allowed, true);
+  assert.equal(authorizeBridgeCommand({ type: 'group_members', threadId: 'other', threadType: 1, auth: publicAuth }, policyOptions).code, 'cross_thread_denied');
+  assert.equal(authorizeBridgeCommand({
+    type: 'invoke', method: 'getGroupMembersInfo', args: [['u1']], auth: publicAuth,
+  }, policyOptions).code, 'owner_required');
 });
 
 test('ping is the only command exempt from authorization', () => {

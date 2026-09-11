@@ -186,7 +186,7 @@ test('disconnected exact DM /sethome reveals the sender UID without granting own
   assert.equal(threadType, ThreadType.User);
   assert.match(content.msg, /UID Zalo của bạn:\s*uid-123/);
   assert.match(content.msg, /ZALO_ALLOWED_USERS=uid-123/);
-  assert.match(content.msg, /ZALO_HOME_CHANNEL=uid-123/);
+  assert.match(content.msg, /^ZALO_HOME_CHANNEL=uid-123$/m);
   assert.match(content.msg, /chưa (?:được )?cấp quyền chủ/i);
   assert.match(content.msg, /khởi động lại sidecar/i);
   assert.match(content.msg, /gateway/i);

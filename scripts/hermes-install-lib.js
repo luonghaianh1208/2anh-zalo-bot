@@ -7,7 +7,7 @@ import { homedir, platform } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parse, stringify } from 'yaml';
+import { isMap, isSeq, parse, parseDocument } from 'yaml';
 
 const PLATFORM_KEY = 'platforms/zalo';
 const TOOLS_KEY = 'zalo-tools';
@@ -72,72 +72,83 @@ export function resolveHermesLayout({ hermesHome = null, env = process.env, cwd 
   throw new Error('Không tự tìm thấy Hermes Agent; hãy truyền --hermes-home <đường-dẫn>');
 }
 
-function ensureObject(parent, key) {
-  if (!parent[key] || typeof parent[key] !== 'object' || Array.isArray(parent[key])) parent[key] = {};
-  return parent[key];
-}
-
-function setDefault(parent, key, value) {
-  if (parent[key] === undefined) parent[key] = value;
-}
-
 export function mergeHermesConfig(text, { bridgeToken, vieneu = null, styleGuide = null } = {}) {
-  const config = parse(text || '') || {};
-  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+  // Sửa ngay trên Document chứ không parse ra object rồi stringify lại: cách cũ
+  // làm mất sạch comment của khách và làm tròn số nguyên lớn (ID kênh 19 chữ số
+  // thành một số khác, trỏ sai kênh). intAsBigInt giữ nguyên từng chữ số.
+  const doc = parseDocument(text || '', { intAsBigInt: true });
+  if (doc.errors.length) throw doc.errors[0];
+  if (doc.contents == null) doc.contents = doc.createNode({});
+  if (!isMap(doc.contents)) {
     throw new Error('config.yaml phải chứa một YAML mapping ở cấp cao nhất');
   }
 
-  const knownToolsets = ensureObject(config, 'known_plugin_toolsets');
-  if (!Array.isArray(knownToolsets.zalo)) knownToolsets.zalo = [];
-  for (const name of ['zalo_owner', 'zalo_public']) {
-    if (!knownToolsets.zalo.includes(name)) knownToolsets.zalo.push(name);
-  }
-  setDefault(config, 'group_sessions_per_user', false);
+  const ensureMap = (path) => {
+    for (let depth = 1; depth <= path.length; depth += 1) {
+      const sub = path.slice(0, depth);
+      if (!isMap(doc.getIn(sub, true))) doc.setIn(sub, doc.createNode({}));
+    }
+  };
+  const setDefault = (path, value) => {
+    ensureMap(path.slice(0, -1));
+    if (doc.getIn(path) === undefined) doc.setIn(path, value);
+  };
+  const setValue = (path, value) => {
+    ensureMap(path.slice(0, -1));
+    doc.setIn(path, value);
+  };
+  const ensureListItems = (path, names) => {
+    ensureMap(path.slice(0, -1));
+    if (!isSeq(doc.getIn(path, true))) doc.setIn(path, doc.createNode([]));
+    const seq = doc.getIn(path, true);
+    const present = seq.items.map((item) => String(item?.value ?? item));
+    for (const name of names) if (!present.includes(name)) seq.add(name);
+  };
 
-  const enabled = ensureObject(config, 'plugins');
-  if (!Array.isArray(enabled.enabled)) enabled.enabled = [];
-  for (const name of [PLATFORM_KEY, TOOLS_KEY]) if (!enabled.enabled.includes(name)) enabled.enabled.push(name);
-  if (Array.isArray(enabled.disabled)) {
-    enabled.disabled = enabled.disabled.filter((name) => name !== PLATFORM_KEY && name !== TOOLS_KEY);
+  ensureListItems(['known_plugin_toolsets', 'zalo'], ['zalo_owner', 'zalo_public']);
+  setDefault(['group_sessions_per_user'], false);
+
+  ensureListItems(['plugins', 'enabled'], [PLATFORM_KEY, TOOLS_KEY]);
+  const disabled = doc.getIn(['plugins', 'disabled'], true);
+  if (isSeq(disabled)) {
+    disabled.items = disabled.items.filter((item) => ![PLATFORM_KEY, TOOLS_KEY].includes(String(item?.value ?? item)));
   }
 
-  const zaloPlatform = ensureObject(ensureObject(config, 'platforms'), 'zalo');
-  setDefault(zaloPlatform, 'enabled', true);
-  const extra = ensureObject(zaloPlatform, 'extra');
-  setDefault(extra, 'bridge_url', 'ws://127.0.0.1:3873');
-  setDefault(extra, 'reply_only_tagged', true);
-  if (bridgeToken) extra.bridge_token = bridgeToken;
+  setDefault(['platforms', 'zalo', 'enabled'], true);
+  setDefault(['platforms', 'zalo', 'extra', 'bridge_url'], 'ws://127.0.0.1:3873');
+  setDefault(['platforms', 'zalo', 'extra', 'reply_only_tagged'], true);
+  if (bridgeToken) setValue(['platforms', 'zalo', 'extra', 'bridge_token'], bridgeToken);
 
   if (styleGuide) {
-    const hints = ensureObject(ensureObject(config, 'platform_hints'), 'zalo');
     // Không đè: khách có thể đã tự viết giọng điệu riêng, chỉ ghi khi trống.
-    const existingAppend = typeof hints.append === 'string' ? hints.append.trim() : '';
-    if (existingAppend === '') hints.append = styleGuide;
+    const existingAppend = doc.getIn(['platform_hints', 'zalo', 'append']);
+    if (typeof existingAppend !== 'string' || existingAppend.trim() === '') {
+      setValue(['platform_hints', 'zalo', 'append'], styleGuide);
+    }
   }
 
-  const display = ensureObject(ensureObject(ensureObject(config, 'display'), 'platforms'), 'zalo');
-  setDefault(display, 'tool_progress', 'off');
-  setDefault(display, 'long_running_notifications', false);
-  setDefault(display, 'busy_ack_detail', false);
-  setDefault(display, 'show_reasoning', false);
-  setDefault(display, 'streaming', false);
-  setDefault(display, 'interim_assistant_messages', false);
+  const display = ['display', 'platforms', 'zalo'];
+  setDefault([...display, 'tool_progress'], 'off');
+  setDefault([...display, 'long_running_notifications'], false);
+  setDefault([...display, 'busy_ack_detail'], false);
+  setDefault([...display, 'show_reasoning'], false);
+  setDefault([...display, 'streaming'], false);
+  setDefault([...display, 'interim_assistant_messages'], false);
 
   if (vieneu) {
-    const tts = ensureObject(config, 'tts');
-    tts.provider = VIENEU_PROVIDER;
-    setDefault(tts, 'speed', 1.0);
-    const provider = ensureObject(ensureObject(tts, 'providers'), VIENEU_PROVIDER);
-    provider.type = 'command';
-    provider.command = `${quoteCommandPath(vieneu.pythonPath)} ${quoteCommandPath(vieneu.scriptPath)} --input {input_path} --output {output_path} --voice {voice} --speed {speed}`;
-    provider.output_format = 'wav';
-    provider.voice = 'Minh Quân';
-    provider.speed = 1.0;
-    provider.timeout = 180;
-    provider.voice_compatible = true;
+    setValue(['tts', 'provider'], VIENEU_PROVIDER);
+    setDefault(['tts', 'speed'], 1.0);
+    const provider = ['tts', 'providers', VIENEU_PROVIDER];
+    setValue([...provider, 'type'], 'command');
+    setValue([...provider, 'command'], `${quoteCommandPath(vieneu.pythonPath)} ${quoteCommandPath(vieneu.scriptPath)} --input {input_path} --output {output_path} --voice {voice} --speed {speed}`);
+    setValue([...provider, 'output_format'], 'wav');
+    setValue([...provider, 'voice'], 'Minh Quân');
+    setValue([...provider, 'speed'], 1.0);
+    setValue([...provider, 'timeout'], 180);
+    setValue([...provider, 'voice_compatible'], true);
   }
 
-  return stringify(config, { lineWidth: 0 });
+  return doc.toString({ lineWidth: 0 });
 }
 
 function quoteCommandPath(path) {
@@ -216,6 +227,15 @@ function appendEnvValue(envPath, key, value) {
   writeFileSync(envPath, `${current}${current.endsWith('\n') || !current ? '' : '\n'}${key}=${value}\n`, 'utf8');
 }
 
+/** Như appendEnvValue nhưng thay giá trị cũ nếu khác — dùng cho khoá do trình cài quản lý. */
+function setEnvValue(envPath, key, value) {
+  const current = readFileSync(envPath, 'utf8');
+  const pattern = new RegExp(`^${key}=.*$`, 'm');
+  if (!pattern.test(current)) return appendEnvValue(envPath, key, value);
+  const next = current.replace(pattern, `${key}=${value}`);
+  if (next !== current) writeFileSync(envPath, next, 'utf8');
+}
+
 function ensureSidecarEnv(sidecarRoot, hermesHome) {
   const envPath = join(sidecarRoot, '.env');
   if (!existsSync(envPath)) {
@@ -227,7 +247,9 @@ function ensureSidecarEnv(sidecarRoot, hermesHome) {
     token = randomBytes(32).toString('hex');
     appendEnvValue(envPath, 'ZALO_BRIDGE_TOKEN', token);
   }
-  appendEnvValue(envPath, 'HERMES_HOME', resolve(hermesHome).replaceAll('\\', '/'));
+  // Thay chứ không chỉ thêm: lần cài trước dò nhầm nhà Hermes thì chạy lại với
+  // --hermes-home đúng phải sửa được, không thì sidecar nạp nhầm .env mãi.
+  setEnvValue(envPath, 'HERMES_HOME', resolve(hermesHome).replaceAll('\\', '/'));
   return token;
 }
 
@@ -430,7 +452,16 @@ export async function installHermes({
   const vieneu = vieneuTts ? ensureVieneu(root, layout, { skipPython, commandProbe }) : null;
   const styleGuide = readStyleGuide(root);
   const currentConfig = existsSync(layout.configPath) ? readFileSync(layout.configPath, 'utf8') : '';
-  atomicWriteText(layout.configPath, mergeHermesConfig(currentConfig, { bridgeToken: token, vieneu, styleGuide }));
+  const nextConfig = mergeHermesConfig(currentConfig, { bridgeToken: token, vieneu, styleGuide });
+  if (nextConfig !== currentConfig) {
+    // Giữ bản cũ cạnh bản mới: config.yaml là của khách, lỡ trình cài ghi sai
+    // thì vẫn còn đường khôi phục.
+    if (currentConfig) {
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
+      writeFileSync(`${layout.configPath}.bak-${stamp}`, currentConfig, 'utf8');
+    }
+    atomicWriteText(layout.configPath, nextConfig);
+  }
   ensureWebsockets(layout.repoRoot, layout.home, { skipPython });
   const diagnosis = doctorHermes({
     sidecarRoot: root,

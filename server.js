@@ -37,15 +37,26 @@ const retentionTimer = setInterval(() => {
 retentionTimer.unref?.();
 const app = express();
 const server = createServer(app);
+// Chặn DNS rebinding: trang web lạ trỏ tên miền của nó về 127.0.0.1 thì trình
+// duyệt coi là cùng origin, tự đặt được mọi header — chỉ Host còn lộ ra tên
+// miền thật. Không chặn thì trang đó đăng xuất được bot và lấy được ảnh QR.
+function isLocalHost(host) {
+  return [`127.0.0.1:${PORT}`, `localhost:${PORT}`].includes(String(host || '').toLowerCase());
+}
+
 const wss = new WebSocketServer({
   server,
   verifyClient(info, done) {
+    if (!isLocalHost(info.req.headers.host)) return done(false, 403, 'Host not allowed');
     if (!info.origin) return done(true);
     const expected = `http://${info.req.headers.host}`;
     return done(info.origin === expected, info.origin === expected ? 101 : 403, 'Origin not allowed');
   },
 });
 
+app.use((req, res, next) => (
+  isLocalHost(req.headers.host) ? next() : res.status(403).json({ ok: false, error: 'Host không hợp lệ' })
+));
 app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
 app.use('/api', (req, res, next) => {

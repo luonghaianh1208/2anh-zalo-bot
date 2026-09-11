@@ -34,10 +34,16 @@ import { authorizeBridgeCommand } from './zalo-policy.js';
  * cho Hermes để tránh trả lời hai lần.
  */
 
-// Đọc từ môi trường chứ không cứng 3873: `.env.example` vẫn ghi biến này là
-// đổi được, nhưng trước đây server.js gọi startHermesBridge() không truyền
-// port nên biến đó không có tác dụng — ai đổi sẽ ngồi tự hỏi vì sao không ăn.
-const DEFAULT_PORT = Number(process.env.ZALO_BRIDGE_PORT) || 3873;
+// Đọc từ môi trường lúc khởi động bridge, không phải lúc nạp module: import
+// ESM chạy trước khi server.js kịp nạp .env, đọc sớm thì luôn ra 3873 — ai
+// đổi cổng sẽ ngồi tự hỏi vì sao không ăn.
+function defaultBridgePort() {
+  return Number(process.env.ZALO_BRIDGE_PORT) || 3873;
+}
+
+// Nhóm Zalo có thể tới hàng nghìn người; tra hồ sơ chừng này là đủ để trả lời
+// "nhóm có ai" mà không làm một lệnh đọc kéo dài.
+const GROUP_MEMBERS_LIMIT = 200;
 
 /**
  * Các API zca-js mà Hermes được phép gọi qua lệnh `invoke`.
@@ -101,6 +107,7 @@ let historyListenerCallback = null;
 let historyListenerConnectedCallback = null;
 let historyListenerDisconnectedCallback = null;
 let historyListenerReady = true;
+let activeHomeChannel = '';
 const historyListenerReadyWaiters = new Set();
 
 function defaultStore() {
@@ -301,9 +308,10 @@ export function isHermesAttached() {
 }
 
 export function startHermesBridge({
-  api, profile, port = DEFAULT_PORT, store = null, maxBackfillPages: pageLimit = null,
+  api, profile, port = defaultBridgePort(), store = null, maxBackfillPages: pageLimit = null,
   ownerUids = null, health = null, staleCheckIntervalMs = 15_000,
   bridgeToken = process.env.ZALO_BRIDGE_TOKEN,
+  homeChannel = process.env.ZALO_HOME_CHANNEL,
 }) {
   if (!bridgeToken) throw new Error('Thiếu ZALO_BRIDGE_TOKEN; hãy chạy npm run install:hermes');
   zaloApi = api;
@@ -314,6 +322,7 @@ export function startHermesBridge({
   activeOwnerUids = new Set(ownerUids || String(process.env.ZALO_ALLOWED_USERS || '')
     .split(',').map((value) => value.trim()).filter(Boolean));
   activeHealth = health;
+  activeHomeChannel = String(homeChannel || '').trim();
   maxBackfillPages = Math.max(1, Number(pageLimit) || Number(process.env.ZALO_BACKFILL_MAX_PAGES) || 10);
   limiter = new RateLimiter({
     capacity: Number(process.env.ZALO_RATE_BURST || 5),
@@ -626,7 +635,7 @@ function auditTargetSummary(cmd) {
   const targetIndexes = {
     sendMessage: 1, sendVoice: 1, sendSticker: 1, sendLink: 1,
     uploadAttachment: 1, createReminder: 1, removeReminder: 1,
-    getGroupMembersInfo: 0, changeGroupName: 1, addUserToGroup: 1,
+    changeGroupName: 1, addUserToGroup: 1,
     removeUserFromGroup: 1, addGroupDeputy: 1, removeGroupDeputy: 1,
   };
   const invokeIndex = targetIndexes[String(cmd.method || '')];
@@ -652,7 +661,7 @@ async function handleCommand(ws, cmd) {
     return send(ws, { type: 'pong', ts: Date.now() });
   }
 
-  const authorization = authorizeBridgeCommand(cmd, { ownerUids: activeOwnerUids });
+  const authorization = authorizeBridgeCommand(cmd, { ownerUids: activeOwnerUids, homeChannel: activeHomeChannel });
   const shouldAudit = ['send', 'admin', 'undo'].includes(authorization.category);
   const auditRequestId = String(cmd.reqId || `bridge-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   let auditFinished = false;
@@ -805,6 +814,26 @@ async function handleCommand(ws, cmd) {
       }
       if (cmd.reqId) {
         send(ws, { type: 'ack', reqId: cmd.reqId, ok: true, result: { count: messages.length, messages, backfill } });
+      }
+      break;
+    }
+
+    case 'group_members': {
+      // getGroupMembersInfo nhận ID thành viên, không nhận ID nhóm — hỏi
+      // getGroupInfo lấy danh sách ID trước (dạng "uid_0").
+      const groupId = String(cmd.threadId);
+      const info = await zaloApi.getGroupInfo([groupId]);
+      const memberIds = (info?.gridInfoMap?.[groupId]?.memVerList || [])
+        .map((entry) => String(entry).replace(/_\d+$/, ''))
+        .filter(Boolean);
+      const lookup = memberIds.slice(0, GROUP_MEMBERS_LIMIT);
+      const profiles = lookup.length ? (await zaloApi.getGroupMembersInfo(lookup))?.profiles || {} : {};
+      const members = lookup.map((id) => ({
+        id,
+        displayName: profiles[id]?.displayName || profiles[id]?.zaloName || '',
+      }));
+      if (cmd.reqId) {
+        send(ws, { type: 'ack', reqId: cmd.reqId, ok: true, result: { total: memberIds.length, members } });
       }
       break;
     }

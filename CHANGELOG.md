@@ -4,7 +4,54 @@ Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
 ## [1.1.1] — 2026-09-11
 
+### Bảo mật
+
+- **Người ngoài mượn được quyền chủ nhân khi tin phải xếp hàng.** Danh tính
+  người gửi nằm trong một ContextVar chỉ gán lúc tin tới; Hermes chạy tin xếp
+  hàng trong task tạo ra từ lượt trước nên thừa hưởng danh tính người gửi
+  trước. Thành viên tag bot đúng lúc chủ nhân đang giao việc là chạy công cụ
+  bằng quyền chủ (vd. gửi `data/session.json` lên nhóm). Nay adapter nhớ danh
+  tính theo mã tin và gắn lại mỗi lượt trong `toolsets_for_source`; lượt của
+  chủ mà có người ngoài nhắn chen vào trước khi chạy (Hermes có thể gộp chữ
+  của họ vào chung) thì chạy với quyền công khai. Sidecar chỉ coi là chủ khi
+  UID nằm trong allowlist **và** adapter xác nhận `actorRole: owner`.
+- **Dashboard 3872 bị DNS rebinding.** Trang web lạ trỏ tên miền về
+  `127.0.0.1` là đăng xuất được bot và lấy được ảnh QR. Nay mọi yêu cầu HTTP
+  và WebSocket có `Host` khác `127.0.0.1`/`localhost` đều bị từ chối.
+- **`zalo_send_voice` cho người ngoài truyền URL tuỳ ý** → sidecar gửi yêu cầu
+  tới địa chỉ nội bộ (dò mạng LAN). Nay người ngoài chỉ dùng được địa chỉ web
+  công cộng.
+
 ### Sửa
+
+- **Xác nhận hai bước không bao giờ khớp trong nhóm**: chữ đem đối chiếu còn
+  dính `@tên bot`. Nay bỏ phần tag và gộp khoảng trắng trước khi so.
+- **Cron, kênh nhà và thông báo của gateway bị bridge chặn** ("Thiếu ngữ cảnh
+  phân quyền") vì ngoài lượt chat không có người gửi. Nay adapter gửi vai trò
+  `system`, sidecar chỉ cho vai trò này gửi chữ/báo đang gõ tới chủ nhân hoặc
+  `ZALO_HOME_CHANNEL`. UID chủ nhân 19 chữ số không còn bị đoán nhầm là nhóm.
+- **`zalo_group_members` luôn ra rỗng**: gọi `getGroupMembersInfo` bằng ID nhóm
+  trong khi hàm này nhận ID thành viên. Nay sidecar có lệnh `group_members`
+  hỏi `getGroupInfo` trước rồi mới tra hồ sơ (tối đa 200 người).
+- **Đổi cổng bridge theo README không ăn**: `ZALO_BRIDGE_PORT` bị đọc lúc nạp
+  module, trước khi `.env` được nạp; adapter lại ưu tiên `extra.bridge_url`
+  hơn `ZALO_BRIDGE_URL`. Nay cả hai đọc đúng thứ tự.
+- **`install:hermes` xoá comment và làm tròn số lớn trong `config.yaml`** (ID
+  19 chữ số thành số khác), không giữ bản sao lưu. Nay sửa ngay trên Document
+  YAML, giữ nguyên comment và từng chữ số, và lưu `config.yaml.bak-<giờ>`.
+- **Cài lại với `--hermes-home` khác không sửa `HERMES_HOME`** trong `.env`
+  của sidecar. Nay giá trị được cập nhật.
+- **Hermes đã cắm thì người lạ nhắn `/sethome` không nhận được gì.** Nay adapter
+  trả UID của chính người nhắn (không cấp quyền). Tin trả lời UID tách chữ
+  "tuỳ chọn" ra dòng riêng để chép vào `.env` không dính chữ thừa.
+- **`npm test` báo đỏ trên bản clone mới** khi Python hệ thống không có lõi
+  Hermes. Nay suite adapter được bỏ qua kèm cảnh báo.
+- Tài liệu: các bước `/sethome` đúng thực tế, `doctor` kiểm 9 mục, tên biến
+  `ZALO_DM_POLICY`/`ZALO_GROUP_REPLY_ONLY_TAGGED`, `data/` có `zalo.sqlite`,
+  giao thức bridge đủ lệnh, gỡ cài đặt để lại khoá nào trong `config.yaml`,
+  gợi ý định dạng gửi mô hình bỏ "4000 ký tự" và "tiêu đề đỏ" đã lỗi thời;
+  dashboard và mô tả công cụ không còn ghi cứng tên "Lăng Tiêu" hay nói bot
+  "vẫn trả lời ở mức trò chuyện" khi Hermes chưa cắm.
 
 - **Bot "điếc" mà vẫn báo khoẻ.** Listener zca-js được bật không kèm
   `retryOnClose` và không ai nghe sự kiện `closed`: kết nối nghe tin tới Zalo

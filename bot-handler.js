@@ -191,7 +191,11 @@ async function handleIncomingMessage(api, msg) {
           'Lệnh này chỉ tiết lộ UID và chưa cấp quyền chủ cho bạn.',
           'Thêm vào .env của Hermes:',
           `ZALO_ALLOWED_USERS=${senderUid}`,
-          `ZALO_HOME_CHANNEL=${senderUid}  (tuỳ chọn)`,
+          '',
+          // Để chữ "tuỳ chọn" ra dòng riêng: khách chép nguyên dòng giá trị
+          // thì không dính chữ thừa vào .env.
+          'Tuỳ chọn — nhận báo cáo định kỳ qua tin riêng:',
+          `ZALO_HOME_CHANNEL=${senderUid}`,
           '',
           'Sau đó khởi động lại sidecar, rồi start/restart Hermes gateway.',
         ].join('\n'),
