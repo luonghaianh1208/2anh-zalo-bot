@@ -244,6 +244,11 @@ def _cron_turn(kw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "cron_job_id": job_id,
         }
 
+    if "zalo_scope" in origin or "zalo_creator_uid" in origin:
+        # Mang dấu vết cron nhóm mà không hợp lệ (sai giá trị, thiếu dấu) thì
+        # không gắn gì — tuyệt đối không rơi xuống thành cron của chủ nhân.
+        return None
+
     owners = _allowed_owner_uids()
     if not owners:
         return None

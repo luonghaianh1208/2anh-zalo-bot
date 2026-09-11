@@ -1332,6 +1332,20 @@ class ZaloCronTurnTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen["auth"]["sourceThreadId"], self.GROUP)
         self.assertEqual(seen["auth"]["cronJobId"], "group-job")
 
+    async def test_corrupted_group_marker_never_becomes_an_owner_turn(self):
+        jobs = FakeCronJobs([
+            {"id": "scope-typo", "deliver": f"zalo:{self.GROUP}",
+             "origin": {"platform": "zalo", "chat_id": self.GROUP, "zalo_scope": "Group",
+                        "zalo_creator_uid": self.MEMBER}},
+            {"id": "creator-only", "deliver": f"zalo:{self.GROUP}",
+             "origin": {"platform": "zalo", "chat_id": self.GROUP, "zalo_creator_uid": self.MEMBER}},
+        ])
+        for task_id in ("cron:scope-typo:run-1", "cron:creator-only:run-1"):
+            with self.subTest(task_id=task_id):
+                seen = await self.call(task_id, jobs)
+                self.assertEqual(seen["turn"], {})
+                self.assertEqual(seen["auth"]["actorRole"], "system")
+
     async def test_non_cron_task_missing_job_or_non_zalo_job_get_no_turn(self):
         jobs = self.fake_jobs()
         for task_id in ("session-abc", "cron:missing:run-1", "cron:telegram-job:run-1", ""):

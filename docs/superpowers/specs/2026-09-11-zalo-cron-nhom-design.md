@@ -135,6 +135,8 @@ còn lại → không gắn gì (công cụ tự chặn như hiện nay)
 
 - `text: ""` giữ nguyên hàng rào đăng Fanpage: mã duyệt phải nằm trong tin
   người thật gõ, cron không có tin nào.
+- Job mang khoá `zalo_scope` hoặc `zalo_creator_uid` mà không phải cron nhóm
+  hợp lệ → không gắn turn; không bao giờ rơi xuống nhánh chủ nhân.
 - `current_authorization` thêm `cronJobId` khi turn có `cron_job_id`.
 - Cron của chủ nhân gửi `actorRole: "owner"` với UID nằm trong allowlist nên
   sidecar hiện tại chấp nhận, không cần luật mới.
