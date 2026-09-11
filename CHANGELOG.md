@@ -2,6 +2,34 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.4.1] — 2026-09-11
+
+### Bảo mật
+
+- **Thành viên nhóm chạy được `terminal`, `read_file`, `vision_analyze`…**
+  `toolsets_for_source` chỉ đưa `zalo_public` cho người ngoài, nhưng Hermes
+  "đóng băng" danh sách công cụ theo phiên (`restore_agent_tool_prefix`): phiên
+  nhóm do chủ nhân mở trước thì lượt sau của bất kỳ ai cũng được cấp lại bộ công
+  cụ của chủ nhân. Plugin `zalo_tools` nay đăng ký hook `pre_tool_call` chặn tại
+  điểm thực thi: lượt không phải chủ nhân chỉ chạy được công cụ `zalo_public`,
+  công cụ MCP và cầu nối Tool Search (`tool_call` xét theo công cụ bên trong).
+- **Tin người ngoài chen vào lượt đang chạy của chủ nhân.** Chế độ
+  `busy_input_mode` interrupt/steer chèn tin mới vào lượt đang chạy; có người
+  ngoài gọi bot trong cùng hội thoại thì phần còn lại của lượt bị hạ về mức
+  công khai. Lượt tự chạy tiếp không khớp tin nào (vd. sau khi khởi động lại)
+  chỉ giữ công cụ lõi trong hội thoại riêng với chủ nhân.
+- Trình cài đặt đặt `plugins.hook_callback_timeout: 0`. Để timeout mặc định thì
+  Hermes khoá callback dùng chung giữa mọi luồng, các lời gọi công cụ song song
+  bị chặn nhầm "still running" (đo được 286/320 lần); chạy đồng bộ thì 0 lần.
+
+### Sửa
+
+- **Ảnh không tải được vẫn báo "đã đính kèm".** Ảnh JXL của Zalo bị Hermes từ
+  chối cache, nhưng prompt vẫn nói đã đính kèm; model đi lục thư mục cache
+  chung và nhận xét nhầm ảnh của nhóm khác. Nay prompt ghi đúng số ảnh đính kèm
+  và lý do không đọc được (định dạng chưa hỗ trợ, lỗi HTTP, quá thời gian, quá
+  dung lượng), dặn bot báo lại người gửi. Tin chỉ có ảnh lỗi vẫn tới được agent.
+
 ## [1.4.0] — 2026-09-11
 
 ### Sửa

@@ -11,7 +11,8 @@ Plugin ``standalone`` nạp ngay lúc khám phá, nên đặt công cụ ở đ�
 Adapter nền tảng vẫn nằm bên ``platforms/zalo`` và import lại từ đây.
 """
 
-from .tools import define_cron_member_toolset, define_platform_composite, register_tools
+from .tools import (define_cron_member_toolset, define_platform_composite,
+                    guard_member_tool_call, register_tools)
 
 __all__ = ["register"]
 
@@ -19,6 +20,9 @@ __all__ = ["register"]
 def register(ctx) -> None:
     """Điểm vào plugin — Hermes gọi lúc khám phá."""
     register_tools(ctx)
+    # Rào chắn tại điểm thực thi: Hermes cấp lại công cụ đã ghim của phiên nhóm
+    # cho mọi lượt, kể cả lượt của người ngoài. Xem guard_member_tool_call().
+    ctx.register_hook("pre_tool_call", guard_member_tool_call)
     # Phải chạy sau register_tools: định nghĩa dựa trên bộ công cụ lõi và
     # cần dọn bộ nhớ đệm của resolve_toolset sau khi registry đã đổi.
     define_platform_composite()

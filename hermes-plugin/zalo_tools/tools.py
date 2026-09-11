@@ -2566,6 +2566,76 @@ def _owner_only(handler, tool_name: str):
     return guarded
 
 
+_PUBLIC_TOOL_NAMES = frozenset(name for name, _e, _s, _h, toolset in TOOLS if toolset == TOOLSET_PUBLIC)
+# Hai cầu nối chỉ đọc của Tool Search. ``tool_call`` thì xét công cụ thật bên trong.
+_TOOL_SEARCH_READS = frozenset({"tool_search", "tool_describe"})
+
+
+def _outsider_spoke_after(turn: Dict[str, Any]) -> bool:
+    """Có người ngoài gọi bot trong cùng hội thoại sau khi lượt này bắt đầu không.
+
+    Chế độ ``busy_input_mode`` interrupt/steer của Hermes chèn tin mới vào lượt
+    đang chạy, nên lượt của chủ nhân có thể đang xử lý cả lời của người ngoài.
+    """
+    adapter, seq = _ACTIVE_ADAPTER, turn.get("seq")
+    if adapter is None or seq is None:
+        return False
+    return any(
+        other.get("thread_id") == turn.get("thread_id")
+        and not other.get("is_owner")
+        and other.get("seq", 0) > seq
+        for other in list((getattr(adapter, "_turns", None) or {}).values())
+    )
+
+
+def _member_may_call(name: str, args: Any) -> bool:
+    if name in _PUBLIC_TOOL_NAMES or name in _TOOL_SEARCH_READS:
+        return True
+    if name == "tool_call":
+        # Lõi thường đã tháo ra công cụ thật trước khi gọi hook; phòng khi chưa.
+        try:
+            from tools.tool_search import resolve_underlying_call
+
+            underlying, _args, error = resolve_underlying_call(args if isinstance(args, dict) else {})
+        except Exception:
+            return False
+        return bool(underlying) and not error and underlying != "tool_call" and _member_may_call(underlying, {})
+    try:
+        from tools.registry import registry
+
+        return str(registry.get_toolset_for_tool(name) or "").startswith("mcp-")
+    except Exception:
+        return False
+
+
+def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Optional[Dict[str, str]]:
+    """Hook ``pre_tool_call``: lượt không phải của riêng chủ nhân chỉ chạy được công cụ công khai.
+
+    toolsets_for_source chỉ đưa ``zalo_public`` cho người ngoài, nhưng Hermes
+    còn "đóng băng" danh sách công cụ theo phiên (``restore_agent_tool_prefix``):
+    phiên nhóm do chủ nhân mở trước thì lượt sau của bất kỳ ai cũng được cấp lại
+    ``terminal``, ``read_file``, ``vision_analyze``… Chặn tại điểm thực thi thì
+    dù công cụ lọt vào danh sách, người ngoài gọi vẫn không chạy được. Lượt của
+    chủ nhân mà có người ngoài gọi bot chen vào cũng bị hạ về mức công khai.
+
+    Không có lượt Zalo (CLI, nền tảng khác, cron) thì để yên.
+    """
+    turn = _TURN.get()
+    if not turn:
+        return None
+    if (turn.get("is_owner") or turn.get("core_tools")) and not _outsider_spoke_after(turn):
+        return None
+    name = str(tool_name or "")
+    if _member_may_call(name, args):
+        return None
+    logger.warning("[zalo] chặn %s — lượt của %s không phải của riêng chủ nhân", name, turn.get("sender_uid"))
+    return {
+        "action": "block",
+        "message": (f"Công cụ {name} chỉ dùng được trong lượt của riêng chủ nhân; lượt này có tin "
+                    "của người khác nên bị chặn. Trả lời bằng thông tin đã có, đừng tìm cách khác."),
+    }
+
+
 def define_platform_composite() -> None:
     """Định nghĩa tường minh toolset ``hermes-zalo``.
 

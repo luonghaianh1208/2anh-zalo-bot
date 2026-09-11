@@ -212,6 +212,33 @@ _IMAGE_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_UNSUPPORTED_IMAGE_FORMATS = ("jxl", "heic", "heif", "avif", "tiff", "tif")
+
+
+def _image_failure_reason(url: str, exc: BaseException) -> str:
+    """Diễn giải vì sao không tải được ảnh, để bot nói thật với người gửi.
+
+    Không nói rõ thì model tưởng ảnh đã tới, rồi tự lục thư mục cache (chứa ảnh
+    của mọi nhóm) để tìm và nhận xét nhầm ảnh của nhóm khác.
+    """
+    text = str(exc)
+    if "too large" in text:
+        return "ảnh quá dung lượng cho phép"
+    if "non-image" in text:
+        path = urlsplit(url).path.lower()
+        for fmt in _UNSUPPORTED_IMAGE_FORMATS:
+            if f"/{fmt}/" in path or path.endswith(f".{fmt}"):
+                return f"định dạng {fmt.upper()} chưa hỗ trợ đọc"
+        return "dữ liệu tải về không phải ảnh (định dạng lạ hoặc link hỏng)"
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status:
+        return f"link ảnh trả lỗi HTTP {status} (có thể đã hết hạn)"
+    if isinstance(exc, TimeoutError) or "Timeout" in type(exc).__name__:
+        return "tải ảnh quá thời gian chờ"
+    if "unsafe URL" in text:
+        return "link ảnh bị chặn vì không an toàn"
+    return f"không tải được ảnh ({type(exc).__name__})"
+
 THREAD_TYPE_USER = 0
 THREAD_TYPE_GROUP = 1
 
@@ -657,8 +684,11 @@ class ZaloAdapter(BasePlatformAdapter):
 
         context_entries = self._recent_context_for_question(thread_id, recent_entry) if is_group else []
         inbound_urls = self._dedupe_urls([*media_urls, *quote_media_urls, *self._media_urls_from_entries(context_entries)])
-        cached_media, media_types = await self._cache_image_urls(inbound_urls)
-        channel_context = self._build_channel_context(context_entries, inbound_urls) if is_group else None
+        cached_media, media_types, image_failures = await self._cache_image_urls(inbound_urls)
+        channel_context = (
+            self._build_channel_context(context_entries, len(cached_media), image_failures)
+            if is_group else self._image_failure_note(image_failures)
+        )
         reply_to_text = None
         if quote:
             reply_to_text = str(quote.get("text") or "").strip() or None
@@ -668,7 +698,7 @@ class ZaloAdapter(BasePlatformAdapter):
         # Kẹp hồ sơ người quen vào đầu tin. Nhờ đó bot xưng hô đúng và nhớ
         # bối cảnh của họ ngay từ câu đầu, không phải hỏi lại mỗi lần.
         prompt_text = self._strip_mention(text) if text else ""
-        if not prompt_text and cached_media:
+        if not prompt_text and (cached_media or image_failures):
             prompt_text = "[Người dùng gửi ảnh]"
         try:
             from .people import describe_person
@@ -880,19 +910,30 @@ class ZaloAdapter(BasePlatformAdapter):
             urls.extend(item.get("quote_media_urls") or [])
         return urls
 
-    async def _cache_image_urls(self, urls: List[str]) -> tuple[List[str], List[str]]:
+    async def _cache_image_urls(self, urls: List[str]) -> tuple[List[str], List[str], List[str]]:
         cached: List[str] = []
         media_types: List[str] = []
+        failures: List[str] = []
         for url in urls[:4]:
             try:
                 cached.append(await cache_image_from_url(url))
                 media_types.append("image/jpeg")
             except Exception as exc:
                 logger.warning("[zalo] không cache được ảnh %s: %s", url[:80], exc)
-        return cached, media_types
+                failures.append(_image_failure_reason(url, exc))
+        return cached, media_types, failures
 
-    def _build_channel_context(self, entries: List[Dict[str, Any]], urls: List[str]) -> Optional[str]:
-        if not entries and not urls:
+    @staticmethod
+    def _image_failure_note(failures: List[str]) -> Optional[str]:
+        if not failures:
+            return None
+        reasons = "; ".join(dict.fromkeys(failures))
+        return (f"Không đọc được {len(failures)} ảnh: {reasons}. Hãy nói rõ lý do này với người gửi "
+                "và nhờ gửi lại ảnh (dạng JPG hoặc PNG nếu lỗi do định dạng). Đừng tự tìm ảnh ở nơi khác.")
+
+    def _build_channel_context(self, entries: List[Dict[str, Any]], attached: int,
+                               failures: List[str]) -> Optional[str]:
+        if not entries and not attached and not failures:
             return None
         lines = ["[Ngữ cảnh gần nhất trong nhóm Zalo]"]
         for item in entries:
@@ -903,8 +944,11 @@ class ZaloAdapter(BasePlatformAdapter):
                 lines.append(f"- {who}: {msg[:300]}")
             elif media_count:
                 lines.append(f"- {who}: [đã gửi {media_count} ảnh]")
-        if urls:
-            lines.append(f"Ảnh liên quan đã được đính kèm cho Vision ({len(urls)} ảnh).")
+        if attached:
+            lines.append(f"Ảnh liên quan đã được đính kèm cho Vision ({attached} ảnh).")
+        note = self._image_failure_note(failures)
+        if note:
+            lines.append(note)
         return "\n".join(lines)
 
     def _log_permission_selfcheck(self) -> None:
@@ -998,16 +1042,21 @@ class ZaloAdapter(BasePlatformAdapter):
         try:
             turn = self._turns.get(str(getattr(source, "message_id", "") or ""))
             if not turn or str(turn.get("sender_uid") or "") != uid:
+                is_group = str(getattr(source, "chat_type", "") or "") == "group"
+                # Không phải lượt của một tin nhắn (vd. lượt tự chạy tiếp sau khi
+                # gateway khởi động lại). Chỉ hội thoại riêng với chính chủ nhân
+                # mới giữ công cụ lõi — trong nhóm không biết lượt đó chứa lời ai.
+                # Công cụ Zalo của chủ vẫn khoá.
+                owner_core = self._is_owner(uid) and not is_group
                 _zalo_tools().bind_turn({
                     "sender_uid": uid,
                     "thread_id": str(getattr(source, "chat_id", "") or ""),
-                    "is_group": str(getattr(source, "chat_type", "") or "") == "group",
+                    "is_group": is_group,
                     "is_owner": False,
                     "text": "",
+                    "core_tools": owner_core,
                 })
-                # Không phải lượt của một tin nhắn (vd. việc nền của chủ nhân):
-                # giữ bộ công cụ theo UID, còn công cụ Zalo của chủ vẫn khoá.
-                return self._is_owner(uid)
+                return owner_core
             if turn.get("is_owner") and "bound_as_owner" not in turn:
                 # Nhóm dùng chung một phiên: tin của chủ nhân phải chờ lượt thì
                 # Hermes có thể gộp chữ của người nhắn sau vào chung tin đó, rồi

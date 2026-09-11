@@ -109,6 +109,10 @@ export function mergeHermesConfig(text, { bridgeToken, vieneu = null, styleGuide
   setDefault(['group_sessions_per_user'], false);
 
   ensureListItems(['plugins', 'enabled'], [PLATFORM_KEY, TOOLS_KEY]);
+  // Hook pre_tool_call chặn công cụ của người ngoài chạy đồng bộ. Để timeout
+  // mặc định thì Hermes khoá callback dùng chung giữa mọi luồng: các lời gọi
+  // công cụ song song bị chặn nhầm "still running" (đo được 286/320 lần).
+  doc.setIn(['plugins', 'hook_callback_timeout'], 0);
   const disabled = doc.getIn(['plugins', 'disabled'], true);
   if (isSeq(disabled)) {
     disabled.items = disabled.items.filter((item) => ![PLATFORM_KEY, TOOLS_KEY].includes(String(item?.value ?? item)));

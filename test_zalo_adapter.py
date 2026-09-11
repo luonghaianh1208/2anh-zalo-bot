@@ -43,9 +43,13 @@ class CapturingSocket:
 class FakeToolContext:
     def __init__(self):
         self.handlers = {}
+        self.hooks = {}
 
     def register_tool(self, **kwargs):
         self.handlers[kwargs["name"]] = kwargs["handler"]
+
+    def register_hook(self, hook_name, callback):
+        self.hooks.setdefault(hook_name, []).append(callback)
 
 
 class FakeCronJobs:
@@ -238,6 +242,94 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dummy_tools.context["reply_msg_id"], "q1")
         self.assertEqual(dummy_tools.context["reply_cli_msg_id"], "qc1")
         self.assertTrue(dummy_tools.context["reply_is_own"])
+
+    async def test_unreadable_quote_image_names_the_reason_instead_of_claiming_it_was_attached(self):
+        adapter = self.make_adapter()
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+
+        async def fake_cache(url):
+            raise ValueError("Refusing to cache non-image data as .jpg (starts with: '�\\n')")
+
+        with patch.object(zalo_adapter, "cache_image_from_url", side_effect=fake_cache), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message(
+                {
+                    "type": "message",
+                    "id": "m4",
+                    "threadId": "g1",
+                    "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                    "senderUid": "u1",
+                    "senderName": "Liên",
+                    "text": "@Lăng Tiêu nhận xét ảnh này",
+                    "mentions": [{"uid": "bot-uid"}],
+                    "quote": {
+                        "id": "q2", "authorId": "u1", "authorName": "Liên", "text": "",
+                        "mediaUrls": ["https://photo-stal-17.zdn.vn/gr/jxl/88b9/2aOb"],
+                    },
+                }
+            )
+
+        self.assertEqual(len(handled), 1)
+        event = handled[0]
+        self.assertEqual(event.media_urls, [])
+        self.assertNotIn("đã được đính kèm", event.channel_context)
+        self.assertIn("Không đọc được 1 ảnh", event.channel_context)
+        self.assertIn("JXL", event.channel_context)
+        self.assertIn("gửi lại", event.channel_context)
+
+    async def test_owner_dm_with_undownloadable_image_still_reaches_the_agent_with_the_reason(self):
+        adapter = self.make_adapter()
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+
+        async def fake_cache(url):
+            raise ValueError("Inbound image payload is too large (99 bytes > 10 bytes)")
+
+        with patch.object(adapter, "_is_owner", return_value=True), \
+                patch.object(zalo_adapter, "cache_image_from_url", side_effect=fake_cache), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message(
+                {
+                    "type": "message",
+                    "id": "dm-img",
+                    "threadId": "1234567890123456789",
+                    "threadType": zalo_adapter.THREAD_TYPE_USER,
+                    "senderUid": "1234567890123456789",
+                    "senderName": "Lương Hải Anh Cnt",
+                    "text": "",
+                    "msgType": "chat.photo",
+                    "mediaUrls": ["https://example.com/big.jpg"],
+                }
+            )
+
+        self.assertEqual(len(handled), 1)
+        event = handled[0]
+        self.assertEqual(event.media_urls, [])
+        self.assertIn("[Người dùng gửi ảnh]", event.text)
+        self.assertIn("quá dung lượng", event.channel_context)
+
+    def test_image_failure_reason_distinguishes_format_network_and_size(self):
+        reason = zalo_adapter._image_failure_reason
+        non_image = ValueError("Refusing to cache non-image data as .jpg (starts with: 'x')")
+        self.assertIn("JXL", reason("https://photo-stal-17.zdn.vn/gr/jxl/a/b", non_image))
+        self.assertIn("không phải ảnh", reason("https://example.com/a", non_image))
+        self.assertIn("quá dung lượng", reason("https://example.com/a", ValueError("Inbound image payload is too large (9 bytes > 1 bytes)")))
+        self.assertIn("quá thời gian", reason("https://example.com/a", TimeoutError("timed out")))
+
+        import httpx
+        request = httpx.Request("GET", "https://example.com/a")
+        gone = httpx.HTTPStatusError("404", request=request, response=httpx.Response(404, request=request))
+        self.assertIn("HTTP 404", reason("https://example.com/a", gone))
+        self.assertIn("quá thời gian", reason("https://example.com/a", httpx.ReadTimeout("slow", request=request)))
 
     async def test_inbound_dm_id_is_reused_as_dm_for_outbound_reply(self):
         adapter = self.make_adapter()
@@ -1685,6 +1777,129 @@ class ZaloGroupCronTest(unittest.IsolatedAsyncioTestCase):
         wrong_group = jobs()
         self.assertFalse((await self.run_tool({"action": "remove", "job_id": "elsewhere"}, wrong_group, self.member_turn()))["success"])
         self.assertEqual(wrong_group.removed, [])
+
+
+class ZaloMemberToolGuardTest(unittest.TestCase):
+    """Hermes ghim bộ công cụ của phiên nhóm theo lượt đầu (thường là chủ nhân)
+    rồi cấp lại cho mọi lượt sau, bất kể toolsets_for_source trả gì. Hook
+    pre_tool_call là rào chắn tại điểm thực thi."""
+
+    MEMBER = "3900000000000000001"
+    GROUP = "9133000000000000001"
+
+    def setUp(self):
+        self.turn_token = zalo_tools._TURN.set(None)
+
+    def tearDown(self):
+        zalo_tools._TURN.reset(self.turn_token)
+
+    def guard(self, tool_name):
+        return zalo_tools.guard_member_tool_call(
+            tool_name=tool_name, args={}, task_id="t", session_id="s", tool_call_id="c",
+        )
+
+    def bind_member(self):
+        zalo_tools.bind_turn({"sender_uid": self.MEMBER, "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": False, "text": ""})
+
+    def test_member_turn_cannot_run_pinned_core_tools(self):
+        self.bind_member()
+        for name in ("terminal", "search_files", "read_file", "write_file",
+                     "vision_analyze", "execute_code", "delegate_task"):
+            verdict = self.guard(name)
+            self.assertEqual(verdict["action"], "block", name)
+            self.assertIn(name, verdict["message"])
+
+    def test_member_turn_keeps_public_zalo_mcp_and_tool_search_bridge(self):
+        self.bind_member()
+        public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
+        owner_only = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_OWNER)
+        self.assertIsNone(self.guard(public))
+        self.assertIsNone(self.guard("tool_search"))
+        self.assertEqual(self.guard(owner_only)["action"], "block")
+
+        from tools.registry import registry
+        with patch.object(registry, "get_toolset_for_tool", return_value="mcp-rag"):
+            self.assertIsNone(self.guard("rag_search"))
+
+    def test_owner_turn_and_non_zalo_contexts_are_untouched(self):
+        self.assertIsNone(self.guard("terminal"))
+        zalo_tools.bind_turn(None)
+        self.assertIsNone(self.guard("terminal"))
+        zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": True, "text": ""})
+        self.assertIsNone(self.guard("terminal"))
+
+    def test_plugin_entry_registers_the_guard_as_pre_tool_call_hook(self):
+        import plugins.zalo_tools as plugin
+
+        ctx = FakeToolContext()
+        with patch.object(plugin, "define_platform_composite"), \
+                patch.object(plugin, "define_cron_member_toolset"):
+            plugin.register(ctx)
+        self.assertEqual(ctx.hooks.get("pre_tool_call"), [zalo_tools.guard_member_tool_call])
+
+    def test_owner_turn_loses_core_tools_once_an_outsider_tags_the_bot_in_the_same_thread(self):
+        class FakeAdapter:
+            pass
+
+        adapter = FakeAdapter()
+        adapter._turns = {
+            "m1": {"thread_id": self.GROUP, "is_owner": True, "seq": 5},
+            "m2": {"thread_id": "another-group", "is_owner": False, "seq": 6},
+        }
+        public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
+        with patch.object(zalo_tools, "_ACTIVE_ADAPTER", adapter):
+            zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                                  "is_group": True, "is_owner": True, "text": "", "seq": 5})
+            self.assertIsNone(self.guard("terminal"))
+
+            # busy_input_mode interrupt/steer chèn tin này vào lượt đang chạy.
+            adapter._turns["m3"] = {"thread_id": self.GROUP, "is_owner": False, "seq": 7}
+            self.assertEqual(self.guard("terminal")["action"], "block")
+            self.assertIsNone(self.guard(public))
+
+    def test_member_tool_call_bridge_is_judged_by_the_wrapped_tool(self):
+        self.bind_member()
+        verdict = zalo_tools.guard_member_tool_call(
+            tool_name="tool_call", args={"name": "terminal", "arguments": {"command": "cat .env"}},
+        )
+        self.assertEqual(verdict["action"], "block")
+
+        public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
+        with patch("tools.tool_search.resolve_underlying_call", return_value=(public, {}, None)):
+            self.assertIsNone(zalo_tools.guard_member_tool_call(tool_name="tool_call", args={"name": public}))
+
+    def test_owner_turn_without_a_matching_message_keeps_core_tools_only_in_a_dm(self):
+        adapter = ZaloAdapterMediaContextTest.make_adapter(self)
+        bound = []
+
+        class CapturingTools:
+            def bind_turn(self, turn):
+                bound.append(turn)
+
+        class Source:
+            def __init__(self, chat_type):
+                self.user_id = "9200000000000000001"
+                self.chat_id = "chat-1"
+                self.chat_type = chat_type
+                self.message_id = "not-a-received-message"
+
+        with patch.object(zalo_adapter, "_zalo_tools", return_value=CapturingTools()), \
+                patch.object(adapter, "_is_owner", return_value=True):
+            dm = adapter.toolsets_for_source(Source("dm"))
+            group = adapter.toolsets_for_source(Source("group"))
+
+        self.assertIn(zalo_tools.TOOLSET_OWNER, dm)
+        self.assertFalse(bound[0]["is_owner"])
+        self.assertTrue(bound[0]["core_tools"])
+        self.assertEqual(group, [zalo_tools.TOOLSET_PUBLIC])
+        self.assertFalse(bound[1]["core_tools"])
+
+        zalo_tools.bind_turn(bound[0])
+        self.assertIsNone(self.guard("terminal"))
+        zalo_tools.bind_turn(bound[1])
+        self.assertEqual(self.guard("terminal")["action"], "block")
 
 
 if __name__ == "__main__":
