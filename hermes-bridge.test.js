@@ -203,6 +203,97 @@ test('bridge dừng gửi các chunk còn lại khi rate limiter từ chối', a
   }
 });
 
+async function openBridge(t, api) {
+  const server = startHermesBridge({ api, profile: null, port: 0, store: testStore(t) });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+  await new Promise((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+  await hello;
+  return ws;
+}
+
+async function sendText(ws, reqId, text) {
+  ws.send(JSON.stringify({ type: 'send', reqId, threadId: 't1', threadType: 0, text, auth: auth('t1', 0) }));
+  return onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === reqId);
+}
+
+// Zalo từ chối từ phía máy chủ thì zca-js ném ZaloApiError kèm mã số.
+function zaloRejection(message = 'Lỗi không xác định') {
+  return Object.assign(new Error(message), { code: 114 });
+}
+
+test('Zalo từ chối tin có định dạng thì gửi lại đúng chunk đó dạng chữ thường', async (t) => {
+  const sent = [];
+  const api = {
+    sendMessage(content) {
+      sent.push(content);
+      if (content.styles) return Promise.reject(zaloRejection());
+      return Promise.resolve({ message: { msgId: `m${sent.length}` } });
+    },
+  };
+  const ws = await openBridge(t, api);
+
+  try {
+    const ack = await sendText(ws, 's1', '**Chào** cả nhà');
+
+    assert.equal(ack.ok, true);
+    assert.equal(ack.msgId, 'm2');
+    assert.equal(sent.length, 2);
+    assert.ok(sent[0].styles.length > 0);
+    assert.equal(sent[1].styles, undefined);
+    assert.equal(sent[1].msg, sent[0].msg);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
+test('lỗi mạng khi gửi thì không tự gửi lại để tránh trùng tin', async (t) => {
+  const sent = [];
+  const api = {
+    sendMessage(content) {
+      sent.push(content);
+      return Promise.reject(new Error('fetch failed'));
+    },
+  };
+  const ws = await openBridge(t, api);
+
+  try {
+    const ack = await sendText(ws, 's2', '**Chào** cả nhà');
+
+    assert.equal(ack.ok, false);
+    assert.equal(sent.length, 1);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
+test('gửi lại dạng chữ thường vẫn bị từ chối thì báo thất bại', async (t) => {
+  const sent = [];
+  const api = {
+    sendMessage(content) {
+      sent.push(content);
+      return Promise.reject(zaloRejection('Nhóm này không tồn tại'));
+    },
+  };
+  const ws = await openBridge(t, api);
+
+  try {
+    const ack = await sendText(ws, 's3', '**Chào** cả nhà');
+
+    assert.equal(ack.ok, false);
+    assert.equal(sent.length, 2);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 test('history chỉ trả đúng hội thoại và giới hạn count', async (t) => {
   const listener = new EventEmitter();
   listener.requestOldMessages = () => {};

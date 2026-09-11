@@ -63,6 +63,16 @@ const ALIASES = [
  */
 const MAX_STYLES = 40;
 const MAX_CHARS = 2000;
+// Zalo còn chặn theo khối lượng gói tin, không chỉ số ký tự hay số style. Đối
+// chiếu 223 lần gửi thật: mọi tin bị từ chối bằng "Lỗi không xác định" đều có
+// byte UTF-8 của chữ + độ dài JSON style từ 3448 trở lên, mọi tin lọt đều không
+// quá 3437. Chữ có dấu tốn 2–3 byte, emoji 4 byte, nên một tin chưa tới 2000 ký
+// tự vẫn vượt được. Để 3000 chừa khoảng an toàn dưới ngưỡng đo được.
+const MAX_PAYLOAD_BYTES = 3000;
+
+function payloadBytes(formatted) {
+  return Buffer.byteLength(formatted.msg, 'utf8') + JSON.stringify(formatted.styles).length;
+}
 
 export function formatZaloMarkdown(input) {
   if (!input) return { msg: '', styles: [] };
@@ -184,7 +194,9 @@ export function formatAndChunkZaloMarkdown(input) {
 }
 
 function exceedsZaloBudget(formatted) {
-  return formatted.msg.length > MAX_CHARS || formatted.styles.length > MAX_STYLES;
+  return formatted.msg.length > MAX_CHARS
+    || formatted.styles.length > MAX_STYLES
+    || payloadBytes(formatted) > MAX_PAYLOAD_BYTES;
 }
 
 function chunkFormattedMessage(formatted) {
@@ -209,7 +221,21 @@ function findChunkEnd(formatted, start) {
     end = Math.max(start + 1, Math.min(end, start + MAX_CHARS));
   }
 
+  // Thu nhỏ tiếp tới khi cả chữ lẫn style lọt ngân sách byte, vẫn ưu tiên cắt ở
+  // chỗ đọc được. Mỗi vòng `end` giảm hẳn nên vòng lặp luôn dừng.
+  let bytes = payloadBytes(sliceFormattedMessage(formatted, start, end));
+  while (bytes > MAX_PAYLOAD_BYTES && end > start + 1) {
+    const target = start + Math.floor((end - start) * MAX_PAYLOAD_BYTES / bytes);
+    end = preferReadableBoundary(formatted.msg, start, Math.max(start + 1, Math.min(target, end - 1)));
+    if (end > start + 1 && isHighSurrogate(formatted.msg.charCodeAt(end - 1))) end -= 1;
+    bytes = payloadBytes(sliceFormattedMessage(formatted, start, end));
+  }
+
   return end;
+}
+
+function isHighSurrogate(code) {
+  return code >= 0xd800 && code <= 0xdbff;
 }
 
 function preferReadableBoundary(msg, start, end) {
@@ -279,8 +305,8 @@ function renderInline(line, base) {
       const start = out.length;
       out += inner.text;
       styles.push(...inner.styles);
-      // Chỉ màu, không kèm đậm: chồng hai style lên cùng một đoạn tốn 69 ký
-      // tự trong ngân sách 256, mà màu một mình đã đủ nổi.
+      // Chỉ màu, không kèm đậm: chồng hai style lên cùng một đoạn tốn gấp đôi
+      // ngân sách gói tin, mà màu một mình đã đủ nổi.
       push(start, inner.text.length, COLORS[color.name]);
       i += color.consumed;
       continue;

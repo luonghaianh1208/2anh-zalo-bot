@@ -180,6 +180,11 @@ DEFAULT_BRIDGE_URL = "ws://127.0.0.1:3873"
 # tính sát ngưỡng.
 ZALO_HARD_LIMIT = 3000
 MAX_MESSAGE_LENGTH = 2800
+
+# Lõi Hermes gửi lại bằng chữ thường khi lần gửi đầu thất bại, kèm câu mở đầu
+# tiếng Anh này. Cầu nối đã tự gửi lại chữ thường từ trước, nên câu này chỉ làm
+# lộ thông báo nội bộ vào nhóm Zalo — adapter bỏ nó đi.
+HERMES_PLAIN_FALLBACK_MARKER = "(Response formatting failed, plain text:)"
 RECONNECT_BACKOFF = [2, 5, 10, 30, 60]
 ACK_TIMEOUT_SECONDS = 30
 
@@ -940,6 +945,8 @@ class ZaloAdapter(BasePlatformAdapter):
             if str(metadata.get("chat_type") or "").lower() == "group"
             else self._guess_thread_type(chat_id, metadata)
         )
+        if content and content.startswith(HERMES_PLAIN_FALLBACK_MARKER):
+            content = content[len(HERMES_PLAIN_FALLBACK_MARKER):].lstrip("\n")
 
         last: Optional[Dict[str, Any]] = None
         for chunk in self._chunk(content):

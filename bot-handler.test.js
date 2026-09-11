@@ -20,23 +20,92 @@ class WebSocket extends RawWebSocket {
   }
 }
 
+class FakeListener extends EventEmitter {
+  starts = [];
+  stops = 0;
+  start(options) { this.starts.push(options); }
+  stop() { this.stops += 1; }
+}
+
+function fakeHealth() {
+  const states = [];
+  const errors = [];
+  return {
+    states,
+    errors,
+    setListenerState: (state) => states.push(state),
+    recordError: (code) => errors.push(code),
+  };
+}
+
+const LISTENER_EVENTS = ['message', 'error', 'connected', 'disconnected', 'closed'];
+
 test('listener cleanup detaches handlers and stops exactly once', () => {
-  class Listener extends EventEmitter {
-    starts = 0;
-    stops = 0;
-    start() { this.starts += 1; }
-    stop() { this.stops += 1; }
-  }
-  const listener = new Listener();
+  const listener = new FakeListener();
   const cleanup = setupBotListener({ listener }, { user_id: 'bot' });
-  assert.equal(listener.starts, 1);
-  assert.equal(listener.listenerCount('message'), 1);
-  assert.equal(listener.listenerCount('error'), 1);
+  assert.equal(listener.starts.length, 1);
+  for (const event of LISTENER_EVENTS) assert.equal(listener.listenerCount(event), 1, event);
   cleanup();
   cleanup();
   assert.equal(listener.stops, 1);
-  assert.equal(listener.listenerCount('message'), 0);
-  assert.equal(listener.listenerCount('error'), 0);
+  for (const event of LISTENER_EVENTS) assert.equal(listener.listenerCount(event), 0, event);
+});
+
+test('listener bật retryOnClose và báo trạng thái kết nối cho health', () => {
+  const listener = new FakeListener();
+  const health = fakeHealth();
+  const cleanup = setupBotListener({ listener }, { user_id: 'bot' }, { health });
+
+  assert.deepEqual(listener.starts, [{ retryOnClose: true }]);
+  listener.emit('connected');
+  listener.emit('disconnected', 1006, '');
+  assert.deepEqual(health.states, ['starting', 'connected', 'reconnecting']);
+
+  cleanup();
+  assert.equal(health.states.at(-1), null);
+});
+
+test('listener đóng hẳn thì tự mở lại, kết nối lại được thì nhịp chờ quay về mức đầu', async () => {
+  const listener = new FakeListener();
+  const health = fakeHealth();
+  const cleanup = setupBotListener({ listener }, { user_id: 'bot' }, { health, restartDelaysMs: [5, 60_000] });
+
+  listener.emit('closed', 1006, '');
+  assert.equal(health.states.at(-1), 'closed');
+  assert.deepEqual(health.errors, ['zalo_listener_closed']);
+  await waitFor(() => listener.starts.length === 2, 'lần mở lại thứ nhất');
+
+  listener.emit('connected');
+  listener.emit('closed', 1006, '');
+  await waitFor(() => listener.starts.length === 3, 'lần mở lại sau khi đã kết nối lại');
+  cleanup();
+});
+
+test('đã dọn listener thì lịch mở lại bị huỷ', async () => {
+  const listener = new FakeListener();
+  const cleanup = setupBotListener({ listener }, { user_id: 'bot' }, { restartDelaysMs: [5] });
+
+  listener.emit('closed', 1006, '');
+  cleanup();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(listener.starts.length, 1);
+});
+
+test('start ném lỗi thì hẹn thử lại thay vì bỏ cuộc', async () => {
+  const listener = new FakeListener();
+  let failFirst = true;
+  listener.start = function start(options) {
+    this.starts.push(options);
+    if (failFirst) {
+      failFirst = false;
+      throw new Error('boom');
+    }
+  };
+  const cleanup = setupBotListener({ listener }, { user_id: 'bot' }, { restartDelaysMs: [5] });
+
+  await waitFor(() => listener.starts.length === 2, 'thử lại sau lỗi start');
+  cleanup();
 });
 
 function waitFor(predicate, message = 'condition') {

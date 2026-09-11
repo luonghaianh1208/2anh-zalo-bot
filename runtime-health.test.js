@@ -58,6 +58,22 @@ test('latest error is redacted before reaching the dashboard', () => {
   assert.equal(health.snapshot().lastError.code, 'bridge_failure');
 });
 
+test('Zalo listener không kết nối thì health báo degraded dù vẫn đăng nhập', () => {
+  const health = createRuntimeHealth({
+    store: { getHealth: () => ({ ready: true, messageCount: 0, auditCount: 0, databaseSizeBytes: 0 }) },
+    now: () => 5_000_000,
+  });
+  health.setZaloState('logged-in', { userId: 'bot-1' });
+  health.bridgeConnected('client-1');
+  health.setListenerState('connected');
+  assert.equal(health.snapshot().status, 'healthy');
+  assert.equal(health.snapshot().zalo.listener, 'connected');
+
+  health.setListenerState('closed');
+  assert.equal(health.snapshot().status, 'degraded');
+  assert.equal(health.snapshot().zalo.listener, 'closed');
+});
+
 test('database failure marks health unhealthy without throwing from snapshot', () => {
   const health = createRuntimeHealth({
     store: { getHealth: () => { throw new Error('database closed'); } },

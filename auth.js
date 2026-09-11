@@ -48,6 +48,19 @@ export async function clearSession() {
 }
 
 /**
+ * Chỉ giữ những gì dashboard và cầu nối cần. Hồ sơ này hiện ở /api/status và
+ * gửi sang Hermes, nên không được mang số điện thoại của tài khoản bot theo.
+ */
+export function pickProfile(info) {
+  if (!info) return null;
+  return {
+    user_id: String(info.user_id ?? ''),
+    display_name: info.display_name || '',
+    avatar: info.avatar || '',
+  };
+}
+
+/**
  * Lấy hồ sơ tài khoản đang đăng nhập.
  *
  * zca-js v2.1.2 KHÔNG gán `this.ctx` trên instance Zalo, và class API cũng
@@ -64,7 +77,6 @@ export async function fetchProfile(api) {
       user_id: String(p.userId ?? p.uid ?? ''),
       display_name: p.displayName || p.zaloName || p.username || '',
       avatar: p.avatar || '',
-      phone: p.phoneNumber || '',
     };
   } catch (err) {
     console.warn('[auth] không lấy được hồ sơ:', err.message);
@@ -88,7 +100,8 @@ export async function tryReconnect() {
     });
 
     // Hồ sơ cũ có thể thiếu (phiên bản trước lưu null) — lấy lại từ server.
-    let loginInfo = data.loginInfo;
+    // Phiên lưu từ bản cũ còn kèm số điện thoại, nên lọc lại trước khi dùng.
+    let loginInfo = pickProfile(data.loginInfo);
     if (!loginInfo?.user_id) {
       loginInfo = await fetchProfile(api);
       if (loginInfo) await saveSession(data.credentials, loginInfo);

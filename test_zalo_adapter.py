@@ -217,6 +217,23 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(sent[-1]["threadType"], zalo_adapter.THREAD_TYPE_USER)
 
+    async def test_send_strips_hermes_plain_text_fallback_marker(self):
+        adapter = self.make_adapter()
+        sent = []
+
+        async def fake_command(command, expect_ack=False):
+            sent.append(command)
+            return {"ok": True, "msgId": "reply-1"}
+
+        adapter._command = fake_command
+        result = await adapter.send(
+            "1234567890123456789",
+            "(Response formatting failed, plain text:)\n\nNội dung trả lời",
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(sent[-1]["text"], "Nội dung trả lời")
+
     async def test_send_voice_uploads_local_audio_then_forwards_zalo_cdn_url(self):
         adapter = self.make_adapter()
         calls = []

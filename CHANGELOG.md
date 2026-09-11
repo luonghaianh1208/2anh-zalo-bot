@@ -2,6 +2,36 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.1.1] — 2026-09-11
+
+### Sửa
+
+- **Bot "điếc" mà vẫn báo khoẻ.** Listener zca-js được bật không kèm
+  `retryOnClose` và không ai nghe sự kiện `closed`: kết nối nghe tin tới Zalo
+  đứt là bot vẫn đăng nhập, vẫn gửi được, nhưng không nhận thêm tin nào — cả
+  nhóm lẫn tin riêng — cho tới khi khởi động lại sidecar, trong khi
+  `/api/health` vẫn báo `healthy`. Nay listener tự nối lại, đóng hẳn thì tự mở
+  lại theo nhịp 5 giây → 5 phút; `/api/health` có thêm `zalo.listener` và báo
+  `degraded` khi không nghe được tin; dashboard có ô "Nghe tin Zalo".
+- **Tin dài nhiều emoji và in đậm bị Zalo từ chối trong im lặng.** Zalo chặn
+  gói tin có byte UTF-8 của chữ cộng JSON định dạng vượt khoảng 3440, chỉ trả
+  "Lỗi không xác định"; bộ chia tin cũ chỉ đếm 2000 ký tự và 40 style nên để
+  lọt. Nay mỗi tin còn nằm trong 3000 byte.
+- **Một đoạn bị từ chối là mất luôn phần sau.** Cầu nối nay gửi lại đúng đoạn
+  bị từ chối dạng chữ thường rồi gửi tiếp; lỗi mạng thì không gửi lại để tránh
+  trùng tin. Adapter bỏ câu tiếng Anh `(Response formatting failed, plain
+  text:)` mà lõi Hermes chèn khi tự gửi lại, để câu nội bộ không lọt vào nhóm.
+- **`/api/status` lộ số điện thoại của tài khoản bot.** Hồ sơ lấy từ Zalo và
+  hồ sơ đọc từ phiên cũ nay chỉ giữ UID, tên hiển thị, ảnh đại diện.
+- **README ghi sai giới hạn định dạng "khoảng 256 ký tự JSON"** và nhắc hàm
+  `capStyles` không còn tồn tại; nay mô tả đúng ngân sách byte đo được và cơ
+  chế gửi lại. Dashboard không còn ghi cứng tên "Lăng Tiêu" cho ô kết nối Hermes.
+
+### Thêm
+
+- **Log sidecar ra file** `logs/sidecar.log` kèm giờ địa phương, quá 5 MB tự
+  dời sang `logs/sidecar.log.1` — sidecar chạy ngầm vẫn tra được giờ sự cố.
+
 ## [1.1.0] — 2026-09-10
 
 ### Sửa

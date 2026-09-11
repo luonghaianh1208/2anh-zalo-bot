@@ -5,14 +5,41 @@ import { formatAndChunkZaloMarkdown, formatZaloMarkdown } from './markdown-forma
 
 const MAX_STYLES = 40;
 const MAX_CHARS = 2000;
+const MAX_PAYLOAD_BYTES = 3000;
+
+function payloadBytes(chunk) {
+  return Buffer.byteLength(chunk.msg, 'utf8') + JSON.stringify(chunk.styles).length;
+}
 
 function assertWithinBudget(chunks) {
   assert.ok(chunks.length > 0, 'phải có ít nhất một chunk');
   for (const chunk of chunks) {
     assert.ok(chunk.msg.length <= MAX_CHARS, `chunk dài ${chunk.msg.length} ký tự`);
     assert.ok(chunk.styles.length <= MAX_STYLES, `chunk có ${chunk.styles.length} styles`);
+    assert.ok(payloadBytes(chunk) <= MAX_PAYLOAD_BYTES, `chunk nặng ${payloadBytes(chunk)} byte`);
   }
 }
+
+test('formatAndChunkZaloMarkdown tách tin tiếng Việt nhiều emoji + in đậm theo ngân sách byte', () => {
+  // Tái hiện thông báo thật bị Zalo từ chối bằng "Lỗi không xác định": chưa tới
+  // 2000 ký tự và 40 style, nhưng chữ có dấu + emoji + JSON style vượt 3000 byte.
+  const block = (n) => [
+    `${n}. 📝 **Vòng ${n} - Vòng thi chính thức (01/09 – 15/10/2026):**`,
+    '- **Nội dung:** Thí sinh đăng ký cá nhân hoặc nhóm hai bạn, nộp bài luận ngắn trả lời câu hỏi về tương lai xanh của mình 🌏💚 qua trang web chính thức của Ban Tổ chức.',
+    '',
+  ].join('\n');
+  const input = `# THÔNG TIN CHI TIẾT CÁC VÒNG THI\n\n${Array.from({ length: 8 }, (_, i) => block(i + 1)).join('\n')}`;
+  const whole = formatZaloMarkdown(input.trim());
+  assert.ok(whole.msg.length <= MAX_CHARS && whole.styles.length <= MAX_STYLES, 'dữ liệu test phải lọt giới hạn cũ');
+  assert.ok(payloadBytes(whole) > MAX_PAYLOAD_BYTES, 'dữ liệu test phải vượt ngân sách byte');
+
+  const chunks = formatAndChunkZaloMarkdown(input);
+
+  assert.ok(chunks.length >= 2);
+  assertWithinBudget(chunks);
+  assert.equal(chunks.map((chunk) => chunk.msg).join(''), whole.msg);
+  assert.equal(chunks.reduce((sum, chunk) => sum + chunk.styles.length, 0), whole.styles.length);
+});
 
 test('formatZaloMarkdown giữ đầy đủ styles, không cắt ở 40', () => {
   const input = Array.from({ length: 45 }, (_, i) => `**mục ${i + 1}**`).join('\n');

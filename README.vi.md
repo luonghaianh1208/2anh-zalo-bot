@@ -41,7 +41,7 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 
 5. **Thiết kế để không bị Zalo khoá tài khoản.** Token bucket bắn liền 5 tin đầu, rồi giãn về nhịp bền vững 20 tin/phút, và ưu tiên câu trả lời hội thoại hơn thao tác hàng loạt. Mất tài khoản là mất cả kênh.
 
-6. **Dịch Markdown sang định dạng gốc Zalo bằng số đo thật, không đoán.** Zalo giới hạn 3000 đơn vị mã UTF-16 mỗi tin và khoảng 256 ký tự JSON cho mảng style — vượt là chỉ nhận `"Lỗi không xác định"`, không rõ lý do. Bộ dịch cắt ở chỗ đọc được và giữ style theo mức quan trọng khi vượt ngân sách.
+6. **Dịch Markdown sang định dạng gốc Zalo bằng số đo thật, không đoán.** Zalo giới hạn 3000 đơn vị mã UTF-16 mỗi tin và còn chặn gói tin quá nặng (byte chữ + JSON định dạng) — vượt là chỉ nhận `"Lỗi không xác định"`, không rõ lý do. Bộ dịch tự tách tin ở chỗ đọc được mà vẫn giữ đủ định dạng; Zalo vẫn từ chối thì cầu nối gửi lại đoạn đó dạng chữ thường, mất định dạng chứ không mất nội dung.
 
 7. **Lưu lịch sử và nhật ký thao tác.** Tin nhắn vào SQLite có dọn theo hạn (mặc định 365 ngày); mọi thao tác có tác động ghi vào `audit_log` kèm danh tính người ra lệnh và kết quả thành/bại.
 
@@ -343,9 +343,9 @@ Hermes cứ viết Markdown như bình thường; cầu nối dịch sang địn
 
 | Markdown | Hiển thị trên Zalo |
 |---|---|
-| `# ## ###` tiêu đề | **in đậm** toàn bộ dòng tiêu đề |
-| `####` trở xuống | in đậm |
-| `1.` `2.` `3.` đầu mục số | **in đậm** phần số thứ tự |
+| `# ## ###` tiêu đề | **in đậm + chữ to** toàn bộ dòng tiêu đề |
+| `####` trở xuống | in đậm + chữ to |
+| `1.` `2.` `3.` đầu mục số | **in đậm + chữ to** phần số thứ tự |
 | `- mục` (cấp 1) | `- ` gạch đầu dòng |
 | `  • mục` (cấp con thụt lề) | `  • ` dấu chấm tròn |
 | `**đậm**` `__đậm__` | in đậm |
@@ -363,28 +363,19 @@ Cả hai đều **không báo lỗi rõ ràng**, nên rất dễ đi tìm nhầm
 
 Câu trả lời dài được cắt ở chỗ đọc được: hết đoạn, rồi hết câu, cuối cùng mới cắt cứng.
 
-**Mảng định dạng bị giới hạn theo kích thước, khoảng 256 ký tự JSON.** Quá thì Zalo chỉ nói `"Lỗi không xác định"`, không nhắc gì tới định dạng.
+**Gói tin quá nặng bị từ chối.** Quá thì Zalo chỉ nói `"Lỗi không xác định"`, không nhắc gì tới định dạng. Thứ bị tính là **số byte UTF-8 của chữ cộng độ dài JSON của mảng định dạng** — không phải số ký tự, cũng không phải số style. Đối chiếu 223 lần gửi thật (tháng 9/2026):
 
-| Bộ style | Kích thước | |
-|---|---|---|
-| 8 style in đậm ngắn | 256 | ✅ |
-| 7 style thật của bài | 237 | ✅ |
-| 8 style thật (có màu) | 277 | ❌ |
-| 9 style in đậm ngắn | 288 | ❌ |
+| | Byte chữ + JSON định dạng |
+|---|---|
+| Mọi tin gửi được | ≤ 3437 |
+| Mọi tin bị từ chối | ≥ 3448 |
 
-Đây **không** phải giới hạn theo số lượng — một style màu tốn 38 ký tự còn in đậm chỉ 31, nên đếm số style sẽ lúc đúng lúc sai.
+Chỉ đếm ký tự hoặc chỉ đếm style đều phân loại sai 10–11 lần trên 223. Chữ có dấu tốn 2–3 byte, emoji 4 byte, mỗi style in đậm thêm khoảng 30 ký tự JSON — nên một thông báo chưa tới 2000 ký tự mà nhiều emoji và nhãn in đậm vẫn bị chặn.
 
-Vì thế tiêu đề dùng **một** style cỡ chữ thay vì chồng đậm + màu:
+Cầu nối xử lý hai lớp:
 
-| Cách | Chi phí | Số style |
-|---|---|---|
-| Đậm + màu (cũ) | 69 | 2 |
-| Đậm + phóng to | 65 | 2 |
-| **Chỉ phóng to** | **34** | **1** |
-
-Chỗ tốn không nằm ở màu mà ở việc chồng hai style lên cùng một dòng. Một câu trả lời bình thường sinh 30–50 style, nên nếu không tiết chế thì gần như **mọi** câu trả lời có định dạng đều không gửi nổi — bot đọc xong, soạn xong, rồi im lặng.
-
-Khi vẫn quá ngân sách, `capStyles` giữ lại theo mức quan trọng: tiêu đề → màu người dùng tự đánh dấu → in đậm → nghiêng. Phần bị bỏ hiện thành chữ thường, **mất định dạng chứ không mất nội dung**.
+1. **Tách trước khi gửi.** Mỗi tin nằm trong 2000 ký tự, 40 style và **3000 byte** (chừa khoảng an toàn dưới ngưỡng đo được). Chỗ tách ưu tiên hết đoạn, rồi hết dòng, hết câu; tin nào cũng giữ đủ định dạng của phần mình.
+2. **Gửi lại dạng chữ thường khi vẫn bị từ chối.** Zalo từ chối một tin có định dạng thì cầu nối gửi lại đúng tin đó không kèm định dạng rồi gửi tiếp phần sau — **mất định dạng chứ không mất nội dung**. Lỗi mạng thì không gửi lại, tránh tin bị lặp.
 
 ---
 
@@ -396,7 +387,7 @@ Chỉ còn đúng bốn route mà trang quét QR và giám sát runtime cần. S
 |---|---|
 | `GET /api/status` | Trạng thái đăng nhập, chế độ, đã cắm Hermes chưa |
 | `POST /api/qr/start` | Bắt đầu đăng nhập QR |
-| `GET /api/health` | Ảnh chụp sức khoẻ runtime: trạng thái tổng (`healthy`/`degraded`/`unhealthy`), thời gian chạy, trạng thái phiên Zalo, số client bridge đang gắn và có client nào "nguội" không, tình trạng SQLite, tiến trình backfill, mốc thời gian tin gửi/nhận gần nhất, lỗi gần nhất, và `authorization.ownerConfigured` — có `ZALO_ALLOWED_USERS` hợp lệ hay chưa |
+| `GET /api/health` | Ảnh chụp sức khoẻ runtime: trạng thái tổng (`healthy`/`degraded`/`unhealthy`), thời gian chạy, trạng thái phiên Zalo và kết nối nghe tin (`zalo.listener`: `connected`/`reconnecting`/`closed` — khác `connected` là báo `degraded`, vì đăng nhập mà không nghe được tin thì bot vẫn "điếc"), số client bridge đang gắn và có client nào "nguội" không, tình trạng SQLite, tiến trình backfill, mốc thời gian tin gửi/nhận gần nhất, lỗi gần nhất, và `authorization.ownerConfigured` — có `ZALO_ALLOWED_USERS` hợp lệ hay chưa |
 | `POST /api/logout` | Đăng xuất, xoá phiên |
 
 Cổng WebSocket `3873` là giao thức riêng giữa sidecar và Hermes: `hello`, `message`, `ack` đi từ sidecar ra; `send`, `typing`, `ack_message`, `invoke` đi từ Hermes vào.
@@ -429,7 +420,7 @@ Dashboard chỉ nghe ở `127.0.0.1`, **không có mật khẩu**. Đừng mở 
 | Tin nhắn hiện `**` hoặc `[red]` | Sidecar chạy bản cũ — `git pull` rồi khởi động lại |
 | Cổng bị chiếm | Đổi `ZCA_PORT` / `ZALO_BRIDGE_PORT` trong `.env` |
 
-Log của sidecar in thẳng ra terminal đang chạy `npm start`. Log Hermes nằm ở `<hermes>/logs/gateway.log`.
+Log của sidecar in ra terminal đang chạy `npm start`, đồng thời chép vào `logs/sidecar.log` kèm giờ (quá 5 MB tự dời sang `logs/sidecar.log.1`) — chạy ngầm vẫn tra lại được. Log Hermes nằm ở `<hermes>/logs/gateway.log`.
 
 ---
 

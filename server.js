@@ -13,8 +13,10 @@ import { startAutomaticBackfill, startHermesBridge, stopHermesBridge, isHermesAt
 import { openZaloStore } from './zalo-store.js';
 import { createRuntimeHealth } from './runtime-health.js';
 import { importLegacyHermesHistory } from './legacy-history-import.js';
+import { installFileLog } from './file-log.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+installFileLog({ path: join(__dirname, 'logs', 'sidecar.log') });
 try {
   loadRepoEnv(join(__dirname, '.env'));
   loadHermesEnv();
@@ -79,7 +81,7 @@ function activateZaloRuntime() {
   }
   startHermesBridge({ api, profile: loginInfo, store: zaloStore, health: runtimeHealth });
   stopBotListener();
-  stopBotListener = setupBotListener(api, loginInfo);
+  stopBotListener = setupBotListener(api, loginInfo, { health: runtimeHealth });
   startAutomaticBackfill().catch((error) => {
     runtimeHealth.recordError('automatic_backfill_failed', error?.message || error);
     console.error('[history] automatic backfill failed:', error?.message || error);

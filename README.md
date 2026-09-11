@@ -33,7 +33,7 @@ Zalo  <->  zca-js sidecar (Node.js)  <->  local WebSocket  <->  Python plugins  
 
 5. **Built to avoid Zalo account bans.** The rate limiter is a token bucket: a burst of 5 messages goes out immediately, then throughput settles to a sustainable 20/minute, and conversational replies are prioritized ahead of bulk operations. Losing the account means losing the whole channel.
 
-6. **Markdown translated into Zalo's native formatting against measured limits, not guesses.** Zalo caps messages at 3000 UTF-16 code units and its style array at roughly 256 JSON characters — go over either and Zalo just returns "Unknown error" with no hint why. The formatter truncates at a readable boundary and keeps styles by importance when the budget is tight.
+6. **Markdown translated into Zalo's native formatting against measured limits, not guesses.** Zalo caps messages at 3000 UTF-16 code units and also rejects payloads that are too heavy (UTF-8 bytes of the text plus the style JSON) — go over and Zalo just returns "Unknown error" with no hint why. The formatter splits at readable boundaries while keeping every style; if Zalo still rejects a styled chunk, the bridge resends that chunk as plain text, so formatting is lost but content is not.
 
 7. **SQLite history and an audit trail.** Every message is stored in SQLite with age-based retention (365 days by default); every action with real-world effect is written to `audit_log` with the acting identity and the outcome.
 
@@ -176,7 +176,7 @@ The bridge accepts only allowlisted `zca-js` operations. High-risk automation su
 
 ## Health and history
 
-`GET /api/health` reports Zalo and Hermes connection state, SQLite and audit counts, backfill progress, recent traffic, and the last runtime error. Message history and audits are stored in the sidecar SQLite database; Hermes conversation memory remains in Hermes' own `state.db`.
+`GET /api/health` reports the Zalo session and listener state (`zalo.listener` other than `connected` marks health `degraded` — logged in but not receiving is still a deaf bot), Hermes connection state, SQLite and audit counts, backfill progress, recent traffic, and the last runtime error. Message history and audits are stored in the sidecar SQLite database; Hermes conversation memory remains in Hermes' own `state.db`.
 
 ## Troubleshooting
 
@@ -191,7 +191,7 @@ The bridge accepts only allowlisted `zca-js` operations. High-risk automation su
 | Port already in use | Change `ZCA_PORT` or `ZALO_BRIDGE_PORT` consistently |
 | VieNeu doctor check fails | Re-run the opt-in installer and confirm Python 3.10+, disk, and initial-download network access |
 
-Sidecar logs are printed by `npm start`. Hermes gateway logs live under `<HERMES_HOME>/logs/gateway.log`.
+Sidecar logs are printed by `npm start` and also copied with timestamps to `logs/sidecar.log` (rotated to `logs/sidecar.log.1` past 5 MB), so a background sidecar can still be diagnosed. Hermes gateway logs live under `<HERMES_HOME>/logs/gateway.log`.
 
 ## Uninstall
 

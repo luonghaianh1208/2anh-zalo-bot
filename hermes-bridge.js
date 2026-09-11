@@ -752,7 +752,19 @@ async function handleCommand(ws, cmd) {
           }
         }
 
-        const res = await zaloApi.sendMessage(content, String(cmd.threadId), threadType);
+        let res;
+        try {
+          res = await zaloApi.sendMessage(content, String(cmd.threadId), threadType);
+        } catch (err) {
+          // Zalo có lúc từ chối tin có định dạng mà chỉ nói "Lỗi không xác định".
+          // Có mã lỗi dạng số nghĩa là máy chủ đã từ chối, tin chưa đi, nên gửi
+          // lại đúng chunk này dạng chữ thường: mất định dạng còn hơn mất cả tin.
+          // Lỗi mạng không có mã số thì không gửi lại, tránh tin bị lặp.
+          if (!content.styles || !/^-?\d+$/.test(String(err?.code ?? ''))) throw err;
+          console.warn(`[bridge] Zalo từ chối chunk ${i + 1}/${chunks.length} có định dạng (mã ${err.code}) — gửi lại dạng chữ thường`);
+          const { styles: _dropped, ...plain } = content;
+          res = await zaloApi.sendMessage(plain, String(cmd.threadId), threadType);
+        }
         rememberOutboundResult(res, cmd.threadId, threadType, item.msg);
         lastMsgId = res?.message?.msgId ?? res?.message?.msgID ?? lastMsgId;
       }

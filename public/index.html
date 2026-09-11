@@ -130,7 +130,8 @@
         : 'Đang chờ tự động';
       el.health.innerHTML = `
         <div class="metric"><div class="label">Tổng thể</div><div class="value ${h.status}">${h.status}</div><div class="detail">Uptime ${age(h.uptimeMs)}</div></div>
-        <div class="metric"><div class="label">Lăng Tiêu</div><div class="value ${bridge.attachedClients ? 'healthy' : 'degraded'}">${bridge.attachedClients || 0} kết nối</div><div class="detail">Heartbeat: ${age(bridge.heartbeatAgeMs)} trước</div></div>
+        <div class="metric"><div class="label">Nghe tin Zalo</div><div class="value ${h.zalo?.listener === 'connected' ? 'healthy' : 'degraded'}">${h.zalo?.listener || 'chưa chạy'}</div><div class="detail">Khác connected là bot không nhận được tin</div></div>
+        <div class="metric"><div class="label">Hermes</div><div class="value ${bridge.attachedClients ? 'healthy' : 'degraded'}">${bridge.attachedClients || 0} kết nối</div><div class="detail">Heartbeat: ${age(bridge.heartbeatAgeMs)} trước</div></div>
         <div class="metric"><div class="label">SQLite</div><div class="value ${db.ready ? 'healthy' : 'unhealthy'}">${db.ready ? 'sẵn sàng' : 'lỗi'}</div><div class="detail">${db.messageCount || 0} tin · ${db.auditCount || 0} audit</div></div>
         <div class="metric"><div class="label">Phân quyền</div><div class="value ${h.authorization?.ownerConfigured ? 'healthy' : 'unhealthy'}">public / owner</div><div class="detail">${h.authorization?.ownerConfigured ? 'Đã cấu hình UID owner' : 'Chưa có UID owner'}</div></div>
         <div class="metric"><div class="label">Backfill</div><div class="value">${backfill}</div><div class="detail">Tự động DM + nhóm · giữ 365 ngày</div></div>

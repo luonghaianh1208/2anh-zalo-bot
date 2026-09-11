@@ -40,12 +40,24 @@ function ownerUids() {
 const notified = new Map();
 const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
 
-export function setupBotListener(api, profile = null) {
+/**
+ * Nhịp chờ trước khi tự mở lại listener đã đóng hẳn. zca-js chỉ tự nối lại với
+ * vài mã đóng do Zalo chỉ định và có giới hạn số lần; hết lượt là phát `closed`
+ * rồi thôi. Không mở lại thì bot vẫn "đăng nhập" nhưng điếc hẳn — đúng sự cố
+ * đêm 10/9/2026: đứt lúc nào không ai biết, sáng hôm sau mới lộ ra.
+ */
+const RESTART_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+
+export function setupBotListener(api, profile = null, { health = null, restartDelaysMs = RESTART_DELAYS_MS } = {}) {
   if (!api?.listener) {
     console.warn('[bot] ❌ api.listener không tồn tại — bot sẽ không nhận được tin nhắn');
     return () => {};
   }
   selfUid = String(profile?.user_id ?? profile?.userId ?? '');
+
+  let stopped = false;
+  let restartTimer = null;
+  let restartAttempt = 0;
 
   const onMessage = (msg) => {
     handleIncomingMessage(api, msg).catch((err) => {
@@ -56,22 +68,68 @@ export function setupBotListener(api, profile = null) {
   const onError = (err) => {
     console.error('[bot] listener error:', err?.message || err);
   };
-  api.listener.on('message', onMessage);
-  api.listener.on('error', onError);
 
-  try {
-    api.listener.start();
-    console.log('[bot] 🚀 Zalo listener đã chạy');
-  } catch (err) {
-    console.error('[bot] không start được listener:', err.message);
+  const onConnected = () => {
+    restartAttempt = 0;
+    health?.setListenerState('connected');
+    console.log('[bot] 🔌 Zalo listener đã kết nối');
+  };
+
+  const onDisconnected = (code, reason) => {
+    health?.setListenerState('reconnecting');
+    console.warn(`[bot] ⚠️ Zalo listener mất kết nối (mã ${code}${reason ? `: ${reason}` : ''})`);
+  };
+
+  const onClosed = (code, reason) => {
+    if (stopped) return;
+    health?.setListenerState('closed');
+    health?.recordError('zalo_listener_closed', `code ${code}`);
+    console.error(`[bot] ❌ Zalo listener đã đóng (mã ${code}${reason ? `: ${reason}` : ''}) — không nhận được tin cho tới khi mở lại`);
+    scheduleRestart();
+  };
+
+  const handlers = [
+    ['message', onMessage],
+    ['error', onError],
+    ['connected', onConnected],
+    ['disconnected', onDisconnected],
+    ['closed', onClosed],
+  ];
+  for (const [event, handler] of handlers) api.listener.on(event, handler);
+
+  function scheduleRestart() {
+    if (stopped || restartTimer) return;
+    const delay = restartDelaysMs[Math.min(restartAttempt, restartDelaysMs.length - 1)];
+    restartAttempt += 1;
+    console.warn(`[bot] 🔁 thử mở lại Zalo listener sau ${Math.round(delay / 1000)}s (lần ${restartAttempt})`);
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      startListener();
+    }, delay);
   }
 
-  let stopped = false;
+  function startListener() {
+    if (stopped) return;
+    health?.setListenerState('starting');
+    try {
+      api.listener.start({ retryOnClose: true });
+      console.log('[bot] 🚀 Zalo listener đã chạy');
+    } catch (err) {
+      health?.setListenerState('closed');
+      console.error('[bot] không start được listener:', err?.message || err);
+      scheduleRestart();
+    }
+  }
+
+  startListener();
+
   return () => {
     if (stopped) return;
     stopped = true;
-    api.listener.off?.('message', onMessage);
-    api.listener.off?.('error', onError);
+    clearTimeout(restartTimer);
+    restartTimer = null;
+    for (const [event, handler] of handlers) api.listener.off?.(event, handler);
+    health?.setListenerState(null);
     try { api.listener.stop?.(); } catch (err) {
       console.warn('[bot] không stop được listener:', err?.message || err);
     }

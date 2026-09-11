@@ -4,6 +4,9 @@ export function createRuntimeHealth({ store, now = Date.now, staleAfterMs = 45_0
   const clients = new Map();
   const backfill = new Map();
   let zalo = { status: 'idle', userId: null, displayName: null };
+  // Đăng nhập xong chưa chắc đã nghe được tin: listener có thể đứt riêng.
+  // null = chưa có ai báo (không tính vào sức khoẻ).
+  let listener = null;
   let lastInboundAtMs = null;
   let lastOutboundAtMs = null;
   let lastError = null;
@@ -14,6 +17,10 @@ export function createRuntimeHealth({ store, now = Date.now, staleAfterMs = 45_0
       userId: profile.userId == null ? null : String(profile.userId),
       displayName: profile.displayName == null ? null : String(profile.displayName),
     };
+  }
+
+  function setListenerState(state) {
+    listener = state == null ? null : String(state);
   }
 
   function bridgeConnected(clientId) {
@@ -70,12 +77,17 @@ export function createRuntimeHealth({ store, now = Date.now, staleAfterMs = 45_0
     const latestHeartbeat = heartbeatTimes.length ? Math.max(...heartbeatTimes) : null;
     let status = 'healthy';
     if (!database.ready) status = 'unhealthy';
-    else if (zalo.status !== 'logged-in' || clients.size === 0 || stale.length) status = 'degraded';
+    else if (
+      zalo.status !== 'logged-in'
+      || (listener != null && listener !== 'connected')
+      || clients.size === 0
+      || stale.length
+    ) status = 'degraded';
 
     return {
       status,
       uptimeMs: Math.max(0, Number(now()) - startedAtMs),
-      zalo: { ...zalo },
+      zalo: { ...zalo, listener },
       bridge: {
         attachedClients: clients.size,
         heartbeatAgeMs: latestHeartbeat == null ? null : Math.max(0, Number(now()) - latestHeartbeat),
@@ -90,6 +102,7 @@ export function createRuntimeHealth({ store, now = Date.now, staleAfterMs = 45_0
 
   return {
     setZaloState,
+    setListenerState,
     bridgeConnected,
     bridgeHeartbeat,
     bridgeDisconnected,
