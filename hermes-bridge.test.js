@@ -236,6 +236,37 @@ test('send vào nhóm gắn tag thật cho "@Tên" khớp đúng một thành vi
   }
 });
 
+test('khung tin gửi sang Hermes mang đúng loại tệp, không gắn cứng ảnh', async (t) => {
+  const ws = await openBridge(t, {});
+  const { forwardToHermes } = await import('./hermes-bridge.js');
+
+  try {
+    const frame = onceMessage(ws, (msg) => msg.type === 'message');
+    forwardToHermes({
+      threadId: 'g1',
+      type: 1,
+      data: {
+        msgId: '111', cliMsgId: '222', uidFrom: 'u1', dName: 'Liên', ts: Date.now(),
+        msgType: 'share.file',
+        content: {
+          title: '22-KH.Tiếng nói xanh.pdf',
+          href: 'https://file-stal-19.dlfl.vn/gr/abc',
+          thumb: 'https://photo-stal-1.zdn.vn/thumb/abc',
+        },
+      },
+    });
+
+    const got = await frame;
+    assert.deepEqual(got.mediaUrls, ['https://file-stal-19.dlfl.vn/gr/abc']);
+    assert.deepEqual(got.mediaTypes, ['application/pdf']);
+    assert.deepEqual(got.mediaNames, ['22-KH.Tiếng nói xanh.pdf']);
+    assert.equal(got.attachments[0].kind, 'document');
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 test('nhóm đông hơn số hồ sơ tra được thì không tag theo danh sách thành viên', async (t) => {
   const sent = [];
   const api = {

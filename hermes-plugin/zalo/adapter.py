@@ -79,6 +79,8 @@ from gateway.platforms.base import (
     MessageType,
     SendResult,
     cache_image_from_url,
+    cache_media_bytes,
+    validate_inbound_media_size,
 )
 
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
@@ -244,6 +246,12 @@ def _image_failure_reason(url: str, exc: BaseException) -> str:
     if "unsafe URL" in text:
         return "link ảnh bị chặn vì không an toàn"
     return f"không tải được ảnh ({type(exc).__name__})"
+
+
+def _attachment_failure_reason(exc: BaseException, url: str, name: str = "") -> str:
+    """Như trên nhưng cho tệp đính kèm: nói rõ tệp nào hỏng."""
+    reason = _image_failure_reason(url, exc).replace("ảnh", "tệp")
+    return f"{name}: {reason}" if name else reason
 
 THREAD_TYPE_USER = 0
 THREAD_TYPE_GROUP = 1
@@ -703,10 +711,15 @@ class ZaloAdapter(BasePlatformAdapter):
 
         context_entries = self._recent_context_for_question(thread_id, recent_entry) if is_group else []
         inbound_urls = self._dedupe_urls([*media_urls, *quote_media_urls, *self._media_urls_from_entries(context_entries)])
-        cached_media, media_types, image_failures = await self._cache_image_urls(inbound_urls)
+        cached_media, media_types, attach_failures, has_document = await self._cache_attachments(
+            self._attachments_for(frame, inbound_urls)
+        )
+        # Chỉ đếm ảnh cho câu "đã đính kèm cho Vision": tài liệu đi đường khác,
+        # Hermes tự chèn ghi chú trỏ agent tới tệp đã lưu.
+        image_count = sum(1 for mime in media_types if mime.startswith("image/"))
         channel_context = (
-            self._build_channel_context(context_entries, len(cached_media), image_failures)
-            if is_group else self._image_failure_note(image_failures)
+            self._build_channel_context(context_entries, image_count, attach_failures)
+            if is_group else self._image_failure_note(attach_failures)
         )
         reply_to_text = None
         if quote:
@@ -717,8 +730,8 @@ class ZaloAdapter(BasePlatformAdapter):
         # Kẹp hồ sơ người quen vào đầu tin. Nhờ đó bot xưng hô đúng và nhớ
         # bối cảnh của họ ngay từ câu đầu, không phải hỏi lại mỗi lần.
         prompt_text = self._strip_mention(text) if text else ""
-        if not prompt_text and (cached_media or image_failures):
-            prompt_text = "[Người dùng gửi ảnh]"
+        if not prompt_text and (cached_media or attach_failures):
+            prompt_text = "[Người dùng gửi tệp]" if has_document else "[Người dùng gửi ảnh]"
         try:
             from .people import describe_person
             known = describe_person(sender_uid)
@@ -729,7 +742,11 @@ class ZaloAdapter(BasePlatformAdapter):
 
         event = MessageEvent(
             text=prompt_text,
-            message_type=MessageType.PHOTO if cached_media and not text else MessageType.TEXT,
+            message_type=(
+                MessageType.DOCUMENT if has_document
+                else MessageType.PHOTO if cached_media and not text
+                else MessageType.TEXT
+            ),
             user_id=sender_uid,
             user_name=sender_name,
             source=source,
@@ -929,18 +946,94 @@ class ZaloAdapter(BasePlatformAdapter):
             urls.extend(item.get("quote_media_urls") or [])
         return urls
 
-    async def _cache_image_urls(self, urls: List[str]) -> tuple[List[str], List[str], List[str]]:
-        cached: List[str] = []
+    @staticmethod
+    def _attachments_for(frame: Dict[str, Any], urls: List[str]) -> List[Dict[str, Any]]:
+        """Ghép mỗi URL với loại và tên tệp do sidecar gửi kèm.
+
+        Tin lấy từ ngữ cảnh nhóm, tin được reply hay sidecar bản cũ có thể không
+        có phần phân loại — khi đó đoán theo đuôi trong URL. Không đoán được thì
+        coi là ảnh: Zalo gửi ảnh bằng URL không đuôi, còn tệp thì luôn có tên.
+        """
+        import mimetypes
+
+        known: Dict[str, Dict[str, Any]] = {}
+        groups = [frame.get("attachments")]
+        quote = frame.get("quote")
+        if isinstance(quote, dict):
+            groups.append(quote.get("attachments"))
+        for group in groups:
+            for item in group or []:
+                if isinstance(item, dict) and item.get("url"):
+                    known[str(item["url"])] = item
+
+        out: List[Dict[str, Any]] = []
+        for url in urls:
+            item = known.get(url)
+            if item:
+                out.append({"url": url, "name": str(item.get("name") or ""),
+                            "mime": str(item.get("mime") or "")})
+                continue
+            ext = os.path.splitext(urlsplit(url).path)[1].lower()
+            mime = mimetypes.guess_type(f"x{ext}")[0] if ext else None
+            out.append({"url": url, "name": "", "mime": mime or ""})
+        return out
+
+    @staticmethod
+    async def _download_attachment(url: str) -> bytes:
+        """Tải một tệp đính kèm, chặn địa chỉ nội bộ và cắt theo hạn mức của Hermes."""
+        from tools.url_safety import create_ssrf_safe_async_client, is_safe_url
+
+        if not is_safe_url(url):
+            raise ValueError("Blocked unsafe URL (SSRF protection)")
+        async with create_ssrf_safe_async_client(timeout=30.0, follow_redirects=True) as client:
+            body = bytearray()
+            async with client.stream(
+                "GET", url,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; HermesAgent/1.0)"},
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    validate_inbound_media_size(len(body), media_type="tệp đính kèm")
+        return bytes(body)
+
+    async def _cache_attachments(
+        self, items: List[Dict[str, Any]]
+    ) -> tuple[List[str], List[str], List[str], bool]:
+        """Tải tệp đính kèm về cache: ảnh đi đường ảnh, tài liệu đi đường tài liệu.
+
+        Trả ``(đường dẫn, MIME, lý do lỗi, có tài liệu không)``. Tách hai đường vì
+        Hermes xử lý khác nhau: ảnh thì cho model nhìn, còn tài liệu thì lưu
+        thành tệp rồi bảo agent tự rút chữ (PDF, DOCX…). Trước đây mọi thứ đều đi
+        đường ảnh nên PDF bị báo là "ảnh không đọc được".
+        """
+        paths: List[str] = []
         media_types: List[str] = []
         failures: List[str] = []
-        for url in urls[:4]:
+        has_document = False
+        for item in items[:4]:
+            url = str(item.get("url") or "")
+            name = str(item.get("name") or "")
+            mime = str(item.get("mime") or "")
             try:
-                cached.append(await cache_image_from_url(url))
-                media_types.append("image/jpeg")
+                if mime.startswith("image/") or (not mime and not name):
+                    paths.append(await cache_image_from_url(url))
+                    media_types.append("image/jpeg")
+                    continue
+                cached = cache_media_bytes(
+                    await self._download_attachment(url),
+                    filename=name or os.path.basename(urlsplit(url).path),
+                    mime_type=mime,
+                )
+                if cached is None:
+                    raise ValueError("Refusing to cache non-image data")
+                paths.append(cached.path)
+                media_types.append(cached.media_type)
+                has_document = has_document or cached.kind != "image"
             except Exception as exc:
-                logger.warning("[zalo] không cache được ảnh %s: %s", url[:80], exc)
-                failures.append(_image_failure_reason(url, exc))
-        return cached, media_types, failures
+                logger.warning("[zalo] không tải được tệp đính kèm %s: %s", url[:80], exc)
+                failures.append(_attachment_failure_reason(exc, url, name))
+        return paths, media_types, failures, has_document
 
     @staticmethod
     def _image_failure_note(failures: List[str]) -> Optional[str]:

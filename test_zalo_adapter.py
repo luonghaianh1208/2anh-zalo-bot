@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from jsonschema import Draft7Validator
@@ -281,6 +282,53 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Không đọc được 1 ảnh", event.channel_context)
         self.assertIn("JXL", event.channel_context)
         self.assertIn("gửi lại", event.channel_context)
+
+    async def test_pdf_attachment_becomes_a_document_not_an_image(self):
+        adapter = self.make_adapter()
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+
+        async def fake_download(url):
+            return b"%PDF-1.7 noi dung"
+
+        cached = zalo_adapter.__dict__["cache_media_bytes"]  # giữ chữ ký thật
+        self.assertTrue(callable(cached))
+
+        def fake_cache(data, *, filename="", mime_type="", default_kind=None):
+            return SimpleNamespace(
+                path=f"C:/cache/documents/doc_{filename}", media_type=mime_type or "application/pdf",
+                kind="document", display_name=filename,
+            )
+
+        with patch.object(zalo_adapter.ZaloAdapter, "_download_attachment", staticmethod(fake_download)), \
+                patch.object(zalo_adapter, "cache_media_bytes", fake_cache), \
+                patch.object(zalo_adapter, "cache_image_from_url", side_effect=AssertionError("tệp không được đi đường ảnh")), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message({
+                "type": "message", "id": "f1", "threadId": "g1",
+                "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                "senderUid": "u1", "senderName": "Liên",
+                "text": "@Lăng Tiêu trong file này có link ko?",
+                "mentions": [{"uid": "bot-uid"}],
+                "msgType": "share.file",
+                "mediaUrls": ["https://file-stal-19.dlfl.vn/gr/abc"],
+                "attachments": [{
+                    "url": "https://file-stal-19.dlfl.vn/gr/abc",
+                    "name": "22-KH.Tiếng nói xanh.pdf",
+                    "mime": "application/pdf", "kind": "document",
+                }],
+            })
+
+        self.assertEqual(len(handled), 1)
+        event = handled[0]
+        self.assertEqual(event.media_urls, ["C:/cache/documents/doc_22-KH.Tiếng nói xanh.pdf"])
+        self.assertEqual(event.media_types, ["application/pdf"])
+        self.assertEqual(event.message_type, zalo_adapter.MessageType.DOCUMENT)
+        self.assertNotIn("ảnh", event.channel_context or "")
 
     async def test_owner_dm_with_undownloadable_image_still_reaches_the_agent_with_the_reason(self):
         adapter = self.make_adapter()

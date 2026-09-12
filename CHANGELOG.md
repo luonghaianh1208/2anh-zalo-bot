@@ -2,6 +2,20 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.6.0] — 2026-09-12
+
+### Sửa
+
+- **Tệp PDF, DOCX, XLSX bị đọc như ảnh rồi báo lỗi.** Tin gửi tệp của Zalo
+  (`share.file`) có cùng hình dạng với tin ảnh, mà cầu nối lại gắn cứng
+  `image/jpeg` cho mọi URL — nên tệp bị tải về như ảnh, hỏng, rồi bot trả lời
+  "không đọc được ảnh" hoặc mô tả tài liệu như một tấm hình. Cầu nối nay phân
+  loại từng tệp đính kèm (`zalo-attachments.js`): ảnh, video, âm thanh hay tài
+  liệu, kèm tên và MIME thật; tin gửi tệp bỏ luôn ảnh thu nhỏ đi kèm. Adapter
+  tải tài liệu vào cache tài liệu của Hermes và đánh dấu lượt là `DOCUMENT`, nên
+  gateway chèn ghi chú trỏ agent tới tệp để tự rút chữ (PDF, DOCX, XLSX…).
+  Tin được reply cũng được phân loại như vậy.
+
 ## [1.5.2] — 2026-09-12
 
 ### Sửa

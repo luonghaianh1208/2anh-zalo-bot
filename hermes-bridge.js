@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { formatAndChunkZaloMarkdown } from './markdown-formatter.js';
 import { createMemberDirectory, findMentions } from './zalo-mentions.js';
+import { classifyAttachments } from './zalo-attachments.js';
 import { pickSmartReaction } from './smart-reaction.js';
 import { RateLimiter, RateLimitedError, THROTTLED_METHODS } from './rate-limiter.js';
 import { openZaloStore } from './zalo-store.js';
@@ -597,6 +598,12 @@ function extractQuote(msg) {
     text: String(quote.msg || extractText({ data: quote }) || ''),
     msgType: quote.msgType || quote.cliMsgType || '',
     mediaUrls: extractMediaUrls(attachment || quote),
+    // Tin được reply cũng có thể là tệp: phân loại luôn để adapter không đoán
+    // một PDF bị reply thành ảnh.
+    attachments: classifyAttachments(
+      { data: { msgType: quote.msgType || quote.cliMsgType || '', content: attachment || quote } },
+      extractMediaUrls(attachment || quote),
+    ),
     raw: quote,
   };
 }
@@ -607,6 +614,7 @@ export function forwardToHermes(msg) {
   activeHealth?.markInbound();
 
   const mediaUrls = extractMediaUrls(msg);
+  const attachments = classifyAttachments(msg, mediaUrls);
   const quote = extractQuote(msg);
   const payload = {
     type: 'message',
@@ -621,8 +629,12 @@ export function forwardToHermes(msg) {
     // để biết đây là tin chữ hay tin đính kèm.
     msgType: msg.data?.msgType || '',
     mentions: Array.isArray(msg.data?.mentions) ? msg.data.mentions : [],
-    mediaUrls,
-    mediaTypes: mediaUrls.map(() => 'image/jpeg'),
+    // Phân loại từng tệp đính kèm. Gắn cứng image/jpeg như trước khiến một tệp
+    // PDF bị tải về như ảnh rồi báo "không đọc được ảnh" — xem zalo-attachments.js.
+    attachments,
+    mediaUrls: attachments.map((item) => item.url),
+    mediaTypes: attachments.map((item) => item.mime),
+    mediaNames: attachments.map((item) => item.name),
     quote,
     ts: msg.data?.ts ?? Date.now(),
     // Giữ nguyên gói gốc để adapter trích thêm khi cần (quote, đính kèm…)
