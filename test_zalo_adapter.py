@@ -295,8 +295,8 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         async def fake_download(url):
             return b"%PDF-1.7 noi dung"
 
-        cached = zalo_adapter.__dict__["cache_media_bytes"]  # giữ chữ ký thật
-        self.assertTrue(callable(cached))
+        async def fake_extract(_path):
+            return "Số: 21/KH-ĐTN\nKẾ HOẠCH tổ chức cuộc thi Tiếng nói xanh mùa IV"
 
         def fake_cache(data, *, filename="", mime_type="", default_kind=None):
             return SimpleNamespace(
@@ -305,6 +305,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             )
 
         with patch.object(zalo_adapter.ZaloAdapter, "_download_attachment", staticmethod(fake_download)), \
+                patch.object(zalo_adapter.ZaloAdapter, "_document_text", staticmethod(fake_extract)), \
                 patch.object(zalo_adapter, "cache_media_bytes", fake_cache), \
                 patch.object(zalo_adapter, "cache_image_from_url", side_effect=AssertionError("tệp không được đi đường ảnh")), \
                 patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
@@ -329,6 +330,10 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.media_types, ["application/pdf"])
         self.assertEqual(event.message_type, zalo_adapter.MessageType.DOCUMENT)
         self.assertNotIn("ảnh", event.channel_context or "")
+        # Người trong nhóm không có read_file, nên nội dung phải được kèm sẵn.
+        self.assertIn("22-KH.Tiếng nói xanh.pdf", event.text)
+        self.assertIn("KẾ HOẠCH tổ chức cuộc thi", event.text)
+        self.assertEqual(event.media_text_inlined, [True])
 
     async def test_owner_dm_with_undownloadable_image_still_reaches_the_agent_with_the_reason(self):
         adapter = self.make_adapter()

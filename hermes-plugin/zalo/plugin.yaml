@@ -1,7 +1,7 @@
 name: zalo-platform
 label: Zalo
 kind: platform
-version: 1.6.0
+version: 1.6.1
 description: >
   Zalo gateway adapter for Hermes Agent.
 

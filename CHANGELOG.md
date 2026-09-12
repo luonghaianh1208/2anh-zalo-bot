@@ -2,6 +2,15 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.6.1] — 2026-09-12
+
+### Sửa
+
+- **Thành viên gửi tệp thì bot vẫn không đọc được.** Hermes chỉ lưu tệp rồi bảo
+  agent tự mở, nhưng người trong nhóm không có `read_file` nên chịu chết. Adapter
+  nay tự rút chữ từ tệp (PDF, DOCX, XLSX…) và kèm thẳng vào tin, nên bot trả lời
+  được ngay cả khi người gửi không phải chủ nhân.
+
 ## [1.6.0] — 2026-09-12
 
 ### Sửa
