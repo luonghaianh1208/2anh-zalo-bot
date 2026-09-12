@@ -1056,3 +1056,29 @@ test('tin sticker đã tra nhãn đi sang Hermes thành chữ kèm ảnh nhãn d
     stopHermesBridge();
   }
 });
+
+test('người trong nhóm tra được chi tiết nhãn dán qua cầu nối', async (t) => {
+  // Hai danh sách phải khớp nhau: zalo-policy cho phép vai công khai, còn
+  // ALLOWED_METHODS của cầu nối phải có tên hàm, thiếu một bên là bị từ chối.
+  const api = {
+    getStickersDetail: (id) => Promise.resolve([{ id, text: 'cười lăn', stickerUrl: 'https://zalo.vn/s.png' }]),
+  };
+  const server = startHermesBridge({ api, profile: { user_id: 'bot' }, port: 0, store: testStore(t), ownerUids: ['owner'] });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await hello;
+    ws.send(JSON.stringify({
+      type: 'invoke', reqId: 'sticker-detail', method: 'getStickersDetail', args: [27703],
+      auth: auth('group-1', 1, { actorUid: 'nguoi-trong-nhom' }),
+    }));
+    const ack = await onceMessage(ws, (msg) => msg.reqId === 'sticker-detail');
+    assert.equal(ack.ok, true);
+    assert.equal(ack.result[0].text, 'cười lăn');
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
