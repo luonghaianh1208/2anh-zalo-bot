@@ -1805,6 +1805,46 @@ async def zalo_fb_comments(args: Dict[str, Any], **_kw) -> str:
     return _ok({"post_id": post_id, "count": len(out), "comments": out})
 
 
+async def zalo_fb_check(args: Dict[str, Any], **_kw) -> str:
+    """Soát một bài đã đăng: Facebook khai gì, và người ngoài có xem được không."""
+    from . import facebook as fb
+    post_id = str(args.get("post_id") or "").strip()
+    if not post_id:
+        return _err("cần `post_id` — lấy từ zalo_fb_posts hoặc kết quả zalo_fb_publish")
+    page, err = fb.resolve_page(args.get("page", ""))
+    if err:
+        return _err(err)
+
+    r = fb.graph(post_id, access_token=page["token"],
+                 fields="id,created_time,is_published,is_hidden,timeline_visibility,"
+                        "privacy,permalink_url,scheduled_publish_time")
+    if "error" in r:
+        return _err(f"Facebook: {r['error'].get('message', '')[:160]}")
+
+    link = r.get("permalink_url")
+    visibility = await asyncio.to_thread(fb.public_visibility, link)
+    return _ok({
+        "post_id": r.get("id"),
+        "page": page.get("name"),
+        "link": link,
+        "facebook_khai": {
+            "da_dang": r.get("is_published"),
+            "bi_an": r.get("is_hidden"),
+            "dong_thoi_gian": r.get("timeline_visibility"),
+            "quyen": (r.get("privacy") or {}).get("description"),
+            "hen_gio": r.get("scheduled_publish_time"),
+        },
+        "hien_thi_cong_khai": visibility,
+        "huong_dan": (
+            "Người ngoài xem được bài này." if visibility == "cong_khai" else
+            "Bài chưa tới giờ đăng nên chưa soi được." if r.get("scheduled_publish_time") else
+            "Facebook KHÔNG cho người ngoài xem bài này — báo chủ nhân để xoá và đăng lại."
+            if visibility == "khong_xem_duoc" else
+            "Chưa kiểm tra được, thử lại sau hoặc mở link bằng cửa sổ ẩn danh."
+        ),
+    })
+
+
 async def zalo_fb_draft(args: Dict[str, Any], **_kw) -> str:
     """Soạn bài rồi CHỜ chủ nhân gõ mã duyệt. Không đăng gì ở bước này."""
     from . import facebook as fb
@@ -1893,7 +1933,20 @@ async def zalo_fb_publish(args: Dict[str, Any], **_kw) -> str:
 
     post_id = r.get("id")
     info = fb.graph(post_id, access_token=page["token"], fields="permalink_url")
+    link = info.get("permalink_url")
     logger.info("[fb] đã %s %s lên %s", "lên lịch" if scheduled_time else "đăng", post_id, page.get("name"))
+
+    # Đăng xong phải soi bằng mắt người ngoài trước khi nói với chủ nhân là
+    # xong: Graph API từng khai "đã đăng, công khai" cho bài mà chỉ quản trị
+    # viên nhìn thấy. Bài hẹn giờ thì chưa có gì để soi, đợi tới giờ đăng.
+    visibility = "chua_toi_gio" if scheduled_time else await asyncio.to_thread(fb.public_visibility, link)
+    guide = {
+        "cong_khai": "Bài đã hiện công khai, người ngoài xem được.",
+        "khong_xem_duoc": ("Facebook KHÔNG cho người ngoài xem bài này dù Graph API báo đã đăng. "
+                           "Nói thẳng với chủ nhân, đừng báo là đã đăng xong."),
+        "khong_ro": "Chưa kiểm tra được hiển thị công khai — báo chủ nhân là chưa chắc chắn.",
+        "chua_toi_gio": "Bài mới chỉ được hẹn giờ. Tới giờ đăng hãy dùng zalo_fb_check để soát lại.",
+    }[visibility]
     return _ok({
         "da_dang": True,
         "len_lich": scheduled_time is not None,
@@ -1901,7 +1954,9 @@ async def zalo_fb_publish(args: Dict[str, Any], **_kw) -> str:
         "page": page.get("name"),
         "post_id": post_id,
         "so_anh": len(media_ids),
-        "link": info.get("permalink_url"),
+        "link": link,
+        "hien_thi_cong_khai": visibility,
+        "huong_dan": guide,
     })
 
 
@@ -1953,6 +2008,18 @@ TOOLS = [
         },
         ["message"],
     ), zalo_fb_draft, TOOLSET_OWNER),
+
+    ("zalo_fb_check", "🔍", _schema(
+        "zalo_fb_check",
+        "Soát một bài Fanpage đã đăng: Facebook khai gì (đã đăng, bị ẩn, quyền) "
+        "và quan trọng hơn là người ngoài có xem được không. Dùng sau khi đăng, "
+        "và dùng lại khi bài hẹn giờ đã tới giờ.",
+        {
+            "post_id": {"type": "string", "description": "ID bài, lấy từ zalo_fb_posts hoặc kết quả đăng."},
+            "page": {"type": "string", "description": "Tên hoặc ID Fanpage. Bỏ trống là Page mặc định."},
+        },
+        ["post_id"],
+    ), zalo_fb_check, TOOLSET_OWNER),
 
     ("zalo_fb_publish", "🚀", _schema(
         "zalo_fb_publish",

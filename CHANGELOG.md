@@ -2,6 +2,25 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.7.0] — 2026-09-12
+
+### Thêm
+
+- **Kiểm tra bài Fanpage có thật sự công khai không.** Graph API từng khai
+  `is_published: true`, `is_hidden: false`, quyền "Công khai" cho một bài mà
+  người ngoài không xem được (ca ngày 09/09/2026). Token của Page nhìn thấy mọi
+  thứ, nên `facebook.public_visibility()` hỏi bằng đường không token — trình
+  nhúng bài viết công khai. `zalo_fb_publish` trả kèm kết quả này khi đăng ngay,
+  và công cụ mới `zalo_fb_check` soát lại bất kỳ bài nào theo ID (dùng cho bài
+  hẹn giờ, sau khi tới giờ đăng).
+
+### Sửa
+
+- Hướng dẫn trình bày cấm bot tự viết script hay gọi thẳng Graph API để đăng
+  Fanpage — đó là cách nó đi vòng qua cửa mã duyệt hôm 08/09 và tạo ra bài
+  hỏng. Thiếu tham số thì báo chủ nhân, và chỉ được nói "đã đăng" sau khi kiểm
+  tra hiển thị công khai.
+
 ## [1.6.2] — 2026-09-12
 
 ### Sửa

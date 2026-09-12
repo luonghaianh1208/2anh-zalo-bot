@@ -160,11 +160,11 @@ The installer also ships a default message style guide (`hermes-plugin/zalo-styl
 
 ## Agent tools
 
-47 tools total, split into three toolsets: 31 owner-only, 15 shared with everyone in a group, and 1 (`zalo_group_history`) that only exists inside group cron jobs. `ZALO_ALLOWED_USERS` decides who counts as the owner.
+48 tools total, split into three toolsets: 32 owner-only, 15 shared with everyone in a group, and 1 (`zalo_group_history`) that only exists inside group cron jobs. `ZALO_ALLOWED_USERS` decides who counts as the owner.
 
 | Group | Tools |
 |---|---|
-| Facebook Page | `zalo_fb_pages` `zalo_fb_posts` `zalo_fb_comments` `zalo_fb_draft` `zalo_fb_publish` |
+| Facebook Page | `zalo_fb_pages` `zalo_fb_posts` `zalo_fb_comments` `zalo_fb_draft` `zalo_fb_publish` `zalo_fb_check` |
 | Send content | `zalo_send_file` `zalo_send_voice` `zalo_send_sticker` `zalo_send_link` `zalo_forward` |
 | Read context | `zalo_read_history` `zalo_list_groups` `zalo_group_members` `zalo_find_user` `zalo_user_info` `zalo_list_friends` |
 | Zalo-specific | `zalo_create_poll` `zalo_poll_detail` `zalo_lock_poll` `zalo_create_note` `zalo_create_reminder` `zalo_list_reminders` `zalo_remove_reminder` `zalo_pin_conversation` `zalo_mute` |

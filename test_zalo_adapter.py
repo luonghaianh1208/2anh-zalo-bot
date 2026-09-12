@@ -1028,7 +1028,7 @@ class ZaloToolSchemaTest(unittest.TestCase):
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 15)
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 31)
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 32)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 
     def test_zalo_ids_remain_strings_through_hermes_argument_coercion(self):
@@ -2096,6 +2096,78 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
         self.assertIsNone(self.guard("terminal"))
         zalo_tools.bind_turn(bound[1])
         self.assertEqual(self.guard("terminal")["action"], "block")
+
+
+class FacebookVisibilityTest(unittest.TestCase):
+    """Graph API vẫn khai 'đã đăng, công khai' cho một bài mà người ngoài không
+    xem được — đúng chuyện đã xảy ra ngày 09/09. Chỉ trình nhúng công khai mới
+    nói thật, nên kiểm tra bằng nó trước khi báo chủ nhân là đã đăng."""
+
+    def visibility(self, html, status=200):
+        from plugins.zalo_tools import facebook as fb
+
+        class FakeResponse:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *_a):
+                return False
+
+            def read(self_inner):
+                return html.encode("utf-8")
+
+        if status != 200:
+            with patch.object(fb.urllib.request, "urlopen", side_effect=OSError("mạng hỏng")):
+                return fb.public_visibility("https://facebook.com/1/posts/2")
+        with patch.object(fb.urllib.request, "urlopen", return_value=FakeResponse()):
+            return fb.public_visibility("https://facebook.com/1/posts/2")
+
+    def test_embed_says_post_is_gone(self):
+        html = ("<div>Bài viết này trên Facebook không còn nữa vì có thể đã bị gỡ hoặc "
+                "cài đặt quyền riêng tư của bài viết đã thay đổi.</div>")
+        self.assertEqual(self.visibility(html), "khong_xem_duoc")
+        self.assertEqual(self.visibility("<p>This content isn't available right now</p>"), "khong_xem_duoc")
+
+    def test_rendered_embed_counts_as_public(self):
+        self.assertEqual(self.visibility("<div>" + "x" * 70000 + "</div>"), "cong_khai")
+
+    def test_short_page_or_network_error_is_reported_as_unknown(self):
+        self.assertEqual(self.visibility("<div>trang ngắn</div>"), "khong_ro")
+        self.assertEqual(self.visibility("", status=500), "khong_ro")
+
+    def test_no_permalink_is_unknown(self):
+        from plugins.zalo_tools import facebook as fb
+
+        self.assertEqual(fb.public_visibility(""), "khong_ro")
+
+
+class ZaloFbCheckTest(unittest.IsolatedAsyncioTestCase):
+    async def test_check_reports_both_what_facebook_claims_and_what_outsiders_see(self):
+        from plugins.zalo_tools import facebook as fb
+
+        page = {"id": "301466423591522", "name": "Đoàn trường", "token": "x", "default": True}
+        graph_result = {
+            "id": "301466423591522_1363283005917157",
+            "is_published": True, "is_hidden": False, "timeline_visibility": "normal",
+            "privacy": {"description": "Công khai"},
+            "permalink_url": "https://www.facebook.com/1361284372783687/posts/1363283005917157",
+        }
+        with patch.object(fb, "resolve_page", return_value=(page, "")), \
+                patch.object(fb, "graph", return_value=graph_result), \
+                patch.object(fb, "public_visibility", return_value="khong_xem_duoc"):
+            out = json.loads(await zalo_tools.zalo_fb_check({"post_id": graph_result["id"]}))
+
+        self.assertTrue(out["success"])
+        result = out["result"]
+        self.assertTrue(result["facebook_khai"]["da_dang"])
+        self.assertEqual(result["facebook_khai"]["quyen"], "Công khai")
+        self.assertEqual(result["hien_thi_cong_khai"], "khong_xem_duoc")
+        self.assertIn("KHÔNG cho người ngoài xem", result["huong_dan"])
+
+    async def test_check_requires_a_post_id(self):
+        out = json.loads(await zalo_tools.zalo_fb_check({}))
+        self.assertFalse(out["success"])
+        self.assertIn("post_id", out["error"])
 
 
 class ZaloKbScopeTest(unittest.IsolatedAsyncioTestCase):

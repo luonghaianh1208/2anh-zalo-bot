@@ -43,6 +43,43 @@ GRAPH = "https://graph.facebook.com/v23.0"
 DRAFT_TTL_SECONDS = 3600      # nháp quá hạn thì phải soạn lại, tránh đăng nhầm bài cũ
 MAX_DRAFTS = 20
 
+# Câu Facebook trả về khi người ngoài không xem được bài.
+UNAVAILABLE_MARKERS = (
+    "không còn nữa", "nội dung này hiện không",
+    "no longer available", "isn't available", "content isn't available",
+)
+# Trình nhúng dựng được bài thì trang nặng hẳn (đo thật: 80KB khi hiện bài,
+# 38KB khi báo không xem được).
+EMBED_RENDERED_MIN_CHARS = 60_000
+
+
+def public_visibility(permalink: str, timeout: int = 30) -> str:
+    """Người ngoài có xem được bài này không: ``cong_khai`` | ``khong_xem_duoc`` | ``khong_ro``.
+
+    Vì sao không tin Graph API: ngày 09/09/2026 một bài hẹn giờ có
+    ``is_published: true``, ``is_hidden: false``, quyền "Công khai",
+    ``timeline_visibility: normal`` — mà trình nhúng công khai lại báo bài đã bị
+    gỡ, và thực tế chỉ quản trị viên nhìn thấy. Token của Page nhìn thấy mọi
+    thứ; muốn biết người ngoài thấy gì thì phải hỏi bằng đường không có token.
+    """
+    if not permalink:
+        return "khong_ro"
+    query = urllib.parse.urlencode({"href": permalink, "width": 500, "locale": "vi_VN"})
+    req = urllib.request.Request(
+        f"https://www.facebook.com/plugins/post.php?{query}",
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            html = response.read().decode("utf-8", "replace")
+    except Exception as exc:
+        logger.warning("[fb] không kiểm tra được hiển thị công khai: %s", exc)
+        return "khong_ro"
+    low = html.lower()
+    if any(marker in low for marker in UNAVAILABLE_MARKERS):
+        return "khong_xem_duoc"
+    return "cong_khai" if len(html) >= EMBED_RENDERED_MIN_CHARS else "khong_ro"
+
 
 # =====================================================================
 #  Cấu hình Page

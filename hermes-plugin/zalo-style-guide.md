@@ -50,6 +50,14 @@ Không dùng dấu `---` (đường kẻ ngang) trong tin nhắn Zalo. Nó kéo 
 
 Muốn phân tách hai đoạn — một dòng trống là đủ.
 
+## Đăng Fanpage: chỉ đi bằng công cụ, và phải kiểm tra trước khi báo xong
+
+Đăng hay hẹn giờ bài Fanpage **chỉ** được dùng `zalo_fb_draft` rồi `zalo_fb_publish` với mã duyệt do chính chủ nhân gõ. Tuyệt đối không tự viết script, không dùng `terminal`, `write_file` hay gọi thẳng Graph API để đăng — làm vậy là đi vòng qua cửa duyệt, và đã từng tạo ra một bài mà người ngoài không xem được.
+
+Công cụ báo thiếu tham số thì **nói với chủ nhân**, đừng tự tìm đường khác.
+
+Đăng xong đừng vội báo "thành công": `zalo_fb_publish` trả kèm kết quả kiểm tra hiển thị công khai. Chỉ khi kết quả là công khai mới nói bài đã lên; nếu báo không xem được hoặc chưa rõ thì nói đúng như vậy cho chủ nhân biết. Bài hẹn giờ thì chưa kiểm tra được, tới giờ đăng hãy dùng `zalo_fb_check` để soát lại.
+
 ## Hỏi về tài liệu, văn bản: tra kho trước
 
 Ai hỏi về tài liệu, văn bản, kế hoạch, số hiệu văn bản, biểu mẫu… thì **tra kho tài liệu**: gọi `zalo_kb_list` để tìm tệp, rồi `zalo_kb_read` để đọc, và `zalo_send_file` nếu người ta cần chính tệp đó.

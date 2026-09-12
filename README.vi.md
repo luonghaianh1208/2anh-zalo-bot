@@ -70,11 +70,11 @@ Plugin nền tảng của Hermes lại viết bằng **Python**. Nên bản này
 
 Trước đây *có* một bộ não Node dự phòng gọi thẳng LLM. Đã bỏ, vì hai lý do. Nó không bao giờ chạy nên âm thầm mục ruỗng — mấy lỗi nặng nhất của dự án (định tuyến nhóm sai, kiểm chủ nhân sai) đều nằm trong đoạn đó và sống sót nhiều tháng vì không ai đi qua. Nguy hiểm hơn: khi nó *có* chạy thì lại chạy bằng bộ luật khác — Hermes phân quyền theo toolset, còn bộ não Node đọc một tệp JSON và không có tầng phân quyền nào. Hermes rớt là hệ thống lặng lẽ hạ cấp sang bộ luật lỏng hơn, đúng lúc không ai để ý.
 
-**47 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
+**48 công cụ cho agent** — thay cho trang quản trị. Nói bằng lời thay vì bấm nút:
 
 | Nhóm | Công cụ |
 |---|---|
-| Fanpage Facebook | `zalo_fb_pages` `zalo_fb_posts` `zalo_fb_comments` `zalo_fb_draft` `zalo_fb_publish` |
+| Fanpage Facebook | `zalo_fb_pages` `zalo_fb_posts` `zalo_fb_comments` `zalo_fb_draft` `zalo_fb_publish` `zalo_fb_check` |
 | Gửi nội dung | `zalo_send_file` `zalo_send_voice` `zalo_send_sticker` `zalo_send_link` `zalo_forward` |
 | Đọc ngữ cảnh | `zalo_read_history` `zalo_list_groups` `zalo_group_members` `zalo_find_user` `zalo_user_info` `zalo_list_friends` |
 | Riêng của Zalo | `zalo_create_poll` `zalo_poll_detail` `zalo_lock_poll` `zalo_create_note` `zalo_create_reminder` `zalo_list_reminders` `zalo_remove_reminder` `zalo_pin_conversation` `zalo_mute` |
@@ -92,12 +92,12 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 
 ### Hai mức quyền
 
-47 công cụ chia làm ba nhóm, quyết định bằng `ZALO_ALLOWED_USERS` (riêng `zalo_group_history` chỉ tồn tại trong việc hẹn giờ của nhóm):
+48 công cụ chia làm ba nhóm, quyết định bằng `ZALO_ALLOWED_USERS` (riêng `zalo_group_history` chỉ tồn tại trong việc hẹn giờ của nhóm):
 
 | | Chủ nhân | Người khác trong nhóm |
 |---|---|---|
 | Toolset | `hermes-zalo` + `zalo_owner` + `zalo_public` | chỉ `zalo_public` |
-| Số công cụ Zalo | 46 | 15 |
+| Số công cụ Zalo | 47 | 15 |
 | `terminal`, `read_file`, `write_file` | ✅ | ❌ |
 | `browser_*`, `web_search` | ✅ | ❌ |
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
