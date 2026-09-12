@@ -129,7 +129,7 @@ Bọc lại còn bịt được một lỗ hổng: `web_extract` nhận URL tu�
 
 ### Nhãn dán (sticker)
 
-Tin sticker của Zalo không mang chữ cũng không mang ảnh, chỉ có id. Cầu nối tra `getStickersDetail` để lấy nhãn chữ và ảnh tĩnh, nên bot đọc được sticker như một tin bình thường: lịch sử ghi `[Nhãn dán: cười lăn]`, model nhìn được cả hình. Kết quả tra nhớ theo id trong 7 ngày; tra hỏng thì tin vẫn tới, chỉ mất nhãn.
+Tin sticker của Zalo không mang chữ cũng không mang ảnh, chỉ có id. Cầu nối tra `getStickersDetail` để lấy nhãn chữ và ảnh tĩnh, nên bot đọc được sticker như một tin bình thường: lịch sử ghi `[Nhãn dán]` và model nhìn được chính tấm sticker, kể cả chữ vẽ trong đó. Zalo hầu như chỉ trả mã nội bộ ở phần nhãn chữ nên ý nghĩa nằm ở ảnh. Kết quả tra nhớ theo id trong 7 ngày; tra hỏng thì tin vẫn tới, chỉ mất ảnh.
 
 ### Ảnh JPEG XL của Zalo
 

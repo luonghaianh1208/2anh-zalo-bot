@@ -26,6 +26,8 @@ test('nhãn chữ và ảnh tĩnh của sticker', () => {
   assert.equal(stickerText(detail), '[Nhãn dán: cười lăn]');
   assert.equal(stickerText({ text: '  ' }), '[Nhãn dán]');
   assert.equal(stickerText(null), '[Nhãn dán]');
+  // Zalo thường trả mã nội bộ chứ không phải chữ cho người đọc.
+  assert.equal(stickerText({ text: '[^10751.27703^]' }), '[Nhãn dán]');
 
   // Dùng bản PNG tĩnh, không dùng webp động — tầng ảnh chỉ đọc được khung đầu.
   assert.deepEqual(stickerAttachment(detail), {

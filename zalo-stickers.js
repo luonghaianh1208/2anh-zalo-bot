@@ -33,10 +33,15 @@ export function stickerRefOf(msg) {
   };
 }
 
-/** Chữ thay cho tin sticker. Không tra được nhãn thì vẫn nói rõ là có sticker. */
+// Trường `text` của Zalo thường không phải chữ cho người đọc mà là mã nội bộ
+// dạng `[^10751.27703^]` (đo trên sticker thật, 13/9/2026). In mã đó ra thì vô
+// nghĩa với model lẫn người xem lịch sử, nên bỏ — ý nghĩa nằm ở ảnh sticker.
+const CODE_LABEL_RE = /^\[\^[\d.]+\^\]$/;
+
+/** Chữ thay cho tin sticker. Không có nhãn đọc được thì vẫn nói rõ là có sticker. */
 export function stickerText(detail) {
   const label = String(detail?.text ?? '').trim();
-  return label ? `[Nhãn dán: ${label}]` : '[Nhãn dán]';
+  return label && !CODE_LABEL_RE.test(label) ? `[Nhãn dán: ${label}]` : '[Nhãn dán]';
 }
 
 /**

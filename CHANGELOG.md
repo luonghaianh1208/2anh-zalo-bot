@@ -10,7 +10,7 @@ Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
   `{id, catId, type}` nên trước đây rút chữ ra rỗng và bị bỏ ngay tại
   bot-handler — nhìn từ ngoài là bot lờ đi khi có người gửi nhãn dán. Nay cầu
   nối tra `getStickersDetail` để lấy nhãn chữ và ảnh tĩnh, gắn vào khung tin:
-  lịch sử ghi `[Nhãn dán: cười lăn]` thay vì một dòng trống, còn model nhìn
+  lịch sử ghi `[Nhãn dán]` thay vì một dòng trống, còn model nhìn
   được cả hình lẫn chữ vẽ trong sticker. Kết quả tra được nhớ theo id nên một
   tràng sticker chỉ tốn đúng một lượt hỏi mỗi mẫu; tra hỏng thì vẫn báo có
   nhãn dán chứ không bỏ tin.
