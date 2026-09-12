@@ -959,9 +959,33 @@ KB_SKIP_PATTERNS = (
 )
 
 
+def _kb_public_dirs() -> tuple:
+    """Các thư mục cấp 1 được phép lộ ra trong kho. Rỗng nghĩa là cả kho.
+
+    Kho tài liệu thật thường là cả một ổ đĩa nhiều năm dồn lại, trong khi người
+    trong nhóm chỉ cần vài thư mục của năm hiện hành. Khai báo
+    ``ZALO_KB_PUBLIC_DIRS`` (các tên cách nhau bằng dấu phẩy) để đóng phần còn
+    lại. Giới hạn áp cho mọi người, kể cả chủ nhân: danh sách tệp được đệm dùng
+    chung giữa các lượt, nên phạm vi phụ thuộc người hỏi sẽ khiến lượt này thấy
+    kết quả đệm của lượt kia. Chủ nhân cần đọc chỗ khác thì đã có read_file.
+    """
+    try:
+        from agent.secret_scope import UnscopedSecretError, get_secret
+        try:
+            raw = get_secret("ZALO_KB_PUBLIC_DIRS", "")
+        except UnscopedSecretError:
+            raw = os.getenv("ZALO_KB_PUBLIC_DIRS", "")
+    except Exception:
+        raw = os.getenv("ZALO_KB_PUBLIC_DIRS", "")
+    return tuple(part.strip().strip("/").lower() for part in str(raw or "").split(",") if part.strip())
+
+
 def _kb_allowed(rel_posix: str) -> bool:
     """Đường dẫn tương đối này có nên lộ ra cho người hỏi không."""
     parts = rel_posix.split("/")
+    scope = _kb_public_dirs()
+    if scope and (len(parts) < 2 or parts[0].strip().lower() not in scope):
+        return False       # ngoài phạm vi khai báo, kể cả tệp nằm ngay gốc kho
     for part in parts:
         if part.startswith("."):          # .git, .env, .backup, .astro…
             return False
@@ -2651,10 +2675,18 @@ def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Opti
     if _member_may_call(name, args):
         return None
     logger.warning("[zalo] chặn %s — lượt của %s không phải của riêng chủ nhân", name, turn.get("sender_uid"))
+    reason = ("lượt của chủ nhân nhưng có tin người khác chen vào"
+              if turn.get("is_owner") or turn.get("core_tools")
+              else "lượt này do người trong nhóm gửi")
+    # Nói luôn đường đi đúng: model chỉ nhìn thấy công cụ lõi đã bị ghim vào
+    # phiên, còn công cụ Zalo công khai thì nằm sau tool_search — bị chặn mà
+    # không được chỉ chỗ thì nó bỏ cuộc và trả lời "không tra được".
     return {
         "action": "block",
-        "message": (f"Công cụ {name} chỉ dùng được trong lượt của riêng chủ nhân; lượt này có tin "
-                    "của người khác nên bị chặn. Trả lời bằng thông tin đã có, đừng tìm cách khác."),
+        "message": (f"Công cụ {name} chỉ dùng được trong lượt của riêng chủ nhân ({reason}). "
+                    "Cần tra tài liệu thì dùng zalo_kb_list rồi zalo_kb_read, cần gửi tệp thì "
+                    "zalo_send_file, cần xem lại tin cũ thì zalo_read_history — tìm bằng "
+                    "tool_search nếu chưa thấy. Đừng gọi lại công cụ này."),
     }
 
 

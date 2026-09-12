@@ -1,7 +1,7 @@
 name: zalo-tools
 label: Zalo Tools
 kind: standalone
-version: 1.5.0
+version: 1.5.1
 description: >
   Bộ công cụ Zalo cho Hermes Agent — gửi tệp/thoại/sticker, đọc lịch sử
   SQLite, tra web, tạo bình chọn, quản trị nhóm có xác nhận, và sổ hồ sơ

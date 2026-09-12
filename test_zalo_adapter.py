@@ -2045,5 +2045,50 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
         self.assertEqual(self.guard("terminal")["action"], "block")
 
 
+class ZaloKbScopeTest(unittest.IsolatedAsyncioTestCase):
+    """ZALO_KB_PUBLIC_DIRS đóng phần còn lại của kho: kho thật là cả một ổ đĩa
+    nhiều năm, người trong nhóm chỉ được thấy vài thư mục của năm hiện hành."""
+
+    def setUp(self):
+        self.root = tempfile.TemporaryDirectory()
+        base = self.root.name
+        for rel in ("ĐOÀN CNT 26-27/VĂN BẢN PHÁT RA 26-27/21-KH.txt",
+                    "ĐOÀN CNT 23-24/23-24 VĂN BẢN PHÁT RA/01-KH.txt",
+                    "ngay-goc.txt"):
+            path = os.path.join(base, *rel.split("/"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("nội dung " + rel)
+        zalo_tools._KB_CACHE.update(root=None, at=0.0, files=None, skipped=0)
+        self.addCleanup(zalo_tools._KB_CACHE.update, root=None, at=0.0, files=None, skipped=0)
+        self.addCleanup(self.root.cleanup)
+        self.enterContext(patch("agent.secret_scope.get_secret",
+                                side_effect=lambda name, default="": os.environ.get(name, default)))
+        self.enterContext(patch.dict(os.environ, {"ZALO_KB_DIR": base}))
+
+    def paths(self, payload):
+        return sorted(f["path"] for f in json.loads(payload)["result"]["files"])
+
+    async def test_public_dirs_hide_other_years_and_files_at_the_root(self):
+        with patch.dict(os.environ, {"ZALO_KB_PUBLIC_DIRS": "ĐOÀN CNT 26-27, ĐOÀN CNT 25 - 26"}):
+            self.assertEqual(
+                self.paths(await zalo_tools.zalo_kb_list({})),
+                ["ĐOÀN CNT 26-27/VĂN BẢN PHÁT RA 26-27/21-KH.txt"],
+            )
+            # Đoán đúng tên tệp ngoài phạm vi cũng không đọc được.
+            denied = json.loads(await zalo_tools.zalo_kb_read(
+                {"path": "ĐOÀN CNT 23-24/23-24 VĂN BẢN PHÁT RA/01-KH.txt"}))
+            self.assertFalse(denied["success"])
+            allowed = json.loads(await zalo_tools.zalo_kb_read(
+                {"path": "ĐOÀN CNT 26-27/VĂN BẢN PHÁT RA 26-27/21-KH.txt"}))
+            self.assertTrue(allowed["success"])
+            self.assertIn("21-KH.txt", allowed["result"]["content"])
+
+    async def test_no_setting_keeps_the_whole_store_visible(self):
+        zalo_tools._KB_CACHE.update(root=None, at=0.0, files=None, skipped=0)
+        with patch.dict(os.environ, {"ZALO_KB_PUBLIC_DIRS": ""}):
+            self.assertEqual(len(self.paths(await zalo_tools.zalo_kb_list({}))), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

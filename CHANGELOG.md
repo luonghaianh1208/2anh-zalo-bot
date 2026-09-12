@@ -2,6 +2,24 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.5.1] — 2026-09-12
+
+### Thêm
+
+- `ZALO_KB_PUBLIC_DIRS`: giới hạn kho tài liệu ở vài thư mục cấp 1 (tên cách
+  nhau bằng dấu phẩy). Kho thật thường là cả một ổ đĩa nhiều năm, trong khi
+  người trong nhóm chỉ cần thư mục của năm hiện hành. Áp cho cả liệt kê, đọc và
+  gửi tệp; để trống thì mở cả kho như trước.
+
+### Sửa
+
+- **Bị chặn xong bot bỏ cuộc.** Hermes ghim công cụ lõi vào phiên nhóm còn công
+  cụ Zalo nằm sau `tool_search`, nên khi thành viên hỏi tài liệu, model gọi
+  `terminal`/`search_files`, bị chặn rồi trả lời "không tra được" thay vì tra
+  kho. Câu báo khi bị chặn nay nói đúng tình huống và chỉ sang `zalo_kb_list`,
+  `zalo_kb_read`, `zalo_send_file`, `zalo_read_history`; hướng dẫn trình bày
+  cũng dặn tra kho trước khi nghĩ tới công cụ lõi.
+
 ## [1.5.0] — 2026-09-11
 
 ### Thêm

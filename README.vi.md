@@ -131,6 +131,8 @@ Bọc lại còn bịt được một lỗ hổng: `web_extract` nhận URL tu�
 
 Người trong nhóm không có `read_file`, nhưng bot vẫn cần đọc tài liệu để tư vấn sản phẩm. `ZALO_KB_DIR` mở đúng một cánh cửa hẹp: chỉ đọc, chỉ trong thư mục đó.
 
+Kho trỏ vào cả một ổ đĩa nhiều năm thì thêm `ZALO_KB_PUBLIC_DIRS` để chỉ mở vài thư mục cấp 1 (tên cách nhau bằng dấu phẩy, ví dụ `ĐOÀN CNT 25 - 26,ĐOÀN CNT 26-27`). Giới hạn áp cho cả liệt kê, đọc và gửi tệp, và áp cho mọi người kể cả chủ nhân — danh sách tệp được đệm dùng chung giữa các lượt nên phạm vi không thể phụ thuộc người hỏi; chủ nhân cần đọc chỗ khác thì đã có `read_file`.
+
 Ba lớp chặn:
 1. Mọi đường dẫn được ép về đường dẫn thật rồi kiểm tra lại — `../`, `..\`, symlink đều không thoát ra ngoài
 2. Bỏ qua thư mục ẩn (`.git`, `.env`, `.backup`), `node_modules`, `dist`, `build`, và tệp có tên gợi ý dữ liệu riêng tư (`backup`, `order`, `customer`, `secret`…)
