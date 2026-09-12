@@ -2,6 +2,16 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.9.1] — 2026-09-13
+
+### Sửa
+
+- **Tag trơ trong nhóm nay nhìn được tin vừa gửi.** Gửi sticker (hoặc ảnh) rồi
+  tag bot mà không viết gì thêm thì trước đây bot hỏi lại "thầy cần gì ạ?":
+  ngữ cảnh nhóm chỉ được móc ra khi câu hỏi có chữ kiểu "ảnh này", "cái đó".
+  Nay một cái tag không kèm chữ nào được hiểu là "nhìn cái em vừa gửi".
+  Thêm "sticker" và "nhãn dán" vào các từ khoá gợi ngữ cảnh.
+
 ## [1.9.0] — 2026-09-13
 
 ### Thêm

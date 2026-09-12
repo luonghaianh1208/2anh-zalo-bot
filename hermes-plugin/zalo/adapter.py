@@ -212,7 +212,7 @@ DEDUP_WINDOW_SECONDS = 300
 DEDUP_MAX_SIZE = 1000
 GROUP_CONTEXT_LIMIT = 5
 _IMAGE_CONTEXT_RE = re.compile(
-    r"\b(đây|này|kia|ảnh|hình|xe này|như thế|cái này|cái đó|trong ảnh)\b",
+    r"\b(đây|này|kia|ảnh|hình|xe này|như thế|cái này|cái đó|trong ảnh|sticker|nhãn dán)\b",
     re.IGNORECASE,
 )
 
@@ -927,11 +927,22 @@ class ZaloAdapter(BasePlatformAdapter):
 
     def _strip_mention(self, text: str) -> str:
         """Drop the bot's own @name so the agent sees a clean prompt."""
-        cleaned = re.sub(r"@bot\b", "", text, flags=re.IGNORECASE)
+        cleaned = self._without_bot_mention(text)
+        return cleaned.strip() or text
+
+    def _without_bot_mention(self, text: str) -> str:
+        cleaned = re.sub(r"@bot\b", "", text or "", flags=re.IGNORECASE)
         name = (self._self_profile.get("display_name") or "").strip()
         if name:
             cleaned = re.sub(rf"@{re.escape(name)}", "", cleaned, flags=re.IGNORECASE)
-        return cleaned.strip() or text
+        return cleaned
+
+    def _mention_only(self, text: str) -> bool:
+        """Tin chỉ có mỗi cái tag gọi bot, không kèm chữ nào khác."""
+        if not str(text or "").strip():
+            return False
+        rest = self._without_bot_mention(text)
+        return not re.sub(r"[\s@:,.!?\-–—…]+", "", rest)
 
     @staticmethod
     def _dedupe_urls(urls: List[str]) -> List[str]:
@@ -1018,7 +1029,11 @@ class ZaloAdapter(BasePlatformAdapter):
         if current.get("media_urls") or current.get("quote_media_urls"):
             return []
         text = str(current.get("text") or "")
-        if not _IMAGE_CONTEXT_RE.search(text):
+        # Gọi bot bằng một cái tag trơ, không kèm chữ nào, nghĩa là "nhìn cái
+        # em vừa gửi đi" — hay gặp nhất là gửi sticker hoặc ảnh rồi tag ngay.
+        # Thiếu nhánh này thì bot hỏi lại "thầy cần gì ạ?" dù tấm ảnh nằm ngay
+        # trên đầu (đo trong nhóm đệ ruột, 01:11 ngày 13/9/2026).
+        if not (_IMAGE_CONTEXT_RE.search(text) or self._mention_only(text)):
             return []
         # Bỏ chính tin đang hỏi, lấy tối đa 3 tin gần nhất phía trước — đủ cho ảnh
         # + một câu caption, không làm phình prompt nhóm.

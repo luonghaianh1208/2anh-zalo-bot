@@ -196,6 +196,53 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Ngữ cảnh gần nhất trong nhóm Zalo", event.channel_context)
         self.assertIn("đã gửi 1 ảnh", event.channel_context)
 
+    async def test_bare_tag_after_a_sticker_looks_at_what_was_just_sent(self):
+        # Trong nhóm đệ ruột lúc 01:11 ngày 13/9: gửi sticker rồi tag trơ
+        # "@Lăng Tiêu", bot hỏi lại "thầy cần gì ạ?" dù sticker nằm ngay trên.
+        adapter = self.make_adapter()
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+
+        async def fake_cache(url):
+            return "C:/cache/sticker.png"
+
+        with patch.object(zalo_adapter, "cache_image_from_url", side_effect=fake_cache), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message({
+                "type": "message", "id": "s1", "threadId": "g1",
+                "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                "senderUid": "u1", "senderName": "Hải Anh",
+                "text": "[Nhãn dán]", "msgType": "chat.sticker",
+                "mediaUrls": ["https://zalo-api.zadn.vn/api/emoticon/sticker/webpc?eid=27703&size=130"],
+                "attachments": [{
+                    "url": "https://zalo-api.zadn.vn/api/emoticon/sticker/webpc?eid=27703&size=130",
+                    "name": "sticker-27703.png", "mime": "image/png", "kind": "image",
+                }],
+            })
+            await adapter._on_message({
+                "type": "message", "id": "s2", "threadId": "g1",
+                "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                "senderUid": "u1", "senderName": "Hải Anh",
+                "text": "@Lăng Tiêu", "mentions": [{"uid": "bot-uid"}],
+            })
+
+        self.assertEqual(len(handled), 1)
+        self.assertEqual(handled[0].media_urls, ["C:/cache/sticker.png"])
+        self.assertIn("Ngữ cảnh gần nhất trong nhóm Zalo", handled[0].channel_context)
+
+    def test_mention_only_recognizes_a_bare_call(self):
+        adapter = self.make_adapter()
+        self.assertTrue(adapter._mention_only("@Lăng Tiêu"))
+        self.assertTrue(adapter._mention_only("  @Lăng Tiêu  !"))
+        self.assertTrue(adapter._mention_only("@bot"))
+        self.assertFalse(adapter._mention_only("@Lăng Tiêu soạn giúp anh thông báo"))
+        self.assertFalse(adapter._mention_only(""))
+        self.assertFalse(adapter._mention_only("chào cả nhà"))
+
     async def test_quote_image_is_attached_and_reply_context_set(self):
         adapter = self.make_adapter()
         handled = []
