@@ -270,7 +270,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                     "mentions": [{"uid": "bot-uid"}],
                     "quote": {
                         "id": "q2", "authorId": "u1", "authorName": "Liên", "text": "",
-                        "mediaUrls": ["https://photo-stal-17.zdn.vn/gr/jxl/88b9/2aOb"],
+                        "mediaUrls": ["https://photo-stal-17.zdn.vn/gr/heic/88b9/2aOb"],
                     },
                 }
             )
@@ -280,8 +280,97 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.media_urls, [])
         self.assertNotIn("đã được đính kèm", event.channel_context)
         self.assertIn("Không đọc được 1 ảnh", event.channel_context)
-        self.assertIn("JXL", event.channel_context)
+        self.assertIn("HEIC", event.channel_context)
         self.assertIn("gửi lại", event.channel_context)
+
+    async def test_jxl_only_image_is_converted_to_jpeg_instead_of_failing(self):
+        adapter = self.make_adapter()
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+
+        async def fake_download(url):
+            self.assertIn("/jxl/", url)
+            return b"\xff\x0a du lieu jxl"
+
+        with patch.object(zalo_adapter.ZaloAdapter, "_download_attachment", staticmethod(fake_download)), \
+                patch.object(zalo_adapter.ZaloAdapter, "_jxl_to_jpeg", staticmethod(lambda data: b"\xff\xd8\xff jpeg")), \
+                patch.object(zalo_adapter, "cache_image_from_bytes", return_value="C:/cache/converted.jpg"), \
+                patch.object(zalo_adapter, "cache_image_from_url",
+                             side_effect=AssertionError("ảnh JXL không được đi đường tải thẳng")), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message({
+                "type": "message", "id": "m5", "threadId": "g1",
+                "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                "senderUid": "u1", "senderName": "Liên",
+                "text": "@Lăng Tiêu xem ảnh này", "mentions": [{"uid": "bot-uid"}],
+                "msgType": "chat.photo",
+                "mediaUrls": ["https://photo-stal-17.zdn.vn/gr/jxl/88b9/2aOb"],
+            })
+
+        self.assertEqual(len(handled), 1)
+        self.assertEqual(handled[0].media_urls, ["C:/cache/converted.jpg"])
+        self.assertNotIn("Không đọc được", handled[0].channel_context or "")
+
+    async def test_jxl_image_without_decoder_says_what_is_missing(self):
+        adapter = self.make_adapter()
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+
+        def missing_decoder(_data):
+            raise RuntimeError(zalo_adapter._JXL_DECODER_MISSING)
+
+        async def fake_download(url):
+            return b"\xff\x0a du lieu jxl"
+
+        with patch.object(zalo_adapter.ZaloAdapter, "_download_attachment", staticmethod(fake_download)), \
+                patch.object(zalo_adapter.ZaloAdapter, "_jxl_to_jpeg", staticmethod(missing_decoder)), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message({
+                "type": "message", "id": "m6", "threadId": "g1",
+                "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                "senderUid": "u1", "senderName": "Liên",
+                "text": "@Lăng Tiêu xem ảnh này", "mentions": [{"uid": "bot-uid"}],
+                "msgType": "chat.photo",
+                "mediaUrls": ["https://photo-stal-17.zdn.vn/gr/jxl/88b9/2aOb"],
+            })
+
+        self.assertEqual(len(handled), 1)
+        event = handled[0]
+        self.assertEqual(event.media_urls, [])
+        self.assertIn("JPEG XL", event.channel_context)
+        self.assertIn("pillow-jxl-plugin", event.channel_context)
+
+    def test_jxl_to_jpeg_really_decodes_when_the_plugin_is_installed(self):
+        try:
+            import io
+            import pillow_jxl  # noqa: F401
+            from PIL import Image
+        except ImportError:
+            self.skipTest("máy này chưa cài pillow-jxl-plugin")
+
+        buf = io.BytesIO()
+        Image.new("RGB", (24, 16), (200, 30, 30)).save(buf, format="JXL")
+        self.assertTrue(buf.getvalue().startswith(b"\xff\x0a"))
+
+        jpeg = zalo_adapter.ZaloAdapter._jxl_to_jpeg(buf.getvalue())
+        self.assertTrue(jpeg.startswith(b"\xff\xd8\xff"))
+        with Image.open(io.BytesIO(jpeg)) as img:
+            self.assertEqual((img.format, img.size), ("JPEG", (24, 16)))
+
+    def test_is_jxl_reads_both_the_path_and_the_mime(self):
+        self.assertTrue(zalo_adapter._is_jxl("https://photo-stal-17.zdn.vn/gr/jxl/88b9/2aOb"))
+        self.assertTrue(zalo_adapter._is_jxl("https://x/anh.JXL"))
+        self.assertTrue(zalo_adapter._is_jxl("https://x/anh", "image/jxl"))
+        self.assertFalse(zalo_adapter._is_jxl("https://photo-stal-15.zdn.vn/gr/jpg/864/2aO.jpg"))
+        self.assertFalse(zalo_adapter._is_jxl("https://x/jxl-tin-tuc/anh.jpg"))
 
     async def test_pdf_attachment_becomes_a_document_not_an_image(self):
         adapter = self.make_adapter()

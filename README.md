@@ -78,7 +78,7 @@ npm run doctor -- --hermes-home <path-to-Hermes-home>
 
 If Hermes is in a standard location or `HERMES_HOME` is already set, you may omit `--hermes-home`.
 
-The installer creates the sidecar `.env` when missing, generates a private bridge token, installs both Zalo plugins, merges safe defaults without replacing customer values, installs `websockets`, and runs its doctor checks. Repeated installation preserves Zalo sessions, SQLite data, `.env`, and customer configuration.
+The installer creates the sidecar `.env` when missing, generates a private bridge token, installs both Zalo plugins, merges safe defaults without replacing customer values, installs `websockets` plus the optional `pillow-jxl-plugin` (Zalo images that exist only as JPEG XL are converted to JPEG; without it the bot says so instead of guessing), and runs its doctor checks. Repeated installation preserves Zalo sessions, SQLite data, `.env`, and customer configuration.
 
 ### Optional offline Vietnamese voice
 

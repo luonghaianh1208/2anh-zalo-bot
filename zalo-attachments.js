@@ -38,7 +38,8 @@ function extensionOf(value) {
  * rồi báo "chưa xem được hình" trong khi bản JPG nằm ngay cùng tin nhắn.
  *
  * Gom theo mã thư mục (phần sau `/gr/<định dạng>/`) rồi bỏ bản JXL khi tấm đó
- * đã có bản khác. Ảnh chỉ có mỗi bản JXL thì vẫn giữ, để báo lỗi cho đúng.
+ * đã có bản khác. Ảnh chỉ có mỗi bản JXL thì vẫn giữ — phía adapter sẽ tải về
+ * rồi chuyển sang JPEG, hết đường chuyển mới báo lỗi.
  */
 export function preferReadableFormats(urls) {
   const info = urls.map((url) => {

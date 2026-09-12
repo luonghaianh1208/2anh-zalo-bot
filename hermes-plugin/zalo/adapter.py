@@ -78,6 +78,7 @@ from gateway.platforms.base import (
     MessageEvent,
     MessageType,
     SendResult,
+    cache_image_from_bytes,
     cache_image_from_url,
     cache_media_bytes,
     validate_inbound_media_size,
@@ -239,6 +240,16 @@ def _is_media_msg_type(msg_type: Any) -> bool:
 
 _UNSUPPORTED_IMAGE_FORMATS = ("jxl", "heic", "heif", "avif", "tiff", "tif")
 
+_JXL_DECODER_MISSING = "thiếu bộ giải mã JPEG XL"
+
+
+def _is_jxl(url: str, mime: str = "") -> bool:
+    """Ảnh này có phải JPEG XL không — Zalo để lộ ở MIME hoặc ngay trong đường dẫn."""
+    if mime.lower().replace("-", "") in ("image/jxl", "image/jpegxl"):
+        return True
+    path = urlsplit(url).path.lower()
+    return "/jxl/" in path or path.endswith(".jxl")
+
 
 def _image_failure_reason(url: str, exc: BaseException) -> str:
     """Diễn giải vì sao không tải được ảnh, để bot nói thật với người gửi.
@@ -249,6 +260,8 @@ def _image_failure_reason(url: str, exc: BaseException) -> str:
     text = str(exc)
     if "too large" in text:
         return "ảnh quá dung lượng cho phép"
+    if _JXL_DECODER_MISSING in text:
+        return "ảnh dạng JPEG XL, máy chủ đang thiếu gói pillow-jxl-plugin để chuyển sang JPG"
     if "non-image" in text:
         path = urlsplit(url).path.lower()
         for fmt in _UNSUPPORTED_IMAGE_FORMATS:
@@ -965,7 +978,8 @@ class ZaloAdapter(BasePlatformAdapter):
         Zalo đưa cùng một ảnh ở hai đường dẫn: ``/gr/jpg/<mã>/<id>.jpg`` mở được
         và ``/gr/jxl/<mã>/<id>`` thì Hermes không mở nổi. Trước đây bot vớ phải
         bản JXL rồi báo "chưa xem được hình" trong khi bản JPG nằm ngay cùng tin.
-        Ảnh chỉ có mỗi bản JXL thì vẫn giữ, để còn báo lỗi cho đúng.
+        Ảnh chỉ có mỗi bản JXL thì vẫn giữ: :meth:`_cache_jxl_as_jpeg` chuyển nó
+        sang JPEG, hết đường chuyển mới báo lỗi.
         """
         parsed = []
         for url in urls:
@@ -1054,6 +1068,34 @@ class ZaloAdapter(BasePlatformAdapter):
                     validate_inbound_media_size(len(body), media_type="tệp đính kèm")
         return bytes(body)
 
+    @staticmethod
+    def _jxl_to_jpeg(data: bytes) -> bytes:
+        """Giải mã JPEG XL rồi xuất lại JPEG. Hàm chặn, gọi qua luồng riêng."""
+        import io
+
+        try:
+            import pillow_jxl  # noqa: F401  — nạp vào là Pillow mở được JXL
+        except ImportError as exc:
+            raise RuntimeError(_JXL_DECODER_MISSING) from exc
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as img:
+            frame = img if img.mode in ("RGB", "L") else img.convert("RGB")
+            out = io.BytesIO()
+            frame.save(out, format="JPEG", quality=88)
+        return out.getvalue()
+
+    async def _cache_jxl_as_jpeg(self, url: str) -> str:
+        """Tải ảnh JPEG XL về rồi lưu cache dưới dạng JPEG.
+
+        Zalo thường kèm sẵn bản ``/gr/jpg/`` cho mỗi tấm ảnh và
+        :meth:`_prefer_readable_formats` đã ưu tiên bản đó. Tấm nào chỉ có mỗi
+        bản JXL thì trước đây Hermes chịu, báo "chưa xem được hình"; chuyển tại
+        chỗ thì bot vẫn nhìn được ảnh.
+        """
+        data = await self._download_attachment(url)
+        return cache_image_from_bytes(await asyncio.to_thread(self._jxl_to_jpeg, data))
+
     async def _cache_attachments(
         self, items: List[Dict[str, Any]]
     ) -> tuple[List[str], List[str], List[str], List[Dict[str, str]]]:
@@ -1074,7 +1116,8 @@ class ZaloAdapter(BasePlatformAdapter):
             mime = str(item.get("mime") or "")
             try:
                 if mime.startswith("image/") or (not mime and not name):
-                    paths.append(await cache_image_from_url(url))
+                    paths.append(await self._cache_jxl_as_jpeg(url) if _is_jxl(url, mime)
+                                 else await cache_image_from_url(url))
                     media_types.append("image/jpeg")
                     continue
                 cached = cache_media_bytes(

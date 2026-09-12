@@ -351,6 +351,22 @@ function ensureWebsockets(repoRoot, hermesHome, { skipPython = false } = {}) {
   return { python };
 }
 
+/**
+ * Cài bộ giải mã JPEG XL cho ảnh Zalo. Không có thì bot vẫn chạy, chỉ báo với
+ * người gửi là chưa đọc được ảnh dạng đó — nên hỏng ở đây không chặn cài đặt.
+ */
+function ensureJxlDecoder(repoRoot, hermesHome, { skipPython = false } = {}) {
+  if (skipPython) return { skipped: true };
+  const python = pythonPath(repoRoot);
+  if (!python) return { skipped: true };
+  if (spawnSync(python, ['-c', 'import pillow_jxl'], { encoding: 'utf8' }).status === 0) return { python };
+  const uv = join(hermesHome, 'bin', platform() === 'win32' ? 'uv.exe' : 'uv');
+  const install = existsSync(uv)
+    ? spawnSync(uv, ['pip', 'install', '--python', python, 'pillow-jxl-plugin'], { encoding: 'utf8' })
+    : spawnSync(python, ['-m', 'pip', 'install', 'pillow-jxl-plugin'], { encoding: 'utf8' });
+  return { python, ok: install.status === 0 };
+}
+
 function styleGuidePath(sidecarRoot) {
   return join(resolve(sidecarRoot), 'hermes-plugin', 'zalo-style-guide.md');
 }
@@ -429,6 +445,12 @@ export function doctorHermes({
     const python = pythonPath(layout.repoRoot);
     const probe = python ? commandProbe(python, ['-c', 'import websockets'], { encoding: 'utf8' }) : null;
     add('python-websockets', Boolean(python && probe?.status === 0));
+    // Bộ giải mã JPEG XL chỉ là tuỳ chọn: thiếu thì bot vẫn chạy, chỉ báo với
+    // người gửi là chưa đọc được ảnh dạng đó. Không đánh hỏng cả bản chẩn đoán.
+    const jxl = python ? commandProbe(python, ['-c', 'import pillow_jxl'], { encoding: 'utf8' }) : null;
+    add('python-pillow-jxl', true, jxl?.status === 0
+      ? 'có — ảnh JPEG XL được chuyển sang JPG'
+      : 'thiếu — ảnh chỉ có bản JPEG XL sẽ báo lỗi; cài bằng: uv pip install --python <venv Hermes> pillow-jxl-plugin');
   }
   return { ok: checks.every((check) => check.ok), checks };
 }
@@ -467,6 +489,7 @@ export async function installHermes({
     atomicWriteText(layout.configPath, nextConfig);
   }
   ensureWebsockets(layout.repoRoot, layout.home, { skipPython });
+  ensureJxlDecoder(layout.repoRoot, layout.home, { skipPython });
   const diagnosis = doctorHermes({
     sidecarRoot: root,
     hermesHome: layout.home,

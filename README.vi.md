@@ -127,6 +127,16 @@ Hai công cụ web là **bản bọc** của `web_search`/`web_extract` chứ kh
 
 Bọc lại còn bịt được một lỗ hổng: `web_extract` nhận URL tuỳ ý, nên nếu để nguyên thì `http://127.0.0.1:20128/v1/models` hay `file:///…/.env` là đủ để đọc nội bộ qua đường Internet. Bản bọc chỉ cho `http`/`https` trỏ ra địa chỉ công cộng — chặn loopback, dải mạng riêng, link-local, và cả `169.254.169.254` (địa chỉ metadata của máy chủ đám mây).
 
+### Ảnh JPEG XL của Zalo
+
+Zalo gửi kèm mỗi ảnh hai đường dẫn: `/gr/jpg/…` đọc được và `/gr/jxl/…` là JPEG XL. Adapter luôn ưu tiên bản đọc được; ảnh chỉ có mỗi bản JXL thì nó tự chuyển sang JPEG — cần gói tuỳ chọn:
+
+```bash
+uv pip install --python <venv của Hermes>/bin/python pillow-jxl-plugin
+```
+
+Thiếu gói này thì bot không chết, chỉ báo đúng lý do "định dạng JXL chưa hỗ trợ đọc" và nhờ người gửi gửi lại dạng JPG. Nâng cấp Hermes có thể dọn mất gói, cài lại bằng đúng lệnh trên.
+
 ### Kho tài liệu tư vấn
 
 Người trong nhóm không có `read_file`, nhưng bot vẫn cần đọc tài liệu để tư vấn sản phẩm. `ZALO_KB_DIR` mở đúng một cánh cửa hẹp: chỉ đọc, chỉ trong thư mục đó.
@@ -236,7 +246,7 @@ Bộ cài sẽ tạo môi trường Python riêng tại `<HERMES_HOME>/tts/.venv
 
 Nếu không có cờ này, bộ cài không tải, không cấu hình và không thay đổi TTS hiện có.
 
-Nếu Hermes nằm ở vị trí chuẩn hoặc biến `HERMES_HOME` đã có, có thể bỏ tham số `--hermes-home`. Bộ cài sẽ tạo `.env` nếu thiếu, sinh khóa bí mật cho bridge, cài đủ `zalo-platform` và `zalo-tools`, cập nhật các khóa Zalo còn thiếu trong `config.yaml`, cài `websockets` vào Python của Hermes rồi tự chạy kiểm tra. Chạy lại cùng lệnh để nâng cấp; cấu hình, phiên Zalo và SQLite được giữ nguyên.
+Nếu Hermes nằm ở vị trí chuẩn hoặc biến `HERMES_HOME` đã có, có thể bỏ tham số `--hermes-home`. Bộ cài sẽ tạo `.env` nếu thiếu, sinh khóa bí mật cho bridge, cài đủ `zalo-platform` và `zalo-tools`, cập nhật các khóa Zalo còn thiếu trong `config.yaml`, cài `websockets` và `pillow-jxl-plugin` vào Python của Hermes rồi tự chạy kiểm tra. Chạy lại cùng lệnh để nâng cấp; cấu hình, phiên Zalo và SQLite được giữ nguyên.
 
 Sau khi `doctor` đạt, chạy sidecar:
 

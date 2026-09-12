@@ -2,6 +2,15 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.8.0] — 2026-09-12
+
+### Thêm
+
+- **Tự chuyển ảnh JPEG XL sang JPEG.** Ảnh nào Zalo chỉ có bản `/gr/jxl/` thì
+  adapter tải về, giải mã rồi lưu thành JPEG để model xem được, thay vì báo lỗi.
+  Cần gói tuỳ chọn `pillow-jxl-plugin` (có wheel dựng sẵn cho Windows và Linux);
+  thiếu gói thì vẫn báo đúng lý do và nhờ gửi lại dạng JPG như cũ.
+
 ## [1.7.1] — 2026-09-12
 
 ### Sửa
