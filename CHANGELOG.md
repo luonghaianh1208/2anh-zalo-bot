@@ -2,6 +2,16 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.7.1] — 2026-09-12
+
+### Sửa
+
+- **Ảnh Zalo bị từ chối vì "định dạng JXL".** Cùng một tấm ảnh, Zalo đưa hai
+  đường dẫn: `/gr/jpg/<mã>/<id>.jpg` mở được và `/gr/jxl/<mã>/<id>` là JPEG XL
+  mà Hermes không mở nổi. Bot vớ phải bản JXL rồi báo "chưa xem được hình" trong
+  khi bản JPG nằm ngay cùng tin nhắn. Nay gom theo mã ảnh và bỏ bản JXL khi tấm
+  đó còn bản đọc được; ảnh chỉ có mỗi bản JXL thì vẫn báo đúng lý do như cũ.
+
 ## [1.7.0] — 2026-09-12
 
 ### Thêm

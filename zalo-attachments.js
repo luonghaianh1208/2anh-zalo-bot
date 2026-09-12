@@ -32,6 +32,27 @@ function extensionOf(value) {
   return match ? `.${match[1].toLowerCase()}` : '';
 }
 
+/**
+ * Cùng một tấm ảnh, Zalo đưa hai đường dẫn: `/gr/jpg/<mã>/<id>.jpg` đọc được và
+ * `/gr/jxl/<mã>/<id>` là JPEG XL mà Hermes không mở được. Bot vớ phải bản JXL
+ * rồi báo "chưa xem được hình" trong khi bản JPG nằm ngay cùng tin nhắn.
+ *
+ * Gom theo mã thư mục (phần sau `/gr/<định dạng>/`) rồi bỏ bản JXL khi tấm đó
+ * đã có bản khác. Ảnh chỉ có mỗi bản JXL thì vẫn giữ, để báo lỗi cho đúng.
+ */
+export function preferReadableFormats(urls) {
+  const info = urls.map((url) => {
+    const m = /\/gr\/([a-z0-9]+)\/([^/]+)\//i.exec(String(url));
+    return { url, format: (m?.[1] || '').toLowerCase(), group: m?.[2] || '' };
+  });
+  const groupsWithReadable = new Set(
+    info.filter((x) => x.group && x.format && x.format !== 'jxl').map((x) => x.group),
+  );
+  return info
+    .filter((x) => !(x.format === 'jxl' && groupsWithReadable.has(x.group)))
+    .map((x) => x.url);
+}
+
 function kindOf(mime) {
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('video/')) return 'video';
@@ -91,6 +112,7 @@ export function classifyAttachments(msg, urls) {
   const href = content && typeof content === 'object' ? String(content.href ?? '') : '';
 
   if (!hasRealMedia(msgType)) return [];
+  urls = preferReadableFormats(urls);
 
   if (isFileMessage(msgType)) {
     // Chỉ giữ chính tệp, bỏ ảnh thu nhỏ đi kèm.

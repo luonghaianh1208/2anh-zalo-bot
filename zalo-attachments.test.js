@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyAttachments, guessAttachment, hasRealMedia, isFileMessage } from './zalo-attachments.js';
+import {
+  classifyAttachments, guessAttachment, hasRealMedia, isFileMessage, preferReadableFormats,
+} from './zalo-attachments.js';
 
 test('tin gửi tệp chỉ giữ chính tệp, kèm tên và MIME thật', () => {
   const msg = {
@@ -54,6 +56,20 @@ test('thẻ chia sẻ link không phải media: để nguyên link trong chữ',
   // không thì reply vào ảnh sẽ mất ảnh.
   assert.equal(hasRealMedia(36), true);
   assert.equal(hasRealMedia(''), true);
+});
+
+test('cùng một ảnh có cả bản jpg lẫn jxl thì bỏ bản jxl', () => {
+  const jpg = 'https://photo-stal-15.zdn.vn/gr/jpg/864467dcd9f304ad5de2/2aOboQy9iRFImRnljg9Z.jpg';
+  const jxl = 'https://photo-stal-15.zdn.vn/gr/jxl/864467dcd9f304ad5de2/2aOboQy9iRF';
+  const khac = 'https://photo-stal-31.zdn.vn/gr/jxl/ce69330fed20307e6931/2aOboQy9kh4';
+
+  // Ảnh thứ hai chỉ có bản jxl — vẫn giữ để còn báo đúng lý do không đọc được.
+  assert.deepEqual(preferReadableFormats([jxl, jpg, khac]), [jpg, khac]);
+  assert.deepEqual(preferReadableFormats([jpg]), [jpg]);
+  assert.deepEqual(preferReadableFormats([]), []);
+
+  const msg = { data: { msgType: 'chat.photo', content: { href: jxl, thumb: jpg } } };
+  assert.deepEqual(classifyAttachments(msg, [jxl, jpg]).map((x) => x.url), [jpg]);
 });
 
 test('đoán theo đuôi tệp: bảng tính, ảnh, tệp lạ', () => {

@@ -956,7 +956,25 @@ class ZaloAdapter(BasePlatformAdapter):
 
         for root in roots:
             walk(root)
-        return self._dedupe_urls(urls)
+        return self._prefer_readable_formats(self._dedupe_urls(urls))
+
+    @staticmethod
+    def _prefer_readable_formats(urls: List[str]) -> List[str]:
+        """Bỏ bản JPEG XL khi chính tấm ảnh đó còn bản đọc được.
+
+        Zalo đưa cùng một ảnh ở hai đường dẫn: ``/gr/jpg/<mã>/<id>.jpg`` mở được
+        và ``/gr/jxl/<mã>/<id>`` thì Hermes không mở nổi. Trước đây bot vớ phải
+        bản JXL rồi báo "chưa xem được hình" trong khi bản JPG nằm ngay cùng tin.
+        Ảnh chỉ có mỗi bản JXL thì vẫn giữ, để còn báo lỗi cho đúng.
+        """
+        parsed = []
+        for url in urls:
+            found = re.search(r"/gr/([A-Za-z0-9]+)/([^/]+)/", url)
+            parsed.append((url, (found.group(1).lower() if found else ""),
+                           found.group(2) if found else ""))
+        readable_groups = {group for _u, fmt, group in parsed if group and fmt and fmt != "jxl"}
+        return [url for url, fmt, group in parsed
+                if not (fmt == "jxl" and group in readable_groups)]
 
     def _remember_group_message(self, thread_id: str, entry: Dict[str, Any]) -> None:
         bucket = self._recent_group_messages.get(thread_id)
