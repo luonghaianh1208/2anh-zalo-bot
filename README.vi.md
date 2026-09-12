@@ -127,6 +127,10 @@ Hai công cụ web là **bản bọc** của `web_search`/`web_extract` chứ kh
 
 Bọc lại còn bịt được một lỗ hổng: `web_extract` nhận URL tuỳ ý, nên nếu để nguyên thì `http://127.0.0.1:20128/v1/models` hay `file:///…/.env` là đủ để đọc nội bộ qua đường Internet. Bản bọc chỉ cho `http`/`https` trỏ ra địa chỉ công cộng — chặn loopback, dải mạng riêng, link-local, và cả `169.254.169.254` (địa chỉ metadata của máy chủ đám mây).
 
+### Nhãn dán (sticker)
+
+Tin sticker của Zalo không mang chữ cũng không mang ảnh, chỉ có id. Cầu nối tra `getStickersDetail` để lấy nhãn chữ và ảnh tĩnh, nên bot đọc được sticker như một tin bình thường: lịch sử ghi `[Nhãn dán: cười lăn]`, model nhìn được cả hình. Kết quả tra nhớ theo id trong 7 ngày; tra hỏng thì tin vẫn tới, chỉ mất nhãn.
+
 ### Ảnh JPEG XL của Zalo
 
 Zalo gửi kèm mỗi ảnh hai đường dẫn: `/gr/jpg/…` đọc được và `/gr/jxl/…` là JPEG XL. Adapter luôn ưu tiên bản đọc được; ảnh chỉ có mỗi bản JXL thì nó tự chuyển sang JPEG — cần gói tuỳ chọn:

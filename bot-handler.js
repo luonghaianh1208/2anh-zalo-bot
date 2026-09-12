@@ -3,6 +3,7 @@ import {
   sendSystemNotice,
 } from './hermes-bridge.js';
 import { ThreadType } from 'zca-js';
+import { createStickerDirectory, enrichSticker } from './zalo-stickers.js';
 
 /**
  * Định tuyến tin nhắn Zalo sang Hermes Agent.
@@ -59,8 +60,12 @@ export function setupBotListener(api, profile = null, { health = null, restartDe
   let restartTimer = null;
   let restartAttempt = 0;
 
+  const stickers = createStickerDirectory({
+    fetchDetail: (id) => api.getStickersDetail(id),
+  });
+
   const onMessage = (msg) => {
-    handleIncomingMessage(api, msg).catch((err) => {
+    handleIncomingMessage(api, msg, stickers).catch((err) => {
       console.error('[bot] lỗi khi xử lý tin nhắn:', err?.message || err);
     });
   };
@@ -143,7 +148,10 @@ function isAddressedToBot(msg, isGroup, senderUid) {
   return selfUid ? mentions.some((m) => String(m?.uid ?? '') === selfUid) : false;
 }
 
-async function handleIncomingMessage(api, msg) {
+async function handleIncomingMessage(api, msg, stickers = null) {
+  // Tra nhãn dán trước khi lưu: lịch sử ghi "[Nhãn dán: cười]" thay vì một
+  // dòng trống, và các tầng sau không phải biết gì thêm.
+  await enrichSticker(msg, stickers);
   rememberZaloMessage(msg);
   if (msg.isSelf) return;
 

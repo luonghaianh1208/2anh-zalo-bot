@@ -2,6 +2,26 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.9.0] — 2026-09-13
+
+### Thêm
+
+- **Bot đọc được sticker.** Tin `chat.sticker` của Zalo chỉ có ba con số
+  `{id, catId, type}` nên trước đây rút chữ ra rỗng và bị bỏ ngay tại
+  bot-handler — nhìn từ ngoài là bot lờ đi khi có người gửi nhãn dán. Nay cầu
+  nối tra `getStickersDetail` để lấy nhãn chữ và ảnh tĩnh, gắn vào khung tin:
+  lịch sử ghi `[Nhãn dán: cười lăn]` thay vì một dòng trống, còn model nhìn
+  được cả hình lẫn chữ vẽ trong sticker. Kết quả tra được nhớ theo id nên một
+  tràng sticker chỉ tốn đúng một lượt hỏi mỗi mẫu; tra hỏng thì vẫn báo có
+  nhãn dán chứ không bỏ tin.
+- `getStickersDetail` vào nhóm phương thức đọc công khai của cầu nối.
+
+### Sửa
+
+- Adapter tin danh sách đính kèm do cầu nối phân loại, thay vì loại bỏ mọi tin
+  có kiểu nằm trong danh sách "không phải media". Danh sách đó sinh ra để chặn
+  việc *đoán* URL từ thẻ chia sẻ link, nhưng nó chặn nhầm cả ảnh sticker.
+
 ## [1.8.0] — 2026-09-12
 
 ### Thêm

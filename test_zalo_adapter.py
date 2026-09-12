@@ -365,6 +365,49 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         with Image.open(io.BytesIO(jpeg)) as img:
             self.assertEqual((img.format, img.size), ("JPEG", (24, 16)))
 
+    async def test_sticker_image_from_the_bridge_is_attached(self):
+        adapter = self.make_adapter()
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+
+        async def fake_cache(url):
+            return f"C:/cache/{url.rsplit('/', 1)[-1]}"
+
+        with patch.object(zalo_adapter, "cache_image_from_url", side_effect=fake_cache), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message({
+                "type": "message", "id": "st1", "threadId": "g1",
+                "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                "senderUid": "u1", "senderName": "Trang",
+                "text": "[Nhãn dán: cười lăn]", "mentions": [{"uid": "bot-uid"}],
+                "msgType": "chat.sticker",
+                "mediaUrls": ["https://zalo.vn/sticker/4001.png"],
+                "attachments": [{
+                    "url": "https://zalo.vn/sticker/4001.png",
+                    "name": "sticker-4001.png", "mime": "image/png", "kind": "image",
+                }],
+            })
+
+        self.assertEqual(len(handled), 1)
+        self.assertEqual(handled[0].media_urls, ["C:/cache/4001.png"])
+        self.assertIn("[Nhãn dán: cười lăn]", handled[0].text)
+
+    def test_link_cards_stay_blocked_while_classified_attachments_pass(self):
+        # Danh sách loại trừ vẫn chặn việc đoán URL từ thẻ chia sẻ link…
+        self.assertFalse(zalo_adapter._frame_carries_media(
+            {"msgType": "chat.recommended", "mediaUrls": ["https://vt.tiktok.com/abc"]}))
+        self.assertFalse(zalo_adapter._frame_carries_media(
+            {"msgType": "chat.sticker", "attachments": []}))
+        # …nhưng cầu nối đã phân loại sẵn thì đó là khẳng định, không phải đoán.
+        self.assertTrue(zalo_adapter._frame_carries_media(
+            {"msgType": "chat.sticker",
+             "attachments": [{"url": "https://zalo.vn/sticker/1.png", "mime": "image/png"}]}))
+        self.assertTrue(zalo_adapter._frame_carries_media({"msgType": "chat.photo"}))
+
     def test_is_jxl_reads_both_the_path_and_the_mime(self):
         self.assertTrue(zalo_adapter._is_jxl("https://photo-stal-17.zdn.vn/gr/jxl/88b9/2aOb"))
         self.assertTrue(zalo_adapter._is_jxl("https://x/anh.JXL"))

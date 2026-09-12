@@ -1009,3 +1009,50 @@ test('Hermes-unavailable system notice is audited outside the WebSocket command 
     stopHermesBridge();
   }
 });
+
+test('tin sticker đã tra nhãn đi sang Hermes thành chữ kèm ảnh nhãn dán', async (t) => {
+  const server = startHermesBridge({ api: {}, profile: { user_id: 'bot-uid' }, port: 0, store: testStore(t) });
+  await new Promise((resolve) => server.once('listening', resolve));
+
+  const { port } = server.address();
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    await hello;
+
+    const incoming = onceMessage(ws, (msg) => msg.type === 'message');
+    const { forwardToHermes } = await import('./hermes-bridge.js');
+    const { createStickerDirectory, enrichSticker } = await import('./zalo-stickers.js');
+    const frame = {
+      threadId: 'g1',
+      type: 1,
+      data: {
+        msgId: 'st1', cliMsgId: 'c-st1', uidFrom: 'u1', dName: 'Trang',
+        msgType: 'chat.sticker',
+        content: { id: 4001, catId: 10, type: 7 },
+        ts: 123,
+      },
+    };
+    await enrichSticker(frame, createStickerDirectory({
+      fetchDetail: () => [{ id: 4001, text: 'cười lăn', stickerUrl: 'https://zalo.vn/sticker/4001.png' }],
+    }));
+    forwardToHermes(frame);
+    const payload = await incoming;
+
+    // Trước đây tin sticker sang Hermes rỗng tuếch nên bot không biết có gì.
+    assert.equal(payload.text, '[Nhãn dán: cười lăn]');
+    assert.deepEqual(payload.mediaUrls, ['https://zalo.vn/sticker/4001.png']);
+    assert.deepEqual(payload.mediaTypes, ['image/png']);
+    assert.deepEqual(payload.attachments, [{
+      url: 'https://zalo.vn/sticker/4001.png', name: 'sticker-4001.png', mime: 'image/png', kind: 'image',
+    }]);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});

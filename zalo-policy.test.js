@@ -114,3 +114,12 @@ test('ping is the only command exempt from authorization', () => {
     allowed: true, role: 'system', code: 'allowed', category: 'health',
   });
 });
+
+test('tra chi tiết nhãn dán là quyền đọc công khai', () => {
+  // Bot cần tra ngược id sticker để biết người ta vừa gửi cái gì; đây là đọc
+  // thuần, không gắn với hội thoại nào nên không cần cùng luồng.
+  assert.deepEqual(
+    authorizeBridgeCommand({ type: 'invoke', method: 'getStickersDetail', args: [4001], auth: publicAuth }, policyOptions),
+    { allowed: true, role: 'public', code: 'allowed', category: 'read' },
+  );
+});

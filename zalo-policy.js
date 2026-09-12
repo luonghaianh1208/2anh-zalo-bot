@@ -1,5 +1,5 @@
 const PUBLIC_READ_METHODS = new Set([
-  'searchSticker', 'getListReminder',
+  'searchSticker', 'getStickersDetail', 'getListReminder',
 ]);
 
 // getGroupMembersInfo tra hồ sơ theo ID thành viên bất kỳ, không gắn với

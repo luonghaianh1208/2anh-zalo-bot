@@ -524,6 +524,10 @@ export function stopHermesBridge() {
  * lấy một dòng log để lần ra.
  */
 export function extractText(msg) {
+  // Sticker đã tra được nhãn thì nhãn chính là nội dung tin (xem zalo-stickers.js).
+  const sticker = msg?.data?.__sticker;
+  if (sticker?.text) return sticker.text;
+
   const c = msg?.data?.content;
   if (typeof c === 'string') return c;
   if (!c || typeof c !== 'object') return '';
@@ -614,7 +618,10 @@ export function forwardToHermes(msg) {
   activeHealth?.markInbound();
 
   const mediaUrls = extractMediaUrls(msg);
-  const attachments = classifyAttachments(msg, mediaUrls);
+  // Tin sticker không mang URL nào trong nội dung; ảnh của nó là do tra nhãn
+  // mà có, nên lấy thẳng từ đó thay vì đoán từ khung tin.
+  const sticker = msg?.data?.__sticker;
+  const attachments = sticker?.attachment ? [sticker.attachment] : classifyAttachments(msg, mediaUrls);
   const quote = extractQuote(msg);
   const payload = {
     type: 'message',

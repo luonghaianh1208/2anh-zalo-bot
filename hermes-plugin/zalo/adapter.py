@@ -238,6 +238,22 @@ def _is_media_msg_type(msg_type: Any) -> bool:
     return not _NON_MEDIA_MSG_TYPE_RE.search(str(msg_type or ""))
 
 
+def _frame_carries_media(frame: Dict[str, Any]) -> bool:
+    """Khung tin này có tệp để tải không.
+
+    Danh sách loại trừ ở trên chỉ để chặn việc *đoán* URL từ tin không phải
+    media. Khi cầu nối đã phân loại sẵn tệp đính kèm thì đó là lời khẳng định,
+    không phải phỏng đoán — ví dụ sticker: kiểu tin là ``chat.sticker`` nhưng
+    ảnh nhãn dán do cầu nối tra ra và gửi kèm (xem zalo-stickers.js).
+    """
+    items = frame.get("attachments")
+    if isinstance(items, list) and any(
+        isinstance(item, dict) and item.get("url") for item in items
+    ):
+        return True
+    return _is_media_msg_type(frame.get("msgType"))
+
+
 _UNSUPPORTED_IMAGE_FORMATS = ("jxl", "heic", "heif", "avif", "tiff", "tif")
 
 _JXL_DECODER_MISSING = "thiếu bộ giải mã JPEG XL"
@@ -616,10 +632,10 @@ class ZaloAdapter(BasePlatformAdapter):
         text = (frame.get("text") or "").strip()
         # Chỉ nhặt URL khi tin thật sự có tệp đính kèm: thẻ chia sẻ link cũng có
         # href và ảnh thu nhỏ, nhặt luôn thì link bị tải về như ảnh.
-        media_urls = self._extract_media_urls(frame) if _is_media_msg_type(frame.get("msgType")) else []
+        media_urls = self._extract_media_urls(frame) if _frame_carries_media(frame) else []
         quote = frame.get("quote") if isinstance(frame.get("quote"), dict) else None
         quote_media_urls = (
-            self._extract_media_urls(quote) if quote and _is_media_msg_type(quote.get("msgType")) else []
+            self._extract_media_urls(quote) if quote and _frame_carries_media(quote) else []
         )
 
         msg_id = str(frame.get("id") or "")
