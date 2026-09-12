@@ -2,6 +2,15 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.5.2] — 2026-09-12
+
+### Sửa
+
+- **`zalo_kb_list` che mất phần lớn kho khi kho lớn.** Kho 1378 tệp thì 200 tệp
+  đầu rơi hết vào một thư mục, agent tưởng kho chỉ có chừng đó. Kết quả nay kèm
+  `folders` (thư mục cấp 1 và số tệp) để agent biết còn nhánh nào mà thu hẹp
+  `query`.
+
 ## [1.5.1] — 2026-09-12
 
 ### Thêm

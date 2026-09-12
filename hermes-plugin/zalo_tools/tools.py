@@ -1085,8 +1085,17 @@ async def zalo_kb_list(args: Dict[str, Any], **_kw) -> str:
     shown = files[:200]
     payload = {"root": root.name or str(root), "files": shown, "count": total}
     if total > len(shown):
-        payload["note"] = (f"còn {total - len(shown)} tệp nữa — thu hẹp bằng "
-                           f"tham số `query` để tìm đúng thứ cần")
+        # Kho lớn thì 200 tệp đầu thường rơi hết vào một thư mục, khiến agent
+        # tưởng kho chỉ có chừng đó. Kèm bảng thư mục cấp 1 để nó biết còn
+        # những nhánh nào mà thu hẹp `query` cho đúng.
+        folders: Dict[str, int] = {}
+        for item in files:
+            head = str(item.get("path", "")).split("/")[0]
+            if head:
+                folders[head] = folders.get(head, 0) + 1
+        payload["folders"] = dict(sorted(folders.items(), key=lambda kv: -kv[1])[:30])
+        payload["note"] = (f"chỉ hiện {len(shown)}/{total} tệp — xem `folders` rồi thu hẹp bằng "
+                           f"tham số `query` (tên thư mục hoặc tên tệp) để tìm đúng thứ cần")
     if skipped:
         payload["skipped"] = skipped
     return _ok(payload)

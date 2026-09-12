@@ -2084,6 +2084,24 @@ class ZaloKbScopeTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(allowed["success"])
             self.assertIn("21-KH.txt", allowed["result"]["content"])
 
+    async def test_large_store_lists_top_level_folders_so_the_agent_can_narrow_down(self):
+        big = os.path.join(self.root.name, "ĐOÀN CNT 24-25")
+        os.makedirs(big, exist_ok=True)
+        for i in range(205):
+            with open(os.path.join(big, f"tep-{i:03d}.txt"), "w", encoding="utf-8") as fh:
+                fh.write("x")
+        zalo_tools._KB_CACHE.update(root=None, at=0.0, files=None, skipped=0)
+
+        with patch.dict(os.environ, {"ZALO_KB_PUBLIC_DIRS": ""}):
+            payload = json.loads(await zalo_tools.zalo_kb_list({}))["result"]
+
+        self.assertEqual(len(payload["files"]), 200)
+        self.assertEqual(payload["count"], 208)
+        self.assertEqual(payload["folders"]["ĐOÀN CNT 24-25"], 205)
+        self.assertEqual(payload["folders"]["ĐOÀN CNT 26-27"], 1)
+        self.assertEqual(payload["folders"]["ĐOÀN CNT 23-24"], 1)
+        self.assertIn("folders", payload["note"])
+
     async def test_no_setting_keeps_the_whole_store_visible(self):
         zalo_tools._KB_CACHE.update(root=None, at=0.0, files=None, skipped=0)
         with patch.dict(os.environ, {"ZALO_KB_PUBLIC_DIRS": ""}):
