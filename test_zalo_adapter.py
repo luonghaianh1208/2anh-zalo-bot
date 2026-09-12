@@ -239,9 +239,52 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(adapter._mention_only("@Lăng Tiêu"))
         self.assertTrue(adapter._mention_only("  @Lăng Tiêu  !"))
         self.assertTrue(adapter._mention_only("@bot"))
+        # Gọi tên kèm tiếng gọi vẫn là gọi suông.
+        self.assertTrue(adapter._mention_only("@Lăng Tiêu ơi"))
+        self.assertTrue(adapter._mention_only("Lăng Tiêu ơi"))
+        self.assertTrue(adapter._mention_only("@Lăng Tiêu đâu rồi"))
         self.assertFalse(adapter._mention_only("@Lăng Tiêu soạn giúp anh thông báo"))
+        self.assertFalse(adapter._mention_only("@Lăng Tiêu tóm tắt hộ anh"))
         self.assertFalse(adapter._mention_only(""))
         self.assertFalse(adapter._mention_only("chào cả nhà"))
+
+    async def test_bare_call_replays_the_last_five_messages_of_the_group(self):
+        adapter = self.make_adapter()
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+
+        with patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            for i, (who, line) in enumerate([
+                ("Yến", "mai họp giao ban lúc mấy giờ ạ"),
+                ("Trang", "8h nhé, phòng hội đồng"),
+                ("Yến", "em xin phép đến muộn 15 phút"),
+                ("Trang", "ok em, nhớ mang danh sách chi đoàn"),
+                ("Giang", "danh sách em gửi trong nhóm hôm qua rồi ạ"),
+                ("Yến", "vâng em xem lại"),
+            ]):
+                await adapter._on_message({
+                    "type": "message", "id": f"c{i}", "threadId": "g1",
+                    "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                    "senderUid": "u1", "senderName": who, "text": line,
+                })
+            await adapter._on_message({
+                "type": "message", "id": "call", "threadId": "g1",
+                "threadType": zalo_adapter.THREAD_TYPE_GROUP,
+                "senderUid": "u1", "senderName": "Hải Anh",
+                "text": "@Lăng Tiêu ơi", "mentions": [{"uid": "bot-uid"}],
+            })
+
+        self.assertEqual(len(handled), 1)
+        context = handled[0].channel_context
+        self.assertIn("Ngữ cảnh gần nhất trong nhóm Zalo", context)
+        # Đúng 5 tin gần nhất trước câu gọi, không lấy tin thứ sáu.
+        self.assertEqual(context.count("\n- "), 5)
+        self.assertIn("danh sách em gửi trong nhóm hôm qua", context)
+        self.assertNotIn("mai họp giao ban lúc mấy giờ", context)
 
     async def test_quote_image_is_attached_and_reply_context_set(self):
         adapter = self.make_adapter()

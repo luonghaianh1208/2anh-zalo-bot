@@ -2,6 +2,17 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.9.2] — 2026-09-13
+
+### Thêm
+
+- **Gọi suông trong nhóm thì bot đọc lại 5 tin gần nhất.** Tag trơ hoặc gọi tên
+  không kèm câu hỏi ("@Lăng Tiêu", "Lăng Tiêu ơi", "@Lăng Tiêu đâu rồi") nay
+  được hiểu là "xem nhóm đang bàn gì đi": adapter kèm 5 tin gần nhất vào ngữ
+  cảnh, và hướng dẫn trình bày dặn bot nói thẳng vào việc thay vì hỏi ngược
+  "anh cần gì ạ?". Bộ nhớ ngữ cảnh nhóm nâng từ 5 lên 8 tin để luôn đủ 5 tin
+  trước câu gọi.
+
 ## [1.9.1] — 2026-09-13
 
 ### Sửa

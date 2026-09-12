@@ -210,7 +210,15 @@ SLOW_ACK_TIMEOUT_SECONDS = 150
 SLOW_METHODS = frozenset({"uploadAttachment", "sendMessage", "sendVoice", "sendVideo"})
 DEDUP_WINDOW_SECONDS = 300
 DEDUP_MAX_SIZE = 1000
-GROUP_CONTEXT_LIMIT = 5
+# Nhớ 8 tin để lúc nào cũng còn đủ 5 tin trước câu đang xử lý.
+GROUP_CONTEXT_LIMIT = 8
+# Bao nhiêu tin được kể lại khi bot bị gọi trơ, không kèm câu hỏi nào.
+BARE_CALL_CONTEXT = 5
+# Gọi suông: chỉ có tiếng gọi, không có nội dung. "@Lăng Tiêu", "Lăng Tiêu ơi",
+# "@Lăng Tiêu đâu rồi" — tất cả đều mang nghĩa "đọc lại xem đang bàn gì đi".
+_CALL_ONLY_WORDS = frozenset(
+    "ơi ời ei êi ê hey hi alo à ạ ừ nhé nhá nhỉ đâu rồi đây nào nè với có không ko em anh chị".split()
+)
 _IMAGE_CONTEXT_RE = re.compile(
     r"\b(đây|này|kia|ảnh|hình|xe này|như thế|cái này|cái đó|trong ảnh|sticker|nhãn dán)\b",
     re.IGNORECASE,
@@ -938,11 +946,20 @@ class ZaloAdapter(BasePlatformAdapter):
         return cleaned
 
     def _mention_only(self, text: str) -> bool:
-        """Tin chỉ có mỗi cái tag gọi bot, không kèm chữ nào khác."""
+        """Bot bị gọi suông: chỉ có tiếng gọi, không kèm nội dung gì.
+
+        Gồm cả tag trơ ("@Lăng Tiêu") lẫn gọi tên có đuôi ("Lăng Tiêu ơi",
+        "@Lăng Tiêu đâu rồi"). Người gọi kiểu này đang muốn bot ngó lại xem
+        nhóm đang bàn gì, chứ không hỏi một câu cụ thể.
+        """
         if not str(text or "").strip():
             return False
         rest = self._without_bot_mention(text)
-        return not re.sub(r"[\s@:,.!?\-–—…]+", "", rest)
+        name = (self._self_profile.get("display_name") or "").strip()
+        if name:
+            rest = re.sub(re.escape(name), " ", rest, flags=re.IGNORECASE)
+        words = re.findall(r"[^\W\d_]+", rest, flags=re.UNICODE)
+        return all(word.lower() in _CALL_ONLY_WORDS for word in words)
 
     @staticmethod
     def _dedupe_urls(urls: List[str]) -> List[str]:
@@ -1033,12 +1050,14 @@ class ZaloAdapter(BasePlatformAdapter):
         # em vừa gửi đi" — hay gặp nhất là gửi sticker hoặc ảnh rồi tag ngay.
         # Thiếu nhánh này thì bot hỏi lại "thầy cần gì ạ?" dù tấm ảnh nằm ngay
         # trên đầu (đo trong nhóm đệ ruột, 01:11 ngày 13/9/2026).
-        if not (_IMAGE_CONTEXT_RE.search(text) or self._mention_only(text)):
+        bare_call = self._mention_only(text)
+        if not (_IMAGE_CONTEXT_RE.search(text) or bare_call):
             return []
-        # Bỏ chính tin đang hỏi, lấy tối đa 3 tin gần nhất phía trước — đủ cho ảnh
-        # + một câu caption, không làm phình prompt nhóm.
+        # Bỏ chính tin đang hỏi. Hỏi về ảnh thì 3 tin là đủ (ảnh + một câu
+        # caption). Gọi suông thì kể lại 5 tin để bot biết nhóm đang bàn gì rồi
+        # mới mở miệng, thay vì hỏi ngược "anh cần gì ạ?".
         prior = [item for item in bucket if item.get("id") != current.get("id")]
-        return prior[-3:]
+        return prior[-BARE_CALL_CONTEXT:] if bare_call else prior[-3:]
 
     @staticmethod
     def _media_urls_from_entries(entries: List[Dict[str, Any]]) -> List[str]:
