@@ -2,6 +2,16 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.6.2] — 2026-09-12
+
+### Sửa
+
+- **Thẻ chia sẻ link bị tải về như ảnh.** Thẻ link của Zalo (`chat.recommended`:
+  TikTok, Facebook, Google Meet, Drive…) cũng mang `href` và ảnh thu nhỏ như tin
+  ảnh, nên bot tải link về rồi báo "không đọc được ảnh". Nay chỉ tin thật sự có
+  media (ảnh, tệp, video, thoại) mới nhặt URL; link để nguyên trong chữ và bot
+  đọc bằng `zalo_web_read`. Áp cho cả tin được reply.
+
 ## [1.6.1] — 2026-09-12
 
 ### Sửa

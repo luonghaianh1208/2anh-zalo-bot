@@ -220,6 +220,23 @@ _IMAGE_CONTEXT_RE = re.compile(
 # viết thường, thêm dấu câu hay để chung dòng — dấu này không được lọt vào tin.
 _NEW_MESSAGE_RE = re.compile(r"[ \t]*[*_~]*\[\[\s*new[ _]message\s*\]\][*_~.:;!]*[ \t]*", re.IGNORECASE)
 
+# Loại tin KHÔNG bao giờ mang tệp đính kèm. Thẻ chia sẻ link (chat.recommended:
+# TikTok, Facebook, Google Meet, Drive…) cũng có href và ảnh thu nhỏ như tin
+# ảnh, nên không lọc thì link bị tải về như ảnh rồi báo "không đọc được ảnh".
+# Link cứ để nguyên trong chữ — bot đọc bằng zalo_web_read.
+#
+# Chặn theo danh sách loại trừ chứ không phải danh sách cho phép: phần trích dẫn
+# của Zalo (``TQuote``) chỉ có ``cliMsgType`` dạng SỐ, không có tên loại, nên
+# danh sách cho phép sẽ vứt luôn ảnh của tin được reply.
+_NON_MEDIA_MSG_TYPE_RE = re.compile(
+    r"(recommended|webchat|chat\.text|poll|ecard|undo|sticker|link)", re.IGNORECASE
+)
+
+
+def _is_media_msg_type(msg_type: Any) -> bool:
+    return not _NON_MEDIA_MSG_TYPE_RE.search(str(msg_type or ""))
+
+
 _UNSUPPORTED_IMAGE_FORMATS = ("jxl", "heic", "heif", "avif", "tiff", "tif")
 
 
@@ -584,9 +601,13 @@ class ZaloAdapter(BasePlatformAdapter):
 
     async def _on_message(self, frame: Dict[str, Any]) -> None:
         text = (frame.get("text") or "").strip()
-        media_urls = self._extract_media_urls(frame)
+        # Chỉ nhặt URL khi tin thật sự có tệp đính kèm: thẻ chia sẻ link cũng có
+        # href và ảnh thu nhỏ, nhặt luôn thì link bị tải về như ảnh.
+        media_urls = self._extract_media_urls(frame) if _is_media_msg_type(frame.get("msgType")) else []
         quote = frame.get("quote") if isinstance(frame.get("quote"), dict) else None
-        quote_media_urls = self._extract_media_urls(quote or {})
+        quote_media_urls = (
+            self._extract_media_urls(quote) if quote and _is_media_msg_type(quote.get("msgType")) else []
+        )
 
         msg_id = str(frame.get("id") or "")
         if msg_id and self._is_duplicate(msg_id):

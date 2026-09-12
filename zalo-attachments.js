@@ -45,6 +45,22 @@ export function isFileMessage(msgType) {
 }
 
 /**
+ * Tin này có đính kèm media thật không.
+ *
+ * Thẻ chia sẻ link (`chat.recommended`: TikTok, Facebook, Google Meet, Drive…)
+ * cũng có `href` và `thumb` như tin ảnh, nên trước đây link bị tải về như ảnh
+ * rồi báo "không đọc được ảnh". Link thì để nguyên trong chữ: bot đọc bằng
+ * zalo_web_read, vừa đúng nội dung trang vừa không tải nhầm.
+ *
+ * Chặn theo danh sách loại trừ chứ không phải danh sách cho phép: phần trích dẫn
+ * của Zalo (`TQuote`) chỉ có `cliMsgType` dạng SỐ, không có tên loại, nên danh
+ * sách cho phép sẽ vứt luôn ảnh của tin được reply.
+ */
+export function hasRealMedia(msgType) {
+  return !/(recommended|webchat|chat\.text|poll|ecard|undo|sticker|link)/i.test(String(msgType ?? ''));
+}
+
+/**
  * @returns {{url: string, name: string, mime: string, kind: string}}
  */
 export function guessAttachment(url, { name = '', msgType = '' } = {}) {
@@ -73,6 +89,8 @@ export function classifyAttachments(msg, urls) {
   const msgType = msg?.data?.msgType ?? '';
   const title = content && typeof content === 'object' ? String(content.title ?? '') : '';
   const href = content && typeof content === 'object' ? String(content.href ?? '') : '';
+
+  if (!hasRealMedia(msgType)) return [];
 
   if (isFileMessage(msgType)) {
     // Chỉ giữ chính tệp, bỏ ảnh thu nhỏ đi kèm.
