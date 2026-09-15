@@ -17,7 +17,7 @@ const PUBLIC_SIDE_EFFECT_METHODS = new Set([
 ]);
 
 const OWNER_SIDE_EFFECT_METHODS = new Set([
-  'forwardMessage', 'createPoll', 'lockPoll', 'createNote',
+  'forwardMessage', 'createPoll', 'lockPoll', 'votePoll', 'addPollOptions', 'createNote',
   'setPinnedConversations', 'setMute', 'changeGroupName', 'addUserToGroup',
   'removeUserFromGroup', 'addGroupDeputy', 'removeGroupDeputy',
   'reviewPendingMemberRequest', 'enableGroupLink', 'disableGroupLink',

@@ -129,7 +129,7 @@ const ALLOWED_METHODS = new Set([
   'getAllGroups', 'getAllFriends', 'getUserInfo', 'findUser',
   'findUserByUsername', 'fetchAccountInfo', 'searchSticker', 'getStickersDetail',
   // Tính năng riêng của Zalo
-  'createPoll', 'getPollDetail', 'lockPoll', 'createNote', 'createReminder',
+  'createPoll', 'getPollDetail', 'lockPoll', 'votePoll', 'addPollOptions', 'createNote', 'createReminder',
   'getListReminder', 'removeReminder',
   // Quản trị nhóm
   'changeGroupName', 'addUserToGroup', 'removeUserFromGroup',

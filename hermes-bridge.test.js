@@ -1124,6 +1124,37 @@ test('người trong nhóm tra được chi tiết nhãn dán qua cầu nối', 
   }
 });
 
+test('chủ nhân nhờ bot bỏ phiếu và thêm phương án bình chọn qua cầu nối, người khác thì không', async (t) => {
+  const calls = [];
+  const api = {
+    votePoll: (pollId, optionIds) => { calls.push(['votePoll', pollId, optionIds]); return Promise.resolve({ options: [] }); },
+    addPollOptions: (payload) => { calls.push(['addPollOptions', payload]); return Promise.resolve({ options: [] }); },
+  };
+  const server = startHermesBridge({ api, profile: { user_id: 'bot' }, port: 0, store: testStore(t), ownerUids: ['owner'] });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await hello;
+    const payload = { pollId: 1137063889, options: [{ voted: true, content: 'Tôi là bot' }], votedOptionIds: [] };
+    for (const [reqId, method, args, actorUid] of [
+      ['vote', 'votePoll', [1137063889, [1137063892]], 'owner'],
+      ['add', 'addPollOptions', [payload], 'owner'],
+      ['vote-public', 'votePoll', [1137063889, [1137063890]], 'nguoi-trong-nhom'],
+    ]) {
+      ws.send(JSON.stringify({ type: 'invoke', reqId, method, args, auth: auth('group-1', 1, { actorUid }) }));
+      const ack = await onceMessage(ws, (msg) => msg.reqId === reqId);
+      if (actorUid === 'owner') assert.equal(ack.ok, true, ack.error);
+      else assert.equal(ack.errorCode, 'owner_required');
+    }
+    assert.deepEqual(calls, [['votePoll', 1137063889, [1137063892]], ['addPollOptions', payload]]);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 test('history_range đọc cả khoảng thời gian từ kho, lật trang không sót tin', async (t) => {
   const store = testStore(t);
   // 7 tin, trong đó hai tin trùng đúng một mili-giây — dễ bị sót hoặc lặp ở ranh giới trang.

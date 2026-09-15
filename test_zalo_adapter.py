@@ -1400,6 +1400,40 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observed[0][1]["actorUid"], "member-current")
         self.assertEqual(observed[0][1]["sourceThreadId"], "group-ack")
 
+    async def test_poll_vote_and_add_option_tools_send_numeric_ids(self):
+        class FakeAdapter:
+            def __init__(self):
+                self.calls = []
+
+            async def invoke(self, method, args, confirmed=False):
+                self.calls.append((method, args))
+                return {"ok": True, "result": {"options": []}}
+
+        fake = FakeAdapter()
+        previous = zalo_tools._ACTIVE_ADAPTER
+        zalo_tools._ACTIVE_ADAPTER = fake
+        try:
+            voted = json.loads(await zalo_tools.zalo_vote_poll(
+                {"poll_id": "1137063889", "option_ids": ["1137063892"]}))
+            withdrawn = json.loads(await zalo_tools.zalo_vote_poll({"poll_id": "1137063889", "option_ids": []}))
+            added = json.loads(await zalo_tools.zalo_add_poll_options(
+                {"poll_id": "1137063889", "options": [" Tôi là bot ", ""], "vote": True}))
+            bad = json.loads(await zalo_tools.zalo_vote_poll({"poll_id": "1137063889", "option_ids": ["abc"]}))
+            no_option = json.loads(await zalo_tools.zalo_add_poll_options({"poll_id": "1137063889", "options": []}))
+        finally:
+            zalo_tools._ACTIVE_ADAPTER = previous
+
+        self.assertTrue(voted["success"] and withdrawn["success"] and added["success"])
+        self.assertFalse(bad["success"])
+        self.assertFalse(no_option["success"])
+        self.assertEqual(fake.calls, [
+            ("votePoll", [1137063889, [1137063892]]),
+            ("votePoll", [1137063889, []]),
+            ("addPollOptions", [{"pollId": 1137063889,
+                                 "options": [{"voted": True, "content": "Tôi là bot"}],
+                                 "votedOptionIds": []}]),
+        ])
+
     async def test_zalo_send_voice_accepts_tts_local_path(self):
         class FakeAdapter:
             async def send_voice(self, chat_id, audio_path, metadata=None):
@@ -1483,7 +1517,7 @@ class ZaloToolSchemaTest(unittest.TestCase):
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 15)
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 32)
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 34)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 
     def test_zalo_ids_remain_strings_through_hermes_argument_coercion(self):

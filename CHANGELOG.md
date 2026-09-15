@@ -2,6 +2,16 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.10.6] — 2026-09-15
+
+### Thêm
+
+- **Bot tự bỏ phiếu và thêm phương án bình chọn.** Trước đây bot chỉ tạo, xem và khoá bình
+  chọn nên khi chủ nhân nhờ "vote giúp" bot đành từ chối. Hai công cụ mới (chỉ chủ nhân gọi
+  được): `zalo_vote_poll` chọn phương án theo `option_id` lấy từ `zalo_poll_detail` — danh
+  sách rỗng là rút phiếu; `zalo_add_poll_options` thêm phương án mới vào bình chọn đang mở và
+  có thể bỏ phiếu luôn cho phương án đó. Cầu nối mở thêm `votePoll`, `addPollOptions`.
+
 ## [1.10.5] — 2026-09-15
 
 ### Sửa

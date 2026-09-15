@@ -750,6 +750,47 @@ async def zalo_lock_poll(args: Dict[str, Any], **_kw) -> str:
     return await _invoke("lockPoll", [poll_id])
 
 
+def _poll_ids(values: Any) -> Optional[List[int]]:
+    """Mã bình chọn/phương án của Zalo là số nhỏ (dưới 2^53); nhận chuỗi hoặc số."""
+    if not isinstance(values, list):
+        return None
+    ids = []
+    for value in values:
+        text = str(value).strip()
+        if not text.isdigit():
+            return None
+        ids.append(int(text))
+    return ids
+
+
+async def zalo_vote_poll(args: Dict[str, Any], **_kw) -> str:
+    poll_id = str(args.get("poll_id") or "").strip()
+    if not poll_id.isdigit():
+        return _err("cần `poll_id` dạng số (lấy từ zalo_poll_detail)")
+    option_ids = _poll_ids(args.get("option_ids"))
+    if option_ids is None:
+        return _err("`option_ids` phải là danh sách mã phương án (lấy từ zalo_poll_detail); danh sách rỗng là rút phiếu")
+    return await _invoke("votePoll", [int(poll_id), option_ids])
+
+
+async def zalo_add_poll_options(args: Dict[str, Any], **_kw) -> str:
+    poll_id = str(args.get("poll_id") or "").strip()
+    if not poll_id.isdigit():
+        return _err("cần `poll_id` dạng số (lấy từ zalo_poll_detail)")
+    options = [str(option).strip() for option in (args.get("options") or []) if str(option).strip()]
+    if not options:
+        return _err("cần ít nhất một phương án mới trong `options`")
+    keep = _poll_ids(args.get("keep_voted_option_ids") or [])
+    if keep is None:
+        return _err("`keep_voted_option_ids` phải là danh sách mã phương án")
+    vote_new = bool(args.get("vote", False))
+    return await _invoke("addPollOptions", [{
+        "pollId": int(poll_id),
+        "options": [{"voted": vote_new, "content": option} for option in options],
+        "votedOptionIds": keep,
+    }])
+
+
 async def zalo_create_note(args: Dict[str, Any], **_kw) -> str:
     title = (args.get("title") or "").strip()
     if not title:
@@ -2292,6 +2333,34 @@ TOOLS = [
         {"poll_id": _ZALO_ID},
         ["poll_id"],
     ), zalo_lock_poll, TOOLSET_OWNER),
+
+    ("zalo_vote_poll", "✅", _schema(
+        "zalo_vote_poll",
+        "Bot tự bỏ phiếu trong một cuộc bình chọn Zalo. Gọi zalo_poll_detail trước để lấy "
+        "`option_id` của phương án; truyền danh sách rỗng để rút phiếu. Phiếu mới thay phiếu cũ "
+        "của bot. Phương án chưa có thì dùng zalo_add_poll_options.",
+        {
+            "poll_id": _ZALO_ID,
+            "option_ids": {"type": "array", "items": _ZALO_ID,
+                           "description": "Mã phương án muốn chọn (option_id); rỗng = rút phiếu."},
+        },
+        ["poll_id", "option_ids"],
+    ), zalo_vote_poll, TOOLSET_OWNER),
+
+    ("zalo_add_poll_options", "➕", _schema(
+        "zalo_add_poll_options",
+        "Thêm phương án mới vào một cuộc bình chọn Zalo đang mở (bình chọn phải cho thêm phương án), "
+        "có thể bỏ phiếu luôn cho phương án vừa thêm.",
+        {
+            "poll_id": _ZALO_ID,
+            "options": {"type": "array", "items": {"type": "string"},
+                        "description": "Nội dung các phương án mới."},
+            "vote": {"type": "boolean", "description": "Bot bỏ phiếu cho phương án vừa thêm."},
+            "keep_voted_option_ids": {"type": "array", "items": _ZALO_ID,
+                                      "description": "Mã phương án bot đang chọn và muốn giữ phiếu (xem voted trong zalo_poll_detail)."},
+        },
+        ["poll_id", "options"],
+    ), zalo_add_poll_options, TOOLSET_OWNER),
 
     ("zalo_create_note", "📌", _schema(
         "zalo_create_note",
