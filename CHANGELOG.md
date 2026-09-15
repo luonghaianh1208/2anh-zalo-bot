@@ -2,6 +2,23 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.10.9] — 2026-09-15
+
+### Cải thiện
+
+- **Tệp bot tạo trình bày đẹp, dùng được ngay.** Cả bốn loại dùng chung bảng màu xanh đậm –
+  xanh nhấn – nền nhạt:
+  - **Word:** khổ A4, lề văn bản hành chính (trái 3 cm, còn lại 2 cm), Times New Roman 13,
+    tiêu đề căn giữa có gạch chân màu, đề mục có màu, bảng dòng tiêu đề nền đậm chữ trắng và
+    dòng xen kẽ, chữ đậm đổi màu nhấn, số trang ở chân trang.
+  - **PDF:** A4, tiêu đề có vạch màu, đề mục màu, gạch đầu dòng chấm màu, bảng tô nền, "Trang x/y".
+  - **PowerPoint:** 16:9, slide bìa nền xanh đậm, slide nội dung có dải tiêu đề màu, gạch đầu
+    dòng chấm màu, cỡ chữ tự co theo số ý, số slide; slide không có ý thành slide chuyển phần.
+  - **Excel:** dòng tiêu đề nền đậm chữ trắng, viền mảnh, dòng xen kẽ, đóng băng dòng đầu, bộ
+    lọc, cột tự giãn, in vừa khổ A4 (ngang khi nhiều cột) và lặp dòng tiêu đề mỗi trang.
+- Tên tệp giữ dấu cách cho dễ đọc ("Đề kiểm tra.docx") thay vì gạch dưới.
+- Mô tả công cụ gợi ý bot soạn nội dung cho đẹp: chia mục rõ, dữ liệu dùng bảng, slide 3–6 ý.
+
 ## [1.10.8] — 2026-09-15
 
 ### Thêm

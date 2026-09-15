@@ -2260,7 +2260,10 @@ TOOLS = [
         "Tạo tệp Word (docx), PowerPoint (pptx), Excel (xlsx) hoặc PDF từ nội dung em soạn "
         "rồi gửi luôn vào nhóm đang chat — dùng khi thầy cô nhờ làm giáo án, đề, danh sách, "
         "slide, bảng điểm dưới dạng tệp. Chỉ dùng trong nhóm; mỗi người tối đa 5 tệp/giờ. "
-        "Tệp chỉ có chữ và bảng, không chèn ảnh. Chỉ báo đã gửi khi kết quả trả về thành công.",
+        "Tệp chỉ có chữ và bảng, không chèn ảnh; hệ thống tự trình bày đẹp (A4, màu, bảng tô "
+        "nền, số trang). Soạn cho đẹp: chia mục bằng # rõ ràng, dữ liệu so sánh thì dùng bảng, "
+        "mỗi slide 3–6 ý ngắn, slide chỉ có tiêu đề (bullets rỗng) làm slide chuyển phần. "
+        "Chỉ báo đã gửi khi kết quả trả về thành công.",
         {
             "thread_id": _THREAD_ID,
             "thread_kind": _THREAD_KIND,

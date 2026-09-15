@@ -1420,17 +1420,29 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(path.name.endswith("." + fmt))
 
             from docx import Document
-            text = "\n".join(p.text for p in Document(str(made["docx"])).paragraphs)
+            document = Document(str(made["docx"]))
+            text = "\n".join(p.text for p in document.paragraphs)
             self.assertIn("Mục tiêu: hiểu H₂O", text)
+            self.assertEqual(document.paragraphs[0].text, "Giáo án")
+            self.assertEqual(round(document.sections[0].left_margin.cm), 3, "lề trái văn bản hành chính 3 cm")
+            header_fill = document.tables[0].cell(0, 0)._tc.xml
+            self.assertIn(file_maker.NAVY, header_fill, "dòng tiêu đề bảng có nền màu")
             from openpyxl import load_workbook
             sheet = load_workbook(str(made["xlsx"]))["Lớp 10A"]
             self.assertEqual(sheet["B3"].value, "'=1+1", "người lạ không được cài công thức Excel")
+            self.assertTrue(sheet["A1"].font.bold)
+            self.assertEqual(sheet.freeze_panes, "A2")
+            from pptx import Presentation
+            deck = Presentation(str(made["pptx"]))
+            self.assertEqual(len(deck.slides), 2, "slide bìa + 1 slide nội dung")
+            self.assertGreater(deck.slide_width, deck.slide_height, "khổ 16:9")
 
     def test_file_maker_rejects_bad_specs_and_unsafe_names(self):
         from plugins.zalo_tools import file_maker
 
-        self.assertEqual(file_maker.safe_filename("../../etc/passwd", "pdf"), "etc_passwd.pdf")
-        self.assertEqual(file_maker.safe_filename("Giáo án: Hoá 10?", "docx"), "Giáo_án_Hoá_10.docx")
+        self.assertEqual(file_maker.safe_filename("../../etc/passwd", "pdf"), "etc passwd.pdf")
+        self.assertEqual(file_maker.safe_filename("Giáo án: Hoá 10?", "docx"), "Giáo án Hoá 10.docx")
+        self.assertEqual(file_maker.safe_filename("", "xlsx"), "Tài liệu.xlsx")
         with tempfile.TemporaryDirectory() as tmp:
             for fmt, kwargs in (
                 ("exe", {"content": "x"}),
@@ -1485,7 +1497,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         method, args, existed, path = fake.calls[0]
         self.assertEqual(method, "sendMessage")
         self.assertEqual(args[1:], ["7903718250465581275", 1])
-        self.assertTrue(existed and path.endswith("Đề_kiểm_tra.docx"))
+        self.assertTrue(existed and path.endswith("Đề kiểm tra.docx"))
         self.assertFalse(os.path.exists(path), "thư mục tạm phải được xoá sau khi gửi")
 
     async def test_poll_vote_and_add_option_tools_send_numeric_ids(self):
