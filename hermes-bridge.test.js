@@ -277,6 +277,29 @@ test('"@All" thành tag cả nhóm ở nhóm tới 100 người, nhóm đông h�
   assert.deepEqual(sent[2].mentions, [{ pos: 0, len: 4, uid: '-1' }]);
 });
 
+test('send đổi công thức LaTeX sang ký tự Unicode trước khi gửi Zalo', async (t) => {
+  const sent = [];
+  const api = {
+    sendMessage(content) {
+      sent.push(content);
+      return Promise.resolve({ message: { msgId: `m${sent.length}` } });
+    },
+  };
+  const ws = await openBridge(t, api);
+  try {
+    ws.send(JSON.stringify({
+      type: 'send', reqId: 'math', threadId: 'g1', threadType: 1,
+      text: 'Nước $H_2O$, ion $Ca^{2+}$, $\\Delta H \\le 0$', auth: auth('g1', 1),
+    }));
+    const ack = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'math');
+    assert.equal(ack.ok, true, ack.error);
+    assert.equal(sent[0].msg, 'Nước H₂O, ion Ca²⁺, ΔH ≤ 0');
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 test('khung tin gửi sang Hermes mang đúng loại tệp, không gắn cứng ảnh', async (t) => {
   const ws = await openBridge(t, {});
   const { forwardToHermes } = await import('./hermes-bridge.js');

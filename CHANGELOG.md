@@ -2,6 +2,18 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.10.7] — 2026-09-15
+
+### Thêm
+
+- **Công thức LaTeX tự đổi sang ký tự Unicode trước khi gửi Zalo.** Zalo không hiển thị
+  LaTeX nên `$Ca^{2+}$` hiện nguyên dấu đô la và mũ. Cầu nối nay đổi trước khi gửi: chỉ số
+  trên/dưới (`$K^+$` → K⁺, `$H_2O$` → H₂O, `x^2` → x²), mũi tên (`\rightarrow` → →,
+  `\Rightarrow` → ⇒), so sánh (`\le` ≤, `\ge` ≥, `\ne` ≠, `\pm` ±, `\approx` ≈), chữ Hy Lạp
+  (`\alpha` α, `\Delta` Δ, `\mu` μ…), phân số (`\frac{a}{b}` → a/b), căn (√), độ (°). Mã trong
+  `` `…` ``, tên biến snake_case và giá tiền "$5 và $10" giữ nguyên. Hướng dẫn trình bày dặn
+  bot viết thẳng Unicode, không dùng LaTeX.
+
 ## [1.10.6] — 2026-09-15
 
 ### Thêm

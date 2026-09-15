@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { formatAndChunkZaloMarkdown } from './markdown-formatter.js';
 import { createMemberDirectory, findMentions } from './zalo-mentions.js';
+import { latexToUnicode } from './zalo-math.js';
 import { classifyAttachments } from './zalo-attachments.js';
 import { pickSmartReaction } from './smart-reaction.js';
 import { RateLimiter, RateLimitedError, THROTTLED_METHODS } from './rate-limiter.js';
@@ -828,7 +829,8 @@ async function handleCommand(ws, cmd) {
       // Nếu văn bản dài hoặc có nhiều tiêu đề / định dạng, formatAndChunkZaloMarkdown
       // sẽ tách thành các tin nhắn hoàn chỉnh, mỗi tin đảm bảo giữ trọn vẹn 100% styles
       // (tiêu đề to + đậm, chỉ mục số đậm + to, từ khoá in đậm) mà không bị Zalo từ chối!
-      const rawText = String(cmd.text ?? '');
+      // Zalo không hiển thị LaTeX: "$Ca^{2+}$" đổi thành "Ca²⁺" trước khi dịch Markdown.
+      const rawText = latexToUnicode(String(cmd.text ?? ''));
       const chunks = formatAndChunkZaloMarkdown(rawText);
       // Chỉ tra danh bạ khi tin vào nhóm thật sự có "@" — phần lớn tin không cần.
       const { members: mentionable, canMentionAll } = threadType === ThreadType.Group && rawText.includes('@') && memberDirectory
