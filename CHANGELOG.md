@@ -2,6 +2,22 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.10.8] — 2026-09-15
+
+### Thêm
+
+- **Thầy cô trong nhóm nhờ bot tạo được tệp Word, PowerPoint, Excel, PDF.** Công cụ công
+  khai mới `zalo_make_file`: bot soạn nội dung (Markdown cho docx/pdf, danh sách slide cho
+  pptx, bảng cho xlsx), công cụ dựng tệp trong thư mục tạm rồi gửi vào **đúng nhóm đang
+  chat**, gửi xong xoá ngay. Không mở quyền ghi tệp, chạy lệnh hay chèn ảnh cho người ngoài;
+  các việc khác (tạo ảnh, voice, video, bình chọn…) giữ nguyên chỉ chủ nhân.
+- Giới hạn: chỉ trong nhóm (nhắn riêng chưa hỗ trợ), mỗi người **5 tệp/giờ** (chủ nhân không
+  giới hạn), nội dung ≤ 30.000 ký tự, ≤ 40 slide (≤ 15 ý/slide), ≤ 5 trang tính × 2.000 dòng ×
+  30 cột. Ô Excel bắt đầu bằng `=` được giữ dạng chữ để người ngoài không cài công thức. PDF
+  dùng font có dấu tiếng Việt (Arial trên Windows, DejaVu Sans trên Linux, hoặc `ZALO_PDF_FONT`).
+- Cần thư viện `python-docx python-pptx openpyxl fpdf2` trong venv Hermes; `npm run doctor`
+  báo thiếu kèm lệnh cài.
+
 ## [1.10.7] — 2026-09-15
 
 ### Thêm

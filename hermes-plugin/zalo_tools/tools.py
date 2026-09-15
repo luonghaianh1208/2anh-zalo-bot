@@ -422,6 +422,69 @@ async def zalo_send_file(args: Dict[str, Any], **_kw) -> str:
     ])
 
 
+# Mỗi người trong nhóm tạo tối đa bấy nhiêu tệp trong một giờ (chủ nhân không giới hạn):
+# nhóm vài trăm người mà ai cũng nhờ dựng tệp dài thì bot nghẽn và tốn token.
+FILE_QUOTA_PER_HOUR = 5
+_FILE_QUOTA: Dict[str, List[float]] = {}
+
+
+async def zalo_make_file(args: Dict[str, Any], **_kw) -> str:
+    """Dựng tệp Word/PowerPoint/Excel/PDF từ nội dung bot soạn rồi gửi vào nhóm đang chat.
+
+    Người trong nhóm không có công cụ ghi tệp hay chạy lệnh, nên công cụ này chỉ nhận nội
+    dung (xem file_maker) và dựng trong thư mục tạm, gửi xong là xoá.
+    """
+    from . import file_maker
+
+    turn = _turn() or {}
+    is_owner = bool(turn.get("is_owner"))
+    if not is_owner and not turn.get("is_group"):
+        return _err("chỉ tạo tệp cho thầy cô trong nhóm; nhắn riêng thì chưa hỗ trợ")
+    thread_id, kind, err = _scoped_thread(args)
+    if err:
+        return err
+
+    uid = str(turn.get("sender_uid") or "")
+    now = time.time()
+    if not is_owner:
+        recent = [ts for ts in _FILE_QUOTA.get(uid, []) if now - ts < 3600]
+        _FILE_QUOTA[uid] = recent
+        if len(recent) >= FILE_QUOTA_PER_HOUR:
+            wait = int((3600 - (now - recent[0])) // 60) + 1
+            return _err(f"mỗi người tạo tối đa {FILE_QUOTA_PER_HOUR} tệp mỗi giờ — thử lại sau khoảng {wait} phút")
+
+    import shutil
+    import tempfile
+
+    directory = tempfile.mkdtemp(prefix="zalo-file-")
+    try:
+        try:
+            path = await asyncio.to_thread(
+                file_maker.make_file,
+                args.get("format"),
+                args.get("title") or "",
+                directory=directory,
+                filename=args.get("filename"),
+                content=args.get("content"),
+                slides=args.get("slides"),
+                sheets=args.get("sheets"),
+            )
+        except file_maker.FileSpecError as exc:
+            return _err(str(exc))
+        except ImportError:
+            return _err("máy chủ chưa cài thư viện tạo tệp (python-docx, python-pptx, openpyxl, fpdf2)")
+        caption = str(args.get("caption") or "").strip()
+        sent = await _invoke("sendMessage", [
+            {"msg": caption, "attachments": [str(path)]},
+            thread_id, _thread_type(kind),
+        ])
+        if not is_owner and json.loads(sent).get("success"):
+            _FILE_QUOTA.setdefault(uid, []).append(now)
+        return sent
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
 async def zalo_send_voice(args: Dict[str, Any], **_kw) -> str:
     url = str(args.get("url") or "").strip()
     if not url:
@@ -2191,6 +2254,38 @@ TOOLS = [
         },
         ["thread_id"],
     ), zalo_send_file, TOOLSET_PUBLIC),
+
+    ("zalo_make_file", "📄", _schema(
+        "zalo_make_file",
+        "Tạo tệp Word (docx), PowerPoint (pptx), Excel (xlsx) hoặc PDF từ nội dung em soạn "
+        "rồi gửi luôn vào nhóm đang chat — dùng khi thầy cô nhờ làm giáo án, đề, danh sách, "
+        "slide, bảng điểm dưới dạng tệp. Chỉ dùng trong nhóm; mỗi người tối đa 5 tệp/giờ. "
+        "Tệp chỉ có chữ và bảng, không chèn ảnh. Chỉ báo đã gửi khi kết quả trả về thành công.",
+        {
+            "thread_id": _THREAD_ID,
+            "thread_kind": _THREAD_KIND,
+            "format": {"type": "string", "enum": ["docx", "pptx", "xlsx", "pdf"],
+                       "description": "Loại tệp."},
+            "title": {"type": "string", "description": "Tiêu đề tài liệu, cũng dùng làm tên tệp."},
+            "filename": {"type": "string", "description": "Tên tệp mong muốn (không bắt buộc)."},
+            "content": {"type": "string", "description":
+                        "Với docx/pdf: nội dung Markdown — # tiêu đề, - gạch đầu dòng, 1. đánh số, "
+                        "**đậm**, bảng dạng | a | b |. Tối đa 30.000 ký tự. Công thức viết Unicode (H₂O, x²)."},
+            "slides": {"type": "array", "description": "Với pptx: tối đa 40 slide, mỗi slide tối đa 15 ý.",
+                       "items": {"type": "object", "properties": {
+                           "title": {"type": "string"},
+                           "bullets": {"type": "array", "items": {"type": "string"}},
+                       }}},
+            "sheets": {"type": "array", "description":
+                       "Với xlsx: tối đa 5 trang tính; `rows` là các dòng, dòng đầu là tiêu đề cột.",
+                       "items": {"type": "object", "properties": {
+                           "name": {"type": "string"},
+                           "rows": {"type": "array", "items": {"type": "array", "items": {}}},
+                       }}},
+            "caption": {"type": "string", "description": "Lời nhắn đi kèm tệp."},
+        },
+        ["thread_id", "format", "title"],
+    ), zalo_make_file, TOOLSET_PUBLIC),
 
     ("zalo_send_voice", "🎙️", _schema(
         "zalo_send_voice",

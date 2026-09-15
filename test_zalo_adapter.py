@@ -1400,6 +1400,94 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observed[0][1]["actorUid"], "member-current")
         self.assertEqual(observed[0][1]["sourceThreadId"], "group-ack")
 
+    def test_file_maker_builds_all_four_formats_with_vietnamese_text(self):
+        from plugins.zalo_tools import file_maker
+
+        content = ("# Giáo án Hoá 10\n\n- **Mục tiêu:** hiểu H₂O\n  - ý con\n1. Khởi động\n\n"
+                   "| Bước | Thời gian |\n|---|---|\n| Mở bài | 5 phút |\n\nĐoạn *nghiêng* cuối.")
+        with tempfile.TemporaryDirectory() as tmp:
+            made = {
+                "docx": file_maker.make_file("docx", "Giáo án", directory=tmp, content=content),
+                "pdf": file_maker.make_file("pdf", "Giáo án", directory=tmp, content=content),
+                "pptx": file_maker.make_file("pptx", "Bài 7", directory=tmp, slides=[
+                    {"title": "Sulfur", "bullets": ["Tính chất **vật lý**", "Ứng dụng"]}]),
+                "xlsx": file_maker.make_file("xlsx", "Bảng điểm", directory=tmp, sheets=[
+                    {"name": "Lớp 10A", "rows": [["Họ tên", "Điểm"], ["An", 9], ["Bình", "=1+1"]]}]),
+            }
+            for fmt, path in made.items():
+                self.assertTrue(path.is_file() and path.stat().st_size > 0, fmt)
+                self.assertEqual(path.parent, __import__("pathlib").Path(tmp))
+                self.assertTrue(path.name.endswith("." + fmt))
+
+            from docx import Document
+            text = "\n".join(p.text for p in Document(str(made["docx"])).paragraphs)
+            self.assertIn("Mục tiêu: hiểu H₂O", text)
+            from openpyxl import load_workbook
+            sheet = load_workbook(str(made["xlsx"]))["Lớp 10A"]
+            self.assertEqual(sheet["B3"].value, "'=1+1", "người lạ không được cài công thức Excel")
+
+    def test_file_maker_rejects_bad_specs_and_unsafe_names(self):
+        from plugins.zalo_tools import file_maker
+
+        self.assertEqual(file_maker.safe_filename("../../etc/passwd", "pdf"), "etc_passwd.pdf")
+        self.assertEqual(file_maker.safe_filename("Giáo án: Hoá 10?", "docx"), "Giáo_án_Hoá_10.docx")
+        with tempfile.TemporaryDirectory() as tmp:
+            for fmt, kwargs in (
+                ("exe", {"content": "x"}),
+                ("docx", {"content": ""}),
+                ("pdf", {"content": "a" * (file_maker.MAX_TEXT_CHARS + 1)}),
+                ("pptx", {"slides": [{"title": "t", "bullets": ["b"] * 16}]}),
+                ("xlsx", {"sheets": [{"name": "s", "rows": [["c"] * 31]}]}),
+            ):
+                with self.assertRaises(file_maker.FileSpecError, msg=fmt):
+                    file_maker.make_file(fmt, "T", directory=tmp, **kwargs)
+
+    async def test_make_file_tool_sends_to_current_group_limits_members_and_cleans_up(self):
+        class FakeAdapter:
+            def __init__(self):
+                self.calls = []
+
+            async def invoke(self, method, args, confirmed=False):
+                path = args[0]["attachments"][0]
+                self.calls.append((method, args, os.path.isfile(path), path))
+                return {"ok": True, "result": {"attachment": [{"msgId": "f1"}]}}
+
+        fake = FakeAdapter()
+        previous = zalo_tools._ACTIVE_ADAPTER
+        zalo_tools._ACTIVE_ADAPTER = fake
+        zalo_tools._FILE_QUOTA.clear()
+        member = {"sender_uid": "9000000000000000001", "thread_id": "7903718250465581275",
+                  "is_group": True, "is_owner": False, "text": "tạo giúp file"}
+        spec = {"thread_id": "7903718250465581275", "format": "docx", "title": "Đề kiểm tra",
+                "content": "# Câu 1\n- Ý a"}
+        try:
+            token = zalo_tools._TURN.set(member)
+            try:
+                results = [json.loads(await zalo_tools.zalo_make_file(dict(spec))) for _ in range(6)]
+                other_group = json.loads(await zalo_tools.zalo_make_file(dict(spec, thread_id="1111111111111111111")))
+            finally:
+                zalo_tools._TURN.reset(token)
+            token = zalo_tools._TURN.set(dict(member, is_group=False, thread_id="9000000000000000001"))
+            try:
+                dm = json.loads(await zalo_tools.zalo_make_file(dict(spec, thread_id="9000000000000000001")))
+            finally:
+                zalo_tools._TURN.reset(token)
+        finally:
+            zalo_tools._ACTIVE_ADAPTER = previous
+            zalo_tools._FILE_QUOTA.clear()
+
+        self.assertTrue(all(r["success"] for r in results[:5]))
+        self.assertFalse(results[5]["success"])
+        self.assertIn("5 tệp mỗi giờ", results[5]["error"])
+        self.assertFalse(other_group["success"])
+        self.assertFalse(dm["success"])
+        self.assertEqual(len(fake.calls), 5)
+        method, args, existed, path = fake.calls[0]
+        self.assertEqual(method, "sendMessage")
+        self.assertEqual(args[1:], ["7903718250465581275", 1])
+        self.assertTrue(existed and path.endswith("Đề_kiểm_tra.docx"))
+        self.assertFalse(os.path.exists(path), "thư mục tạm phải được xoá sau khi gửi")
+
     async def test_poll_vote_and_add_option_tools_send_numeric_ids(self):
         class FakeAdapter:
             def __init__(self):
@@ -1516,7 +1604,7 @@ class ZaloToolSchemaTest(unittest.TestCase):
         self.assertEqual(set(assignments), {
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 15)
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 16)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 34)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 

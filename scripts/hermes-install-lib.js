@@ -451,6 +451,11 @@ export function doctorHermes({
     add('python-pillow-jxl', true, jxl?.status === 0
       ? 'có — ảnh JPEG XL được chuyển sang JPG'
       : 'thiếu — ảnh chỉ có bản JPEG XL sẽ báo lỗi; cài bằng: uv pip install --python <venv Hermes> pillow-jxl-plugin');
+    // Thư viện dựng tệp cho zalo_make_file cũng là tuỳ chọn: thiếu thì chỉ công cụ đó báo lỗi.
+    const docs = python ? commandProbe(python, ['-c', 'import docx, pptx, openpyxl, fpdf'], { encoding: 'utf8' }) : null;
+    add('python-document-libs', true, docs?.status === 0
+      ? 'có — bot tạo được tệp Word/PowerPoint/Excel/PDF'
+      : 'thiếu — bot chưa tạo được tệp; cài bằng: uv pip install --python <venv Hermes> python-docx python-pptx openpyxl fpdf2');
   }
   return { ok: checks.every((check) => check.ok), checks };
 }
