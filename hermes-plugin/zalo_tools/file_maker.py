@@ -5,9 +5,10 @@ chủ). Mô-đun này chỉ nhận *nội dung* — chữ Markdown, danh sách s
 trong thư mục tạm mà công cụ gọi truyền vào. Không đọc tệp nào trên máy, không tải ảnh,
 không chạy lệnh; mọi kích thước đều có trần để một lời nhờ không làm treo bot.
 
-Trình bày: thầy cô dùng tệp để in, chiếu, gửi tiếp — tệp trơn trông như bản nháp. Cả bốn
-loại dùng chung một bảng màu (xanh đậm + xanh nhấn + nền nhạt), văn bản theo khổ A4 và lề
-văn bản hành chính, bảng có dòng tiêu đề nền đậm và dòng xen kẽ.
+Trình bày: thầy cô dùng tệp để in, chiếu, gửi tiếp — tệp trơn trông như bản nháp. Word theo
+kỹ thuật trình bày Nghị định 30 (chữ đen, khổ và lề chuẩn — xem build_docx) để in nộp được
+ngay; PDF, PowerPoint, Excel dùng chung bảng màu (xanh đậm + xanh nhấn + nền nhạt), bảng có
+dòng tiêu đề nền đậm và dòng xen kẽ.
 """
 
 from __future__ import annotations
@@ -217,22 +218,22 @@ def _docx_fonts(target, name: str) -> None:
         rfonts.set(qn(attr), name)
 
 
-def _docx_shade(cell, fill: str) -> None:
+def _docx_row_flags(row, header: bool) -> None:
+    """Hàng tiêu đề lặp lại mỗi trang; không hàng nào bị tách qua hai trang."""
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 
-    shd = OxmlElement("w:shd")
-    shd.set(qn("w:val"), "clear")
-    shd.set(qn("w:color"), "auto")
-    shd.set(qn("w:fill"), fill)
-    cell._tc.get_or_add_tcPr().append(shd)
+    tr_pr = row._tr.get_or_add_trPr()
+    for tag in (("w:cantSplit", "w:tblHeader") if header else ("w:cantSplit",)):
+        flag = OxmlElement(tag)
+        flag.set(qn("w:val"), "true")
+        tr_pr.append(flag)
 
 
 def _docx_page_number(paragraph) -> None:
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
 
-    paragraph.add_run("Trang ")
     for kind, text in (("begin", None), (None, "PAGE"), ("end", None)):
         run = paragraph.add_run()
         if kind:
@@ -246,48 +247,51 @@ def _docx_page_number(paragraph) -> None:
 
 
 def build_docx(title: str, content: str, path: Path) -> None:
+    """Word theo kỹ thuật trình bày Nghị định 30/2020/NĐ-CP (skill soan-van-ban-doan, profile nd30).
+
+    A4; lề trên/dưới 20 mm, trái 30 mm, phải 15 mm; Times New Roman 14 màu đen; căn đều, thụt
+    dòng đầu 1 cm, cách đoạn 6 pt; gạch đầu dòng gõ tay (không dùng danh sách tự động của
+    Word); bảng lặp hàng tiêu đề, không tách hàng; số trang giữa lề trên, không hiện ở trang 1.
+    Giáo án, đề, danh sách không phải văn bản hành chính nên không có khối quốc hiệu.
+    """
     from docx import Document
     from docx.enum.table import WD_TABLE_ALIGNMENT
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
     from docx.shared import Cm, Pt, RGBColor
 
-    body_font = "Times New Roman"
+    body_font, size = "Times New Roman", 14
+    black = RGBColor(0, 0, 0)
     doc = Document()
     section = doc.sections[0]
     section.page_width, section.page_height = Cm(21), Cm(29.7)
-    section.left_margin, section.right_margin = Cm(3), Cm(2)
     section.top_margin, section.bottom_margin = Cm(2), Cm(2)
+    section.left_margin, section.right_margin = Cm(3), Cm(1.5)
 
     normal = doc.styles["Normal"]
     _docx_fonts(normal, body_font)
-    normal.font.size = Pt(13)
-    normal.font.color.rgb = RGBColor.from_string(INK)
+    normal.font.size = Pt(size)
+    normal.font.color.rgb = black
+    normal.paragraph_format.space_before = Pt(0)
     normal.paragraph_format.space_after = Pt(6)
     normal.paragraph_format.line_spacing = 1.15
-    for level, size, color in ((1, 15, NAVY), (2, 14, ACCENT), (3, 13, ACCENT)):
+    for level in (1, 2, 3):
         style = doc.styles[f"Heading {level}"]
         _docx_fonts(style, body_font)
         style.font.size, style.font.bold = Pt(size), True
-        style.font.italic = False
-        style.font.color.rgb = RGBColor.from_string(color)
-        style.paragraph_format.space_before = Pt(12 if level == 1 else 8)
-        style.paragraph_format.space_after = Pt(4)
+        style.font.italic = level == 3
+        style.font.color.rgb = black
+        style.paragraph_format.space_before = Pt(12 if level == 1 else 6)
+        style.paragraph_format.space_after = Pt(6)
+        style.paragraph_format.keep_with_next = True
 
     if title:
         heading = doc.add_paragraph()
         heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        heading.paragraph_format.space_after = Pt(14)
+        heading.paragraph_format.space_before = Pt(6)
+        heading.paragraph_format.space_after = Pt(12)
+        heading.paragraph_format.keep_with_next = True
         run = heading.add_run(title)
-        run.bold, run.font.size = True, Pt(18)
-        run.font.color.rgb = RGBColor.from_string(NAVY)
-        border = OxmlElement("w:pBdr")
-        bottom = OxmlElement("w:bottom")
-        for key, value in (("w:val", "single"), ("w:sz", "12"), ("w:space", "6"), ("w:color", ACCENT)):
-            bottom.set(qn(key), value)
-        border.append(bottom)
-        heading._p.get_or_add_pPr().append(border)
+        run.bold = True
 
     for block in parse_blocks(content):
         kind = block[0]
@@ -296,42 +300,39 @@ def build_docx(title: str, content: str, path: Path) -> None:
             table = doc.add_table(rows=len(rows), cols=len(rows[0]))
             table.style = "Table Grid"
             table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            table.autofit = True
             for r, row in enumerate(rows):
+                _docx_row_flags(table.rows[r], header=r == 0)
                 for c, value in enumerate(row):
-                    cell = table.cell(r, c)
-                    paragraph = cell.paragraphs[0]
-                    paragraph.paragraph_format.space_after = Pt(2)
+                    paragraph = table.cell(r, c).paragraphs[0]
+                    paragraph.paragraph_format.space_after = Pt(0)
+                    if r == 0:
+                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     for chunk, bold, italic in inline_runs(value):
                         run = paragraph.add_run(chunk)
-                        run.bold, run.italic, run.font.size = bold or r == 0, italic, Pt(12)
-                        if r == 0:
-                            run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-                    if r == 0:
-                        _docx_shade(cell, NAVY)
-                    elif r % 2 == 0:
-                        _docx_shade(cell, ZEBRA)
-            doc.add_paragraph().paragraph_format.space_after = Pt(2)
+                        run.bold, run.italic, run.font.size = bold or r == 0, italic, Pt(13)
+            doc.add_paragraph().paragraph_format.space_after = Pt(0)
             continue
         if kind == "heading":
             doc.add_heading(_plain(block[2]), block[1])
             continue
-        style = {"bullet": "List Bullet 2" if block[1] else "List Bullet", "number": "List Number"}.get(kind)
-        text = re.sub(r"^\d+[.)]\s+", "", block[2]) if kind == "number" else block[2]
-        paragraph = doc.add_paragraph(style=style) if style else doc.add_paragraph()
-        if kind == "para":
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        if kind == "bullet":
+            text, indent = ("+ " if block[1] else "- ") + block[2], Cm(1.5 if block[1] else 1)
+        else:
+            text, indent = block[2], Cm(1)
+        paragraph = doc.add_paragraph()
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        paragraph.paragraph_format.first_line_indent = indent
         for chunk, bold, italic in inline_runs(text):
             run = paragraph.add_run(chunk)
             run.bold, run.italic = bold, italic
-            if bold:
-                run.font.color.rgb = RGBColor.from_string(NAVY)
 
-    footer = section.footer.paragraphs[0]
-    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _docx_page_number(footer)
-    for run in footer.runs:
-        run.font.size = Pt(10)
-        run.font.color.rgb = RGBColor.from_string(MUTED)
+    section.different_first_page_header_footer = True
+    header = section.header.paragraphs[0]
+    header.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _docx_page_number(header)
+    for run in header.runs:
+        run.font.size = Pt(13)
     if title:
         doc.core_properties.title = title
     doc.save(str(path))

@@ -2,6 +2,18 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.10.10] — 2026-09-15
+
+### Sửa
+
+- **Tệp Word theo kỹ thuật trình bày Nghị định 30/2020/NĐ-CP** (theo skill
+  `soan-van-ban-doan`, profile `nd30`) thay cho bản tô màu của 1.10.9: A4, lề 20/20/30/15 mm,
+  Times New Roman 14 **màu đen**, căn đều hai lề, thụt dòng đầu 1 cm, cách đoạn 6 pt; gạch đầu
+  dòng gõ tay `-`/`+` (không dùng danh sách tự động của Word); bảng viền đen, hàng tiêu đề đậm
+  lặp lại mỗi trang, không tách hàng qua hai trang; số trang giữa lề trên, không hiện ở trang 1.
+  Giáo án, đề, danh sách không phải văn bản hành chính nên không có khối quốc hiệu. PDF,
+  PowerPoint, Excel giữ phong cách có màu.
+
 ## [1.10.9] — 2026-09-15
 
 ### Cải thiện

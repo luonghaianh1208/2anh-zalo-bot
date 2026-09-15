@@ -1401,6 +1401,10 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observed[0][1]["sourceThreadId"], "group-ack")
 
     def test_file_maker_builds_all_four_formats_with_vietnamese_text(self):
+        def file_maker_black():
+            from docx.shared import RGBColor
+            return RGBColor(0, 0, 0)
+
         from plugins.zalo_tools import file_maker
 
         content = ("# Giáo án Hoá 10\n\n- **Mục tiêu:** hiểu H₂O\n  - ý con\n1. Khởi động\n\n"
@@ -1424,9 +1428,17 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             text = "\n".join(p.text for p in document.paragraphs)
             self.assertIn("Mục tiêu: hiểu H₂O", text)
             self.assertEqual(document.paragraphs[0].text, "Giáo án")
-            self.assertEqual(round(document.sections[0].left_margin.cm), 3, "lề trái văn bản hành chính 3 cm")
-            header_fill = document.tables[0].cell(0, 0)._tc.xml
-            self.assertIn(file_maker.NAVY, header_fill, "dòng tiêu đề bảng có nền màu")
+            section = document.sections[0]
+            self.assertEqual(
+                [round(m.cm, 1) for m in (section.top_margin, section.bottom_margin, section.left_margin, section.right_margin)],
+                [2.0, 2.0, 3.0, 1.5], "lề theo Nghị định 30: 20/20/30/15 mm")
+            body_xml = document.element.body.xml
+            self.assertNotIn("w:numPr", body_xml, "ND30: không dùng danh sách tự động của Word")
+            self.assertNotIn("w:shd", body_xml, "ND30: chữ và bảng đen trắng")
+            self.assertIn("w:tblHeader", body_xml, "bảng lặp hàng tiêu đề mỗi trang")
+            self.assertTrue(all(run.font.color.rgb in (None, file_maker_black())
+                                for p in document.paragraphs for run in p.runs), "chữ màu đen")
+            self.assertIn("- Mục tiêu: hiểu H₂O", text, "gạch đầu dòng gõ tay")
             from openpyxl import load_workbook
             sheet = load_workbook(str(made["xlsx"]))["Lớp 10A"]
             self.assertEqual(sheet["B3"].value, "'=1+1", "người lạ không được cài công thức Excel")
