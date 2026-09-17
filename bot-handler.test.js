@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket as RawWebSocket } from 'ws';
 import { ThreadType } from 'zca-js';
+import { loadRoster } from './zalo-roster.js';
 import { setupBotListener } from './bot-handler.js';
 import { startHermesBridge, stopHermesBridge } from './hermes-bridge.js';
 import { openZaloStore } from './zalo-store.js';
@@ -133,8 +134,17 @@ function onceMessage(ws, predicate = () => true) {
   });
 }
 
-async function harness(t) {
+async function harness(t, { roster = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'bot-handler-'));
+  const rosterPath = join(dir, 'roster.json');
+  const previousRosterFile = process.env.ZALO_ROSTER_FILE;
+  writeFileSync(rosterPath, JSON.stringify(roster || {
+    version: 1,
+    owners: ['owner-123', 'uid-123', 'uid-case', 'uid-attached'],
+    guests: [],
+    guestGroups: [],
+  }));
+  process.env.ZALO_ROSTER_FILE = rosterPath;
   const store = openZaloStore({ path: join(dir, 'history.sqlite') });
   const listener = new EventEmitter();
   listener.start = () => {};
@@ -148,24 +158,26 @@ async function harness(t) {
   };
   const server = startHermesBridge({ api, profile: { user_id: 'bot-uid' }, port: 0, store });
   await new Promise((resolve) => server.once('listening', resolve));
-  const cleanup = setupBotListener(api, { user_id: 'bot-uid' });
+  const cleanup = setupBotListener(api, { user_id: 'bot-uid' }, { roster: loadRoster(rosterPath) });
   t.after(() => {
     cleanup();
     stopHermesBridge();
     store.close();
+    if (previousRosterFile === undefined) delete process.env.ZALO_ROSTER_FILE;
+    else process.env.ZALO_ROSTER_FILE = previousRosterFile;
     rmSync(dir, { recursive: true, force: true });
   });
-  return { api, listener, sent, server };
+  return { api, listener, sent, server, store };
 }
 
-function incoming({ text = '/sethome', senderUid = 'owner-123', threadId = 'dm-1', type = ThreadType.User } = {}) {
+function incoming({ text = '/sethome', senderUid = 'owner-123', threadId = 'dm-1', type = ThreadType.User, messageId = `msg-${threadId}` } = {}) {
   return {
     threadId,
     type,
     isSelf: false,
     data: {
-      msgId: `msg-${threadId}`,
-      cliMsgId: `cli-${threadId}`,
+      msgId: messageId,
+      cliMsgId: `cli-${messageId}`,
       uidFrom: senderUid,
       dName: 'Người cài đặt',
       content: text,
@@ -246,4 +258,59 @@ test('disconnected /sethome without sender UID is ignored safely', async (t) => 
   await new Promise((resolve) => setTimeout(resolve, 30));
 
   assert.equal(sent.length, 0);
+});
+
+test('attached bot forwards only owners and guests in allowed group while remembering everyone', async (t) => {
+  const ownerUid = 'owner-allowed';
+  const guestUid = 'guest-allowed';
+  const { listener, server, store } = await harness(t, {
+    roster: { version: 1, owners: [ownerUid], guests: [guestUid], guestGroups: ['group-allowed'] },
+  });
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  t.after(() => ws.close());
+  const hello = onceMessage(ws, (message) => message.type === 'hello');
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  await hello;
+  const forwarded = [];
+  ws.on('message', (raw) => {
+    const message = JSON.parse(raw.toString());
+    if (message.type === 'message') forwarded.push(message);
+  });
+
+  listener.emit('message', incoming({ text: 'khách hợp lệ', senderUid: guestUid, threadId: 'group-allowed', type: ThreadType.Group, messageId: 'm-1' }));
+  listener.emit('message', incoming({ text: 'sai nhóm', senderUid: guestUid, threadId: 'group-blocked', type: ThreadType.Group, messageId: 'm-2' }));
+  listener.emit('message', incoming({ text: 'người lạ', senderUid: 'stranger', threadId: 'group-allowed', type: ThreadType.Group, messageId: 'm-3' }));
+  listener.emit('message', incoming({ text: 'khách nhắn riêng', senderUid: guestUid, threadId: guestUid, messageId: 'm-4' }));
+  listener.emit('message', incoming({ text: 'chủ nhắn riêng', senderUid: ownerUid, threadId: ownerUid, messageId: 'm-5' }));
+
+  await waitFor(() => store.getHealth().messageCount === 5, 'all messages remembered');
+  await waitFor(() => forwarded.length === 2, 'allowed messages forwarded');
+  assert.deepEqual(forwarded.map((message) => message.senderUid), [guestUid, ownerUid]);
+});
+
+// guestGroups rỗng nghĩa là KHÔNG nhóm nào, không phải mọi nhóm. ZALO_GUEST_GROUPS
+// là biến mới, nên trạng thái hay gặp nhất là chưa ai khai nó — và mặc định của
+// một trạng thái chưa khai phải là hẹp nhất.
+test('a guest reaches nobody while guestGroups is empty, but the owner still does', async (t) => {
+  const ownerUid = 'owner-allowed';
+  const guestUid = 'guest-allowed';
+  const { listener, server } = await harness(t, {
+    roster: { version: 1, owners: [ownerUid], guests: [guestUid], guestGroups: [] },
+  });
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  t.after(() => ws.close());
+  const hello = onceMessage(ws, (message) => message.type === 'hello');
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  await hello;
+  const forwarded = [];
+  ws.on('message', (raw) => {
+    const message = JSON.parse(raw.toString());
+    if (message.type === 'message') forwarded.push(message);
+  });
+
+  listener.emit('message', incoming({ text: 'khách trong nhóm', senderUid: guestUid, threadId: 'group-any', type: ThreadType.Group, messageId: 'g-1' }));
+  listener.emit('message', incoming({ text: 'chủ nhân trong nhóm', senderUid: ownerUid, threadId: 'group-any', type: ThreadType.Group, messageId: 'g-2' }));
+
+  await waitFor(() => forwarded.length === 1, 'only the owner was forwarded');
+  assert.deepEqual(forwarded.map((message) => message.senderUid), [ownerUid]);
 });

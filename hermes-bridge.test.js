@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket as RawWebSocket } from 'ws';
 import { openZaloStore } from './zalo-store.js';
+import { loadRoster } from './zalo-roster.js';
 import { createRuntimeHealth } from './runtime-health.js';
 
 process.env.ZALO_RATE_BURST = '1';
@@ -31,6 +32,16 @@ function testStore(t) {
     rmSync(dir, { recursive: true, force: true });
   });
   return store;
+}
+
+// Ghi ra tệp rồi nạp lại qua loadRoster, thay vì dựng thẳng một object: như vậy
+// phép kiểm đi qua đúng đường mà server.js đi, kể cả phần phân tích tệp.
+function useRoster(t, roster) {
+  const dir = mkdtempSync(join(tmpdir(), 'zalo-bridge-roster-'));
+  const path = join(dir, 'roster.json');
+  writeFileSync(path, JSON.stringify(roster));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return loadRoster(path);
 }
 
 function auth(threadId, threadType, { actorUid = 'owner', confirmed = false } = {}) {
@@ -1223,4 +1234,50 @@ test('history_range đọc cả khoảng thời gian từ kho, lật trang khôn
     ws.close();
     stopHermesBridge();
   }
+});
+
+test('bridge reads owner authorization from roster', async (t) => {
+  const ownerUid = '9000000000000000001';
+  const roster = useRoster(t, { version: 1, owners: [ownerUid], guests: ['9000000000000000002'], guestGroups: [] });
+  const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store: testStore(t), roster });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  t.after(() => { stopHermesBridge(); ws.close(); });
+  const hello = onceMessage(ws, (message) => message.type === 'hello');
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  await hello;
+
+  const reply = onceMessage(ws, (message) => message.reqId === 'roster-owner');
+  ws.send(JSON.stringify({
+    type: 'history_range', reqId: 'roster-owner', threadId: 'group-1', threadType: 1, sinceMs: 0,
+    // Vai owner cần CẢ HAI: adapter khai actorRole 'owner' và uid nằm trong
+    // roster (zalo-policy.js). Ca này giữ vế đầu cố định để đo đúng vế sau.
+    auth: { ...auth('group-1', 1, { actorUid: ownerUid }), actorRole: 'owner' },
+  }));
+  assert.equal((await reply).ok, true);
+});
+
+test('bridge denies owner-only commands when roster is empty', async (t) => {
+  const roster = useRoster(t, { version: 1, owners: [], guests: [], guestGroups: [] });
+  const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store: testStore(t), roster });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  t.after(() => { stopHermesBridge(); ws.close(); });
+  const hello = onceMessage(ws, (message) => message.type === 'hello');
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  await hello;
+
+  const reply = onceMessage(ws, (message) => message.reqId === 'roster-empty');
+  ws.send(JSON.stringify({
+    type: 'history_range', reqId: 'roster-empty', threadId: 'group-1', threadType: 1, sinceMs: 0,
+    // Adapter vẫn khai owner; roster rỗng là điều kiện duy nhất thay đổi. Đó
+    // đúng là khiếm khuyết H2 đã gặp thật hôm 2026-09-17.
+    auth: { ...auth('group-1', 1, { actorUid: '9000000000000000001' }), actorRole: 'owner' },
+  }));
+  const result = await reply;
+  assert.equal(result.ok, false);
+  // Bridge trả câu chữ cho người đọc, không trả mã. Khẳng định trên đúng chuỗi
+  // mà policyErrorMessage('owner_required') sinh ra -- chính chuỗi đã thấy
+  // trong log sản xuất hôm 2026-09-17 và là thứ chẩn đoán được H2.
+  assert.equal(result.error, 'Chỉ chủ nhân được phép thực hiện thao tác này');
 });

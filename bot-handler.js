@@ -4,6 +4,7 @@ import {
 } from './hermes-bridge.js';
 import { ThreadType } from 'zca-js';
 import { createStickerDirectory, enrichSticker } from './zalo-stickers.js';
+import { emptyRoster } from './zalo-roster.js';
 
 /**
  * Định tuyến tin nhắn Zalo sang Hermes Agent.
@@ -26,11 +27,22 @@ import { createStickerDirectory, enrichSticker } from './zalo-stickers.js';
  */
 
 let selfUid = '';
+let activeRoster = emptyRoster();
 
 /** Ai được nghe câu báo lỗi khi Hermes chưa sẵn sàng (UID Zalo, phân tách bởi dấu phẩy). */
 function ownerUids() {
   return String(process.env.ZALO_ALLOWED_USERS || '')
     .split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+// Khách chỉ với tới Hermes trong một nhóm được kê tên. Danh sách nhóm rỗng
+// nghĩa là *không nhóm nào*, không phải mọi nhóm: ZALO_GUEST_GROUPS là biến mới
+// nên trạng thái hay gặp nhất là chưa ai khai nó, và mặc định của một trạng thái
+// chưa khai phải là hẹp nhất.
+function mayReachHermes(senderUid, isGroup, threadId) {
+  if (activeRoster.owners.has(senderUid)) return true;
+  if (!activeRoster.guests.has(senderUid)) return false;
+  return isGroup && activeRoster.guestGroups.has(String(threadId));
 }
 
 /**
@@ -49,12 +61,13 @@ const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
  */
 const RESTART_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
 
-export function setupBotListener(api, profile = null, { health = null, restartDelaysMs = RESTART_DELAYS_MS } = {}) {
+export function setupBotListener(api, profile = null, { health = null, restartDelaysMs = RESTART_DELAYS_MS, roster = null } = {}) {
   if (!api?.listener) {
     console.warn('[bot] ❌ api.listener không tồn tại — bot sẽ không nhận được tin nhắn');
     return () => {};
   }
   selfUid = String(profile?.user_id ?? profile?.userId ?? '');
+  activeRoster = roster || emptyRoster();
 
   let stopped = false;
   let restartTimer = null;
@@ -178,6 +191,11 @@ async function handleIncomingMessage(api, msg, stickers = null) {
 
   const where = isGroup ? `Nhóm ${threadId}` : `DM ${threadId}`;
   console.log(`[bot] 📩 [${where}] ${msg.data?.dName || '?'} (${senderUid}): ${content.slice(0, 80)}`);
+
+  if (!mayReachHermes(senderUid, isGroup, threadId)) {
+    console.log(`[bot] 🚪 [${where}] ${senderUid} không có trong roster — bỏ qua`);
+    return;
+  }
 
   if (isHermesAttached()) {
     forwardToHermes(msg);

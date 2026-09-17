@@ -44,6 +44,7 @@ TOOLSET_PUBLIC = "zalo_public"
 # cùng tên với nền tảng cho mọi phiên, nên đặt trùng thì người ngoài cũng nhận
 # luôn bộ công cụ dành riêng cho chủ.
 TOOLSET_OWNER = "zalo_owner"
+TOOLSET_DENIED = "zalo_denied"
 # Công cụ chỉ có nghĩa trong lượt chạy cron. Không nằm trong bộ nào
 # toolsets_for_source trả về, nên chat thường không bao giờ thấy.
 TOOLSET_CRON = "zalo_cron"
@@ -3054,6 +3055,25 @@ def define_platform_composite() -> None:
 
     logger.info("[zalo] hermes-zalo: %d công cụ (đã loại %d công cụ kanban)",
                 len(core - private), len(private))
+
+
+def define_denied_toolset() -> None:
+    try:
+        from toolsets import create_custom_toolset
+    except ImportError as exc:
+        logger.warning("[zalo] không định nghĩa được %s: %s", TOOLSET_DENIED, exc)
+        return
+    create_custom_toolset(
+        name=TOOLSET_DENIED,
+        description="Không công cụ nào. Dành cho người không phải chủ nhân cũng không phải khách.",
+        tools=[],
+        includes=[],
+    )
+    try:
+        import toolsets as _ts
+        _ts._resolve_toolset_memo.clear()
+    except Exception:
+        pass
 
 
 def define_cron_member_toolset() -> None:

@@ -75,6 +75,31 @@ Nên rào chắn thật phải nằm ở **tầng thực thi**: mỗi công cụ
 bọc một lớp kiểm tra danh tính người gửi (`_owner_only` trong `tools.py`). Dù công
 cụ có lọt vào danh sách vì cấu hình sai, người ngoài gọi vẫn bị từ chối.
 
+## 5a. Ba hạng Zalo cần hai cửa
+
+| Hạng | Nguồn | Quyền toolset |
+|---|---|---|
+| chủ nhân | `ZALO_ALLOWED_USERS` | `hermes-zalo`, `kanban`, `zalo_owner`, `zalo_public` |
+| khách | `GATEWAY_ALLOWED_USERS` | `zalo_public` |
+| người lạ | không có | `zalo_denied` rỗng |
+
+`GATEWAY_ALLOWED_USERS` là biến upstream đã có để khách qua cổng gateway mà
+không thành chủ nhân. Không cần, và không được dùng, `ZALO_ALLOW_ALL_USERS`:
+nó mở cổng cho mọi người nhưng không diễn tả hạng quyền nào.
+
+**F1, đo thật:** `return []` là falsy ở `run_turn.py:2158`, nên override bị bỏ
+qua và người lạ nhận **45 công cụ**, gồm `terminal`. Cửa 2 phải trả
+`[TOOLSET_DENIED]`: danh sách bên ngoài không rỗng để override có hiệu lực,
+nhưng toolset bên trong rỗng. `None` cũng sai vì nó chọn cấu hình mặc định.
+
+`platform_toolsets.zalo` vẫn phải được ghim: nếu `toolsets_for_source()` ném
+lỗi, Hermes rơi về cấu hình nền tảng; ghim là lưới an toàn cho chính lỗi đó.
+
+Khách vẫn tự gõ `/approve` cho lời nhắc của mình vì `_pending_approvals` khoá
+theo session và `group_sessions_per_user: true` (F3). Bước 2 không cấp cho
+khách công cụ nào kích hoạt lời nhắc duyệt. Roster là tệp dẫn xuất; sửa tay sẽ
+bị verifier bắt.
+
 ## 6. Composite `hermes-<platform>` tự sinh kéo theo cả kanban
 
 Bẫy này ảnh hưởng **mọi** plugin platform, không riêng Zalo.

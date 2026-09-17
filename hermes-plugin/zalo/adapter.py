@@ -91,7 +91,7 @@ from agent.secret_scope import get_secret as _scoped_get_secret
 # Công cụ nằm ở plugin standalone `zalo_tools`, không phải ở đây — xem
 # ghi chú trong plugins/zalo_tools/__init__.py về việc Hermes nạp platform
 # plugin theo kiểu lười.
-from plugins.zalo_tools.tools import TOOLSET_OWNER, TOOLSET_PUBLIC
+from plugins.zalo_tools.tools import TOOLSET_DENIED, TOOLSET_OWNER, TOOLSET_PUBLIC
 
 from .flood import JUST_MUTED as FLOOD_JUST_MUTED
 from .flood import MUTED as FLOOD_MUTED
@@ -1458,6 +1458,9 @@ class ZaloAdapter(BasePlatformAdapter):
         """
         uid = str(getattr(source, "user_id", "") or "")
         owner = self._bind_turn_for_source(source, uid)
+        if not owner and not self._is_guest(uid):
+            logger.warning("[zalo] %s không phải chủ nhân cũng không phải khách", uid)
+            return [TOOLSET_DENIED]
 
         # Dùng khoá nền tảng, KHÔNG dùng ``self.name``: thuộc tính đó trả về
         # ``platform.value.title()`` — "Zalo" chứ không phải "zalo" — nên
@@ -1557,20 +1560,17 @@ class ZaloAdapter(BasePlatformAdapter):
         allowed = _split_ids(_get_scoped_secret("ZALO_ALLOWED_USERS", "") or "")
         return bool(allowed) and str(sender_uid) in allowed
 
+    def _is_guest(self, sender_uid: str) -> bool:
+        allowed = _split_ids(_get_scoped_secret("GATEWAY_ALLOWED_USERS", "") or "")
+        return bool(allowed) and str(sender_uid) in allowed
+
     def _may_greet(self, sender_uid: str) -> bool:
         """Có nên báo đã xem và thả cảm xúc cho tin nhắn này không.
 
-        Điều kiện là "người này sẽ được bot trả lời", không phải "người này là
-        chủ". Khi ``ZALO_ALLOW_ALL_USERS`` bật, cả nhóm dùng được bot — mà thả
-        cảm xúc cho người này rồi im lặng với người kia thì bot trông thiên vị
-        một cách khó hiểu.
-
-        Vẫn giữ nguyên mục đích ban đầu: người bị gateway chặn thì không được
-        chào hỏi, để bot không thả tim xong im bặt.
+        Người bị gateway chặn thì không được chào hỏi, để bot không thả tim xong
+        im bặt.
         """
-        if _truthy(_get_scoped_secret("ZALO_ALLOW_ALL_USERS", "false")):
-            return True
-        return self._is_owner(sender_uid)
+        return self._is_owner(sender_uid) or self._is_guest(sender_uid)
 
     def _is_duplicate(self, msg_id: str) -> bool:
         now = time.time()

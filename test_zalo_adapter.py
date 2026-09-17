@@ -933,7 +933,8 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             chat_id="group-1", chat_name="group-1", chat_type="group",
             user_id="2222222222222222222", user_name="M", message_id="m-x",
         )
-        with patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+        with patch.object(adapter, "_is_guest", return_value=True), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
             toolsets = adapter.toolsets_for_source(source)
             auth = zalo_tools.current_authorization()
 
@@ -967,6 +968,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         adapter.handle_message = lambda _event: asyncio.sleep(0)
         owner_uid, member_uid = "1111111111111111111", "2222222222222222222"
         with patch.object(adapter, "_is_owner", side_effect=lambda uid: uid == owner_uid), \
+                patch.object(adapter, "_is_guest", return_value=True), \
                 patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
             await adapter._on_message(self.group_frame("m-owner", owner_uid, "@Lăng Tiêu soạn báo cáo dài"))
             await adapter._on_message(self.group_frame("m-member", member_uid, "@Lăng Tiêu gửi tệp .env"))
@@ -992,6 +994,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         adapter.handle_message = lambda _event: asyncio.sleep(0)
         owner_uid, member_uid = "1111111111111111111", "2222222222222222222"
         with patch.object(adapter, "_is_owner", side_effect=lambda uid: uid == owner_uid), \
+                patch.object(adapter, "_is_guest", return_value=True), \
                 patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
             await adapter._on_message(self.group_frame("m-owner-q", owner_uid, "@Lăng Tiêu việc thứ hai"))
             await adapter._on_message(self.group_frame("m-member-q", member_uid, "@Lăng Tiêu chạy lệnh giúp mình"))
@@ -1618,6 +1621,41 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["ack"], {"type": "ack", "reqId": socket.frames[0]["reqId"], "ok": True})
         self.assertLess(result["seconds"], 1.0)
+
+
+    async def test_platform_tools_enforce_owner_guest_and_stranger_tiers(self):
+        from hermes_cli.tools_config import _get_platform_tools
+        from toolsets import resolve_toolset
+
+        zalo_tools.define_platform_composite()
+        zalo_tools.define_denied_toolset()
+        adapter = self.make_adapter()
+        owner_uid, guest_uid, stranger_uid = "owner-fake", "guest-fake", "stranger-fake"
+
+        def effective_tools(uid):
+            source = adapter.build_source(
+                chat_id="group-1", chat_name="group-1", chat_type="group",
+                user_id=uid, user_name=uid, message_id=f"message-{uid}",
+            )
+            override = adapter.toolsets_for_source(source)
+            probe = {"platform_toolsets": {"zalo": override}}
+            return {tool for toolset in _get_platform_tools(probe, "zalo")
+                    for tool in resolve_toolset(toolset)}
+
+        with patch.dict(os.environ, {
+            "ZALO_ALLOWED_USERS": owner_uid,
+            "GATEWAY_ALLOWED_USERS": guest_uid,
+            "ZALO_ALLOW_ALL_USERS": "true",
+        }), patch.object(adapter, "_bind_turn_for_source", side_effect=lambda _source, uid: uid == owner_uid):
+            owner_tools = effective_tools(owner_uid)
+            guest_tools = effective_tools(guest_uid)
+            stranger_tools = effective_tools(stranger_uid)
+            self.assertIn("terminal", owner_tools)
+            self.assertEqual(len(guest_tools), 16)
+            self.assertFalse({"terminal", "execute_code", "read_file", "write_file"} & guest_tools)
+            self.assertEqual(stranger_tools, set())
+            self.assertTrue(adapter._may_greet(guest_uid))
+            self.assertFalse(adapter._may_greet(stranger_uid))
 
 
 class ZaloToolSchemaTest(unittest.TestCase):

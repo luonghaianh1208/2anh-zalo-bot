@@ -379,7 +379,7 @@ let memberDirectory = null;
 
 export function startHermesBridge({
   api, profile, port = defaultBridgePort(), store = null, maxBackfillPages: pageLimit = null,
-  ownerUids = null, health = null, staleCheckIntervalMs = 15_000,
+  ownerUids = null, roster = null, health = null, staleCheckIntervalMs = 15_000,
   // Tệp thắng env một cách tường minh (xem bridge-token.js). Mặc định không
   // đặt tệp, nên chạy trực tiếp trên máy vẫn dùng ZALO_BRIDGE_TOKEN như cũ.
   bridgeToken = resolveBridgeToken({
@@ -401,8 +401,11 @@ export function startHermesBridge({
   activeAccountId = String(profile?.user_id ?? profile?.userId ?? 'unknown');
   activeStore = store || defaultStore();
   ownsActiveStore = !store;
-  activeOwnerUids = new Set(ownerUids || String(process.env.ZALO_ALLOWED_USERS || '')
-    .split(',').map((value) => value.trim()).filter(Boolean));
+  // Chủ nhân đến từ roster do server.js nạp, hoặc từ ownerUids khi caller tự
+  // biết. Không tự đọc tệp ở đây: fail-fast thuộc về điểm khởi động tiến trình,
+  // một chỗ duy nhất, chứ không rải vào từng hàm thư viện.
+  activeOwnerUids = new Set(ownerUids || roster?.owners || []);
+  console.log(`[bridge] roster: ${activeOwnerUids.size} chủ nhân`);
   activeHealth = health;
   maxBackfillPages = Math.max(1, Number(pageLimit) || Number(process.env.ZALO_BACKFILL_MAX_PAGES) || 10);
   limiter = new RateLimiter({
