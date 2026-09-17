@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 import { ThreadType, Reactions } from 'zca-js';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
+import { resolveBridgeToken } from './bridge-token.js';
 import { formatAndChunkZaloMarkdown } from './markdown-formatter.js';
 import { createMemberDirectory, findMentions } from './zalo-mentions.js';
 import { latexToUnicode } from './zalo-math.js';
@@ -379,7 +380,16 @@ let memberDirectory = null;
 export function startHermesBridge({
   api, profile, port = defaultBridgePort(), store = null, maxBackfillPages: pageLimit = null,
   ownerUids = null, health = null, staleCheckIntervalMs = 15_000,
-  bridgeToken = process.env.ZALO_BRIDGE_TOKEN,
+  // Tệp thắng env một cách tường minh (xem bridge-token.js). Mặc định không
+  // đặt tệp, nên chạy trực tiếp trên máy vẫn dùng ZALO_BRIDGE_TOKEN như cũ.
+  bridgeToken = resolveBridgeToken({
+    file: process.env.ZALO_BRIDGE_TOKEN_FILE,
+    envToken: process.env.ZALO_BRIDGE_TOKEN,
+  }),
+  // Trong container, loopback chỉ là loopback của chính container đó — Hermes
+  // ở container khác sẽ không bao giờ chạm tới. Mặc định giữ nguyên 127.0.0.1
+  // để không nới rộng phạm vi của bản chạy trên máy.
+  host = process.env.ZALO_BRIDGE_HOST || '127.0.0.1',
 }) {
   if (!bridgeToken) throw new Error('Thiếu ZALO_BRIDGE_TOKEN; hãy chạy npm run install:hermes');
   zaloApi = api;
@@ -417,7 +427,7 @@ export function startHermesBridge({
   if (historyListener?.ws?.readyState === 1) historyListenerReady = true;
 
   wss = new WebSocketServer({
-    host: '127.0.0.1',
+    host,
     port,
     verifyClient(info, done) {
       if (info.origin || info.req.headers.origin) return done(false, 403, 'Browser origin is not allowed');
@@ -484,7 +494,7 @@ export function startHermesBridge({
   }, Math.max(10, Number(staleCheckIntervalMs) || 15_000));
   staleTimer.unref?.();
 
-  console.log(`[bridge] 🌉 đang chờ Hermes tại ws://127.0.0.1:${port}`);
+  console.log(`[bridge] 🌉 đang chờ Hermes tại ws://${host}:${port}`);
   return wss;
 }
 

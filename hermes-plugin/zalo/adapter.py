@@ -62,6 +62,7 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -392,6 +393,32 @@ def _truthy(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _bridge_token_from_file() -> str:
+    """Đọc bí mật cầu nối từ tệp, nếu có chỉ định tệp.
+
+    Vì sao tệp thay vì env: trong container, biến môi trường hiện ra ở
+    ``docker inspect`` và trong bất kỳ log nào in môi trường ra. Một tệp mode
+    0600 mount vào cả hai bên thì chỉ tiến trình đọc được mới thấy giá trị.
+
+    Thiếu tệp, không đọc được, hoặc rỗng đều là lỗi. Không rơi về env: rơi về
+    env lặng lẽ là cách một lần mount sai biến thành "vẫn chạy, bằng bí mật cũ".
+    """
+    path = (_get_scoped_secret("ZALO_BRIDGE_TOKEN_FILE", "") or "").strip()
+    if not path:
+        return ""
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        # Nêu lý do và đường dẫn, không bao giờ nêu nội dung.
+        raise ValueError(
+            f"Không đọc được ZALO_BRIDGE_TOKEN_FILE ({exc.strerror}): {path}"
+        ) from exc
+    token = raw.strip()
+    if not token:
+        raise ValueError(f"ZALO_BRIDGE_TOKEN_FILE rỗng: {path}")
+    return token
+
+
 def _authenticated_bridge_url(url: str, token: str) -> str:
     """Attach the shared bridge token without logging or altering other query keys."""
     if not str(token or "").strip():
@@ -461,8 +488,11 @@ class ZaloAdapter(BasePlatformAdapter):
             or extra.get("bridge_url")
             or DEFAULT_BRIDGE_URL
         )
+        # Tệp thắng cả config.yaml và env, tường minh: đã chỉ định tệp thì tệp
+        # là nguồn duy nhất.
         self._bridge_token: str = str(
-            extra.get("bridge_token")
+            _bridge_token_from_file()
+            or extra.get("bridge_token")
             or _get_scoped_secret("ZALO_BRIDGE_TOKEN", "")
         ).strip()
         self._reply_only_tagged: bool = _truthy(
@@ -1886,7 +1916,10 @@ def _env_enablement() -> Optional[dict]:
     bridge_url = (_get_scoped_secret("ZALO_BRIDGE_URL", "") or "").strip()
     if bridge_url:
         extra["bridge_url"] = bridge_url
-    bridge_token = (_get_scoped_secret("ZALO_BRIDGE_TOKEN", "") or "").strip()
+    bridge_token = (
+        _bridge_token_from_file()
+        or (_get_scoped_secret("ZALO_BRIDGE_TOKEN", "") or "")
+    ).strip()
     if bridge_token:
         extra["bridge_token"] = bridge_token
     reply_only_tagged = (_get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "") or "").strip()
