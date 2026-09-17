@@ -255,6 +255,24 @@ ACK_TIMEOUT_SECONDS = 30
 # ngưỡng chờ đến mức chỉ cần chậm thêm chút là hỏng. Nới riêng cho nhóm lệnh
 # này thay vì nới tất cả: một lệnh gửi chữ mà treo 2 phút thì nên báo hỏng sớm.
 SLOW_ACK_TIMEOUT_SECONDS = 150
+
+# Keepalive phải sống lâu hơn ack chậm nhất mình chịu chờ.
+#
+# Trước đây là 20s, trong khi SLOW_ACK_TIMEOUT_SECONDS là 150s — nên với một
+# lượt agent chạy lâu (research, nhiều lời gọi công cụ), vòng lặp sự kiện của
+# Hermes không kịp phục vụ ping, thư viện websockets tự đóng kết nối bằng 1011,
+# và ack "đã gửi xong" mất đường về. Hermes kết luận gửi hỏng rồi gửi lại —
+# người dùng nhận đúng hai bản, cách nhau đúng 150 giây. Đo được ngày
+# 2026-09-17: ba tin trùng, span=150s, trong lúc log Hermes im lặng 6 phút rưỡi.
+#
+# Nghịch lý là agent càng làm việc lâu thì càng chắc chắn tự giết đường gửi kết
+# quả của chính nó — đúng lúc kết quả đáng giá nhất.
+#
+# Vẫn giữ ping: một sidecar chết thật phải bị phát hiện. Chỉ nới ngưỡng để nó
+# lớn hơn cửa sổ ack, vì một kết nối đóng trước khi ack kịp về thì không bao giờ
+# ack được.
+BRIDGE_PING_INTERVAL_SECONDS = 20
+BRIDGE_PING_TIMEOUT_SECONDS = SLOW_ACK_TIMEOUT_SECONDS + 30
 SLOW_METHODS = frozenset({"uploadAttachment", "sendMessage", "sendVoice", "sendVideo"})
 DEDUP_WINDOW_SECONDS = 300
 DEDUP_MAX_SIZE = 1000
@@ -582,7 +600,11 @@ class ZaloAdapter(BasePlatformAdapter):
         try:
             authenticated_url = _authenticated_bridge_url(self._bridge_url, self._bridge_token)
             self._ws = await asyncio.wait_for(
-                websockets.connect(authenticated_url, ping_interval=20, ping_timeout=20),
+                websockets.connect(
+                    authenticated_url,
+                    ping_interval=BRIDGE_PING_INTERVAL_SECONDS,
+                    ping_timeout=BRIDGE_PING_TIMEOUT_SECONDS,
+                ),
                 timeout=10,
             )
         except Exception as exc:
@@ -683,7 +705,8 @@ class ZaloAdapter(BasePlatformAdapter):
                     self._ws = await asyncio.wait_for(
                         websockets.connect(
                             _authenticated_bridge_url(self._bridge_url, self._bridge_token),
-                            ping_interval=20, ping_timeout=20,
+                            ping_interval=BRIDGE_PING_INTERVAL_SECONDS,
+                            ping_timeout=BRIDGE_PING_TIMEOUT_SECONDS,
                         ),
                         timeout=10,
                     )
