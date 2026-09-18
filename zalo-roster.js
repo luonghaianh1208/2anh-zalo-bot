@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 
 // Roster rỗng tường minh, dành cho caller chưa có roster (kiểm thử). Tiến trình
 // thật KHÔNG dùng nó: server.js nạp roster một lần lúc khởi động và ném lỗi nếu
@@ -47,4 +47,27 @@ export function loadRoster(path) {
     if (guests.has(uid)) throw new Error(`UID ${uid} nằm trong cả owners và guests`);
   }
   return { owners, guests, guestGroups };
+}
+
+// Mỗi lần kiểm đều stat theo đường dẫn rồi mở lại tệp khi nó đổi. Không giữ
+// descriptor hay watch theo inode: roster được thay bằng rename nên inode cũ
+// không còn là roster mà sidecar cần đọc.
+export function reloadRosterIfChanged(path, roster, previousState = null, reportError = console.error) {
+  try {
+    const stat = statSync(path);
+    const state = { mtimeMs: stat.mtimeMs, size: stat.size, lastError: null };
+    if (previousState?.mtimeMs === state.mtimeMs && previousState?.size === state.size) {
+      return { roster, state };
+    }
+    return { roster: loadRoster(path), state };
+  } catch (error) {
+    // Hàm này chạy mỗi tin nhắn, nên một roster thiếu sẽ sinh một dòng log mỗi
+    // tin — đúng kiểu ngập log đã làm chết đường gửi ngày 18/09. Nêu một lần
+    // cho mỗi lỗi khác nhau, và nêu lại khi lỗi đổi hoặc sau khi đã hồi phục.
+    const reason = String(error?.message || error);
+    if (reason !== previousState?.lastError) {
+      reportError(`[bot] không nạp lại roster — giữ roster đang dùng: ${reason}`);
+    }
+    return { roster, state: { ...(previousState || {}), lastError: reason } };
+  }
 }

@@ -4,7 +4,7 @@ import {
 } from './hermes-bridge.js';
 import { ThreadType } from 'zca-js';
 import { createStickerDirectory, enrichSticker } from './zalo-stickers.js';
-import { emptyRoster } from './zalo-roster.js';
+import { emptyRoster, reloadRosterIfChanged } from './zalo-roster.js';
 
 /**
  * Định tuyến tin nhắn Zalo sang Hermes Agent.
@@ -28,6 +28,15 @@ import { emptyRoster } from './zalo-roster.js';
 
 let selfUid = '';
 let activeRoster = emptyRoster();
+let activeRosterPath = '';
+let activeRosterState = null;
+
+function refreshActiveRoster() {
+  if (!activeRosterPath) return;
+  const next = reloadRosterIfChanged(activeRosterPath, activeRoster, activeRosterState);
+  activeRoster = next.roster;
+  activeRosterState = next.state;
+}
 
 /** Ai được nghe câu báo lỗi khi Hermes chưa sẵn sàng (UID Zalo, phân tách bởi dấu phẩy). */
 function ownerUids() {
@@ -40,6 +49,7 @@ function ownerUids() {
 // nên trạng thái hay gặp nhất là chưa ai khai nó, và mặc định của một trạng thái
 // chưa khai phải là hẹp nhất.
 function mayReachHermes(senderUid, isGroup, threadId) {
+  refreshActiveRoster();
   if (activeRoster.owners.has(senderUid)) return true;
   if (!activeRoster.guests.has(senderUid)) return false;
   return isGroup && activeRoster.guestGroups.has(String(threadId));
@@ -68,6 +78,8 @@ export function setupBotListener(api, profile = null, { health = null, restartDe
   }
   selfUid = String(profile?.user_id ?? profile?.userId ?? '');
   activeRoster = roster || emptyRoster();
+  activeRosterPath = roster ? String(process.env.ZALO_ROSTER_FILE || '') : '';
+  activeRosterState = null;
 
   let stopped = false;
   let restartTimer = null;

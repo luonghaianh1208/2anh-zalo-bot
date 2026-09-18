@@ -22,9 +22,11 @@ import logging
 import os
 import re
 import secrets
+import tempfile
 import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -2147,6 +2149,138 @@ async def zalo_fb_publish(args: Dict[str, Any], **_kw) -> str:
 
 
 
+def _guest_roster_paths() -> tuple[Path, Path, Path]:
+    # Thư mục lấy từ ZALO_ROSTER_FILE, KHÔNG từ DATA_ROOT. DATA_ROOT là biến của
+    # compose trên host và **rỗng bên trong container** (đo 2026-09-18), còn
+    # đường dẫn trong container là /opt/data/zalo chứ không phải
+    # <host data root>/hermes/zalo. Dựng đường theo DATA_ROOT thì công cụ lỗi ở
+    # mọi lần gọi, và test vẫn xanh vì test tự đặt DATA_ROOT.
+    #
+    # ZALO_ROSTER_FILE thì cả hermes và sidecar đều được đặt đúng trong
+    # compose.yml, và cả adapter lẫn cửa 1 đã lấy đường theo nó.
+    roster_file = str(os.getenv("ZALO_ROSTER_FILE") or "").strip()
+    if not roster_file:
+        raise ValueError("chưa cấu hình ZALO_ROSTER_FILE")
+    roster_dir = Path(roster_file).parent
+    return (
+        roster_dir / "guests.json",
+        Path(roster_file),
+        roster_dir / "guest-grants.log",
+    )
+
+
+def _roster_env_ids(name: str) -> List[str]:
+    return sorted({item for item in re.split(r"[\s,]+", str(os.getenv(name) or "").strip()) if item})
+
+
+def _read_guest_uids(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("guests.json không đọc được") from exc
+    if (
+        not isinstance(data, dict)
+        or type(data.get("version")) is not int
+        or data["version"] != 1
+        or not isinstance(data.get("guests"), list)
+        or not all(isinstance(item, str) and item.strip() for item in data["guests"])
+    ):
+        raise ValueError("guests.json có hình dạng không hợp lệ")
+    return {item.strip() for item in data["guests"]}
+
+
+def _read_roster_owner_uids(path: Path) -> set[str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("roster.json không đọc được") from exc
+    owners = data.get("owners") if isinstance(data, dict) and data.get("version") == 1 else None
+    if not isinstance(owners, list) or not all(isinstance(item, str) and item.strip() for item in owners):
+        raise ValueError("roster.json có hình dạng không hợp lệ")
+    return {item.strip() for item in owners}
+
+
+def _write_json_atomic(path: Path, data: Dict[str, Any]) -> None:
+    previous_umask = os.umask(0o077)
+    try:
+        fd, temporary_path = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    finally:
+        os.umask(previous_umask)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            json.dump(data, output, ensure_ascii=False, indent=2)
+            output.write("\n")
+        os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+
+
+def _roster_data(guest_uids: set[str]) -> Dict[str, Any]:
+    owners = _roster_env_ids("ZALO_ALLOWED_USERS")
+    if not owners:
+        raise ValueError("ZALO_ALLOWED_USERS là bắt buộc")
+    guests_from_env = _roster_env_ids("GATEWAY_ALLOWED_USERS")
+    if set(owners) & guest_uids:
+        raise ValueError("ZALO_ALLOWED_USERS và guests.json không được trùng UID")
+    if set(owners) & set(guests_from_env):
+        raise ValueError("owners và guests không được trùng UID")
+    return {
+        "version": 1,
+        "owners": owners,
+        "guests": sorted(set(guests_from_env) | guest_uids),
+        "guestGroups": _roster_env_ids("ZALO_GUEST_GROUPS"),
+    }
+
+
+def _append_guest_grant_log(path: Path, action: str, user_id: str) -> None:
+    previous_umask = os.umask(0o077)
+    try:
+        with open(path, "a", encoding="utf-8") as output:
+            output.write(f"{datetime.now(timezone.utc).isoformat()} {action} {user_id}\n")
+    finally:
+        os.umask(previous_umask)
+    os.chmod(path, 0o600)
+
+
+def _change_guest(args: Dict[str, Any], action: str) -> str:
+    user_id = str(args.get("user_id") or "").strip()
+    if not user_id:
+        return _err("cần `user_id`")
+    try:
+        guests_path, roster_path, log_path = _guest_roster_paths()
+        if user_id in _read_roster_owner_uids(roster_path):
+            return _err(f"UID {user_id} là chủ nhân trong roster, không thể cấp quyền khách")
+        guest_uids = _read_guest_uids(guests_path)
+        if action == "grant":
+            guest_uids.add(user_id)
+        else:
+            guest_uids.discard(user_id)
+        roster_data = _roster_data(guest_uids)
+        _write_json_atomic(guests_path, {"version": 1, "guests": sorted(guest_uids)})
+        _write_json_atomic(roster_path, roster_data)
+        _append_guest_grant_log(log_path, action, user_id)
+    except (OSError, ValueError) as exc:
+        logger.warning("[zalo] không %s được khách %s: %s", action, user_id, exc)
+        return _err(f"không cập nhật được danh sách khách: {exc}")
+    return _ok({
+        "user_id": user_id,
+        "action": "granted" if action == "grant" else "revoked",
+        "message": "Đã cập nhật quyền khách; thay đổi có hiệu lực ngay.",
+    })
+
+
+async def zalo_grant_guest(args: Dict[str, Any], **_kw) -> str:
+    return _change_guest(args, "grant")
+
+
+async def zalo_revoke_guest(args: Dict[str, Any], **_kw) -> str:
+    return _change_guest(args, "revoke")
+
+
 TOOLS = [
     # --- Nhóm 10: Fanpage Facebook ---
     ("zalo_fb_pages", "📘", _schema(
@@ -2407,6 +2541,20 @@ TOOLS = [
         "Liệt kê danh bạ bạn bè Zalo.",
         {}, [],
     ), zalo_list_friends, TOOLSET_OWNER),
+
+    ("zalo_grant_guest", "➕", _schema(
+        "zalo_grant_guest",
+        "Cấp quyền khách cho một UID Zalo.",
+        {"user_id": _ZALO_ID},
+        ["user_id"],
+    ), zalo_grant_guest, TOOLSET_OWNER),
+
+    ("zalo_revoke_guest", "➖", _schema(
+        "zalo_revoke_guest",
+        "Thu quyền khách của một UID Zalo.",
+        {"user_id": _ZALO_ID},
+        ["user_id"],
+    ), zalo_revoke_guest, TOOLSET_OWNER),
 
     # --- Nhóm 3: tính năng riêng của Zalo ---
     ("zalo_create_poll", "🗳️", _schema(
@@ -2785,7 +2933,9 @@ for _name, _emoji, _tool_schema, _handler, _toolset in TOOLS:
 # viên cùng nằm trong ngữ cảnh một phiên — ai đó thả vào nhóm một đoạn chữ soạn
 # sẵn là có thể lái mô hình mà chủ nhân không hề biết. Nhắn riêng thì ngữ cảnh
 # chỉ có lời chủ nhân.
-DM_ONLY_TOOLS = frozenset({"zalo_fb_draft", "zalo_fb_publish"})
+DM_ONLY_TOOLS = frozenset({
+    "zalo_fb_draft", "zalo_fb_publish", "zalo_grant_guest", "zalo_revoke_guest",
+})
 
 
 def _confirmation_required(tool_name: str, args: Dict[str, Any]) -> bool:

@@ -512,6 +512,27 @@ class ZaloAdapter(BasePlatformAdapter):
 
     MAX_MESSAGE_LENGTH = MAX_MESSAGE_LENGTH
 
+    def resolved_allowlist_user_ids(self) -> set[str]:
+        """Đọc khách từ roster mỗi lượt, không bao giờ mở rộng quyền chủ."""
+        roster_path = str(os.getenv("ZALO_ROSTER_FILE") or "").strip()
+        if not roster_path:
+            return set()
+        try:
+            roster = json.loads(Path(roster_path).read_text(encoding="utf-8"))
+            if (
+                not isinstance(roster, dict)
+                or roster.get("version") != 1
+                or not isinstance(roster.get("owners"), list)
+                or not isinstance(roster.get("guests"), list)
+                or not all(isinstance(item, str) and item.strip() for item in roster["owners"])
+                or not all(isinstance(item, str) and item.strip() for item in roster["guests"])
+            ):
+                return set()
+            owners = {item.strip() for item in roster["owners"]}
+            return {item.strip() for item in roster["guests"]} - owners
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return set()
+
     def __init__(self, config: PlatformConfig):
         super().__init__(config=config, platform=Platform("zalo"))
 

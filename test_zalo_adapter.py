@@ -33,6 +33,28 @@ class DummyZaloTools:
         self.context = kwargs
 
 
+class ZaloResolvedAllowlistTest(unittest.TestCase):
+    def test_reads_guests_from_roster_without_returning_owners(self):
+        owner_uid = "9000000000000000001"
+        guest_uid = "9000000000000000002"
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = os.path.join(directory, "roster.json")
+            with open(roster_path, "w", encoding="utf-8") as roster_file:
+                json.dump({
+                    "version": 1,
+                    "owners": [owner_uid],
+                    "guests": [owner_uid, guest_uid],
+                    "guestGroups": [],
+                }, roster_file)
+            with patch.dict(os.environ, {"ZALO_ROSTER_FILE": roster_path}):
+                adapter = zalo_adapter.ZaloAdapter(PlatformConfig(enabled=True, extra={}))
+                self.assertEqual(adapter.resolved_allowlist_user_ids(), {guest_uid})
+
+            os.unlink(roster_path)
+            with patch.dict(os.environ, {"ZALO_ROSTER_FILE": roster_path}):
+                self.assertEqual(adapter.resolved_allowlist_user_ids(), set())
+
+
 class CapturingSocket:
     def __init__(self):
         self.frames = []
