@@ -2931,5 +2931,35 @@ class ZaloKbScopeTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(self.paths(await zalo_tools.zalo_kb_list({}))), 3)
 
 
+class BridgeKeepaliveBoundsTest(unittest.TestCase):
+    """Keepalive phải sống lâu hơn MỌI cửa sổ chờ, không chỉ cửa sổ ack.
+
+    Lỗi 18/09/2026: ping timeout 180s < approval timeout 300s, nên một công cụ
+    chờ người bấm approve/deny sẽ tự giết đường gửi của chính nó — prompt không
+    tới Zalo, người dùng không thể trả lời, rồi retry gửi mỗi 2 giây vô hạn.
+    Đây là một quan hệ số học giữa hai tệp, thứ không lộ ra trong test hành vi.
+    """
+
+    def test_keepalive_outlives_every_wait_window(self):
+        for name in ("SLOW_ACK_TIMEOUT_SECONDS", "APPROVAL_WAIT_CEILING_SECONDS"):
+            with self.subTest(window=name):
+                self.assertGreater(
+                    zalo_adapter.BRIDGE_PING_TIMEOUT_SECONDS,
+                    getattr(zalo_adapter, name),
+                    f"BRIDGE_PING_TIMEOUT_SECONDS phải lớn hơn {name}: "
+                    "một kết nối đóng trước khi hết cửa sổ chờ thì ack không bao giờ về",
+                )
+
+    def test_approval_ceiling_still_matches_the_gateway(self):
+        # Nếu upstream đổi _APPROVAL_TIMEOUT_SECONDS, test này phải đỏ chứ không
+        # được để adapter âm thầm dùng số cũ.
+        from gateway import run as gateway_run
+
+        self.assertEqual(
+            zalo_adapter.APPROVAL_WAIT_CEILING_SECONDS,
+            gateway_run.GatewayRunner._APPROVAL_TIMEOUT_SECONDS,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

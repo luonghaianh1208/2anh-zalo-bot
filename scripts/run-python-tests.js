@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// Chạy 3 test suite Python của repo (test_zalo_adapter.py, scripts/test_lay_token_facebook.py,
-// tts/test_vieneu_provider.py) mà `node --test` không bao giờ đụng tới.
+// Chạy các test suite Python của repo mà `node --test` không bao giờ đụng tới.
 //
 // Dò Python theo thứ tự: biến PYTHON (nếu đặt, dùng đúng nó, không âm thầm rơi xuống lựa chọn
 // khác — để mô phỏng "máy chưa cài Python" bằng PYTHON=/khong/ton/tai vẫn đúng ý) → venv của
@@ -53,8 +52,8 @@ function findPython() {
 const python = findPython();
 if (!python) {
   console.warn(
-    '[test:py] CẢNH BÁO: không tìm thấy Python khả dụng — BỎ QUA 3 test suite Python\n'
-    + '[test:py]   (test_zalo_adapter.py, scripts/test_lay_token_facebook.py, tts/test_vieneu_provider.py).\n'
+    '[test:py] CẢNH BÁO: không tìm thấy Python khả dụng — BỎ QUA 4 test suite Python\n'
+    + '[test:py]   (test_zalo_adapter.py, test_zalo_tools.py, scripts/test_lay_token_facebook.py, tts/test_vieneu_provider.py).\n'
     + '[test:py]   Lớp phân quyền/bảo mật của hermes-plugin/zalo/adapter.py CHƯA được kiểm chứng trong lần chạy này.\n'
     + '[test:py]   Cài Python (hoặc đặt biến PYTHON) rồi chạy lại `npm run test:py` để test thật sự chạy.',
   );
@@ -67,6 +66,7 @@ const suites = [
   // Suite adapter import lõi Hermes (gateway) và jsonschema. Python hệ thống trên
   // bản clone mới không có hai thứ đó — bỏ qua kèm cảnh báo thay vì báo đỏ cả npm test.
   { label: 'test_zalo_adapter.py', module: 'test_zalo_adapter', cwd: REPO_ROOT, requires: 'import gateway, jsonschema' },
+  { label: 'hermes-plugin/zalo_tools/test_zalo_tools.py', module: 'test_zalo_tools', cwd: join(REPO_ROOT, 'hermes-plugin', 'zalo_tools') },
   { label: 'scripts/test_lay_token_facebook.py', module: 'scripts.test_lay_token_facebook', cwd: REPO_ROOT },
   { label: 'tts/test_vieneu_provider.py', module: 'test_vieneu_provider', cwd: join(REPO_ROOT, 'tts') },
 ];

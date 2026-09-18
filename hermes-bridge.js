@@ -463,10 +463,19 @@ export function startHermesBridge({
       if (cmd?.type === 'ping') activeHealth?.bridgeHeartbeat(clientId);
       handleCommand(ws, cmd).catch((err) => {
         activeHealth?.recordError('bridge_command_failed', 'operation_failed');
-        console.error('[bridge] lỗi khi chạy lệnh:', err?.name || 'operation_failed');
+        // err.message của ZcaApiError là văn bản do máy chủ Zalo tự đặt
+        // (`error_message`), nên nó KHÔNG được chuyển tiếp — đó là chủ ý của
+        // 764d772. Nhưng err.code (`error_code`) là một số thuộc tập đóng: nêu
+        // nó ra không rò rỉ gì mà lại giúp agent phân biệt hai lần thất bại
+        // khác nhau, thay vì thử lại y nguyên lệnh vừa lỗi.
+        const zaloCode = Number.isInteger(err?.code) ? err.code : null;
+        console.error('[bridge] lỗi khi chạy lệnh:', err?.name || 'operation_failed', zaloCode ?? '');
         if (cmd?.reqId) send(ws, {
           type: 'ack', reqId: cmd.reqId, ok: false,
-          errorCode: 'operation_failed', error: 'Thao tác Zalo thất bại; xem health/audit để tra mã lỗi',
+          errorCode: 'operation_failed',
+          error: zaloCode === null
+            ? 'Thao tác Zalo thất bại; xem health/audit để tra mã lỗi'
+            : `Thao tác Zalo thất bại (mã Zalo ${zaloCode}); xem health/audit để tra chi tiết`,
         });
       });
     });

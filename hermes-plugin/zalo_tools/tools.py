@@ -759,10 +759,16 @@ async def zalo_group_members(args: Dict[str, Any], **_kw) -> str:
 
 async def zalo_find_user(args: Dict[str, Any], **_kw) -> str:
     phone = (args.get("phone") or "").strip()
-    username = (args.get("username") or "").strip()
+    username = args.get("username") or ""
     if phone:
         return await _invoke("findUser", [phone])
     if username:
+        if re.search(r"\s|[đĐ\u0300-\u036f]", unicodedata.normalize("NFD", username)):
+            return _err(
+                "username phải là tên đăng nhập Zalo, không phải tên hiển thị. "
+                "Để tìm UID của một người trong nhóm, dùng zalo_group_members. "
+                "Nếu có số điện thoại, truyền vào tham số phone."
+            )
         return await _invoke("findUserByUsername", [username])
     return _err("cần `phone` hoặc `username`")
 
@@ -2374,14 +2380,14 @@ TOOLS = [
 
     ("zalo_group_members", "🧑‍🤝‍🧑", _schema(
         "zalo_group_members",
-        "Xem danh sách thành viên một nhóm, kèm tên hiển thị.",
+        "Cần thread_id (ID nhóm); trả UID kèm tên hiển thị, không nhận tên người hay UID cá nhân.",
         {"thread_id": _GROUP_ID},
         ["thread_id"],
     ), zalo_group_members, TOOLSET_PUBLIC),
 
     ("zalo_find_user", "🔍", _schema(
         "zalo_find_user",
-        "Tìm một người dùng Zalo theo số điện thoại hoặc tên đăng nhập.",
+        "Cần phone (số điện thoại) hoặc username (tên đăng nhập Zalo); không tra được bằng tên hiển thị.",
         {
             "phone": {"type": "string", "description": "Số điện thoại."},
             "username": {"type": "string", "description": "Tên đăng nhập Zalo."},
@@ -2391,7 +2397,7 @@ TOOLS = [
 
     ("zalo_user_info", "👤", _schema(
         "zalo_user_info",
-        "Xem hồ sơ một người dùng Zalo theo UID.",
+        "Cần user_id (UID Zalo); xem hồ sơ, không nhận số điện thoại, tên đăng nhập hay tên hiển thị.",
         {"user_id": _ZALO_ID},
         ["user_id"],
     ), zalo_user_info, TOOLSET_OWNER),

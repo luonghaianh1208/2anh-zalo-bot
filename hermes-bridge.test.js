@@ -967,6 +967,60 @@ test('bridge audits successful and failed owner administration without payload s
   }
 });
 
+// Mã lỗi số của Zalo đi tới agent; văn bản lỗi của máy chủ thì không. Hai
+// khẳng định ngược chiều nhau trong cùng một ca, vì bỏ mất một trong hai đều là
+// lỗi: thiếu mã thì agent thử lại y nguyên, thêm văn bản thì rò rỉ.
+test('bridge chuyển tiếp mã lỗi Zalo nhưng không chuyển văn bản lỗi của máy chủ', async (t) => {
+  const errorLog = [];
+  t.mock.method(console, 'error', (...args) => errorLog.push(args.join(' ')));
+  const store = testStore(t);
+  const serverText = 'user 9000000000000000001 is not a friend of session.json';
+  const api = {
+    changeGroupName: () => {
+      const err = new Error(serverText);
+      err.name = 'ZcaApiError';
+      err.code = 216;
+      return Promise.reject(err);
+    },
+    // Lỗi không phải của Zalo (không có code) phải giữ nguyên câu chung như trước.
+    removeUserFromGroup: () => Promise.reject(new Error(serverText)),
+  };
+  const server = startHermesBridge({ api, profile: { user_id: 'bot' }, port: 0, store, ownerUids: ['owner'] });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await hello;
+
+    ws.send(JSON.stringify({
+      type: 'invoke', reqId: 'zca-coded', method: 'changeGroupName',
+      args: ['Tên nhóm', 'group-1'], auth: auth('owner', 0, { confirmed: true }),
+    }));
+    const coded = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'zca-coded');
+    assert.equal(coded.ok, false);
+    assert.equal(coded.errorCode, 'operation_failed');
+    assert.equal(coded.error.includes('mã Zalo 216'), true);
+    assert.equal(coded.error.includes(serverText), false);
+    assert.equal(coded.error.includes('session.json'), false);
+
+    ws.send(JSON.stringify({
+      type: 'invoke', reqId: 'plain-fail', method: 'removeUserFromGroup',
+      args: [['victim'], 'group-1'], auth: auth('owner', 0, { confirmed: true }),
+    }));
+    const plain = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'plain-fail');
+    assert.equal(plain.ok, false);
+    assert.equal(plain.error, 'Thao tác Zalo thất bại; xem health/audit để tra mã lỗi');
+
+    assert.equal(errorLog.join('\n').includes(serverText), false);
+    assert.equal(errorLog.join('\n').includes('216'), true);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 test('tin system (kết quả cron) gửi được vào nhóm không phải kênh nhà', async (t) => {
   const store = testStore(t);
   const sent = [];

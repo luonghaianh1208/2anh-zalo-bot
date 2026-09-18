@@ -271,8 +271,25 @@ SLOW_ACK_TIMEOUT_SECONDS = 150
 # Vẫn giữ ping: một sidecar chết thật phải bị phát hiện. Chỉ nới ngưỡng để nó
 # lớn hơn cửa sổ ack, vì một kết nối đóng trước khi ack kịp về thì không bao giờ
 # ack được.
+# Lần sửa 17/09 chặn đúng cơ chế nhưng chặn theo số sai: nó lấy mốc
+# SLOW_ACK_TIMEOUT_SECONDS (150s), trong khi thứ chờ lâu nhất trong hệ thống
+# không phải ack gửi tin mà là **chờ người bấm approve/deny**:
+# gateway/run.py:3918 đặt _APPROVAL_TIMEOUT_SECONDS = 300.
+#
+# Nên một công cụ cần phê duyệt mà người dùng không trả lời sẽ chờ 300 giây,
+# sống lâu hơn keepalive 180 giây — websockets tự đóng bằng 1011 đúng trong lúc
+# chờ, prompt approve không tới được Zalo, và người dùng không thể trả lời một
+# câu hỏi chưa bao giờ đến. Đo được ngày 18/09/2026 trên VM: approval request
+# lỗi lúc 08:45:44, execute_code chờ 318.53s rồi tự huỷ, terminal chờ 121.26s,
+# link chết bằng ping timeout lúc 08:59:46, sau đó retry gửi mỗi 2 giây vô hạn.
+#
+# Ngưỡng keepalive vì thế phải lớn hơn **mọi** cửa sổ chờ, không chỉ cửa sổ ack.
+# Giữ hằng số của gateway ở đây dưới tên riêng thay vì cộng thẳng vào công thức:
+# nếu upstream đổi 300 thành số khác, chỗ cần sửa có tên và có nguồn.
+APPROVAL_WAIT_CEILING_SECONDS = 300  # nguồn: gateway/run.py:3918
+
 BRIDGE_PING_INTERVAL_SECONDS = 20
-BRIDGE_PING_TIMEOUT_SECONDS = SLOW_ACK_TIMEOUT_SECONDS + 30
+BRIDGE_PING_TIMEOUT_SECONDS = max(SLOW_ACK_TIMEOUT_SECONDS, APPROVAL_WAIT_CEILING_SECONDS) + 30
 SLOW_METHODS = frozenset({"uploadAttachment", "sendMessage", "sendVoice", "sendVideo"})
 DEDUP_WINDOW_SECONDS = 300
 DEDUP_MAX_SIZE = 1000
