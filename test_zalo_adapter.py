@@ -1,4 +1,5 @@
 import asyncio
+import importlib.util
 import json
 import os
 import sys
@@ -26,6 +27,21 @@ plugins.platforms.__path__ = [os.path.join(ROOT, "hermes-plugin"), *list(plugins
 from plugins.platforms.zalo import adapter as zalo_adapter
 from plugins.zalo_tools import tools as zalo_tools
 from cron import jobs as real_cron_jobs
+
+# Bốn thư viện sinh tệp cố tình KHÔNG có trong image hermes — xem
+# docker/hermes-zalo.Dockerfile: "document capabilities were deferred". Đo trong
+# container ngày 18/09/2026: thiếu cả bốn. Chúng được import muộn bên trong công
+# cụ sinh tệp, nên chat vẫn chạy; nhưng bài kiểm thử nào dựng .docx thật sẽ đỏ ở
+# đúng nơi duy nhất chạy được nó. Đỏ vì môi trường thiếu dép không phải đỏ vì mã
+# sai, nên bỏ qua có nêu lý do — và khi nào cài dép, chúng tự chạy lại.
+_FILE_MAKER_DEPS = ("docx", "fpdf", "openpyxl", "pptx")
+_MISSING_FILE_MAKER_DEPS = [
+    name for name in _FILE_MAKER_DEPS if importlib.util.find_spec(name) is None
+]
+requires_file_maker_deps = unittest.skipIf(
+    bool(_MISSING_FILE_MAKER_DEPS),
+    f"thiếu thư viện sinh tệp: {', '.join(_MISSING_FILE_MAKER_DEPS)}",
+)
 
 
 class DummyZaloTools:
@@ -1459,6 +1475,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observed[0][1]["actorUid"], "member-current")
         self.assertEqual(observed[0][1]["sourceThreadId"], "group-ack")
 
+    @requires_file_maker_deps
     def test_file_maker_builds_all_four_formats_with_vietnamese_text(self):
         def file_maker_black():
             from docx.shared import RGBColor
@@ -1525,6 +1542,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(file_maker.FileSpecError, msg=fmt):
                     file_maker.make_file(fmt, "T", directory=tmp, **kwargs)
 
+    @requires_file_maker_deps
     async def test_make_file_tool_sends_to_current_group_limits_members_and_cleans_up(self):
         class FakeAdapter:
             def __init__(self):
@@ -1680,8 +1698,23 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
 
 
     async def test_platform_tools_enforce_owner_file_guest_and_stranger_tiers(self):
-        from hermes_cli.tools_config import _get_platform_tools
+        from hermes_cli.tools_config import (_get_platform_tools,
+                                             _get_plugin_toolset_keys)
         from toolsets import resolve_toolset
+
+        # Bài này đo tầng quyền qua registry thật, nên nó cần plugin Zalo đã
+        # được khám phá. Đo ngày 18/09/2026: _get_plugin_toolset_keys() đọc bộ
+        # khoá mà lần chạy trước đã lưu trong HOME của Hermes
+        # (tools_config.py:158, get_plugin_toolset_keys_nowait). Trong một
+        # container trống với HOME sạch, bộ đó rỗng → ``zalo_public`` giải ra 0
+        # công cụ và bài kiểm thử đỏ vì thiếu môi trường, chứ không vì quyền sai.
+        # Chạy trong container hermes đang phục vụ (env thật) thì nó giải đúng
+        # 16. Bỏ qua kèm lý do thay vì hạ con số 16 xuống cho xanh.
+        if zalo_tools.TOOLSET_PUBLIC not in _get_plugin_toolset_keys():
+            self.skipTest(
+                "plugin Zalo chưa được khám phá trong môi trường này — "
+                "chạy bài này trong container hermes có HOME thật"
+            )
 
         zalo_tools.define_platform_composite()
         zalo_tools.define_denied_toolset()
@@ -1696,7 +1729,24 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                 user_id=uid, user_name=uid, message_id=f"message-{uid}",
             )
             override = adapter.toolsets_for_source(source)
-            probe = {"platform_toolsets": {"zalo": override}}
+            # ``known_plugin_toolsets`` phải có, và đây không phải chi tiết vụn.
+            # Đo trong container ngày 18/09/2026: hermes_cli/tools_config.py:538
+            # chỉ loại một plugin toolset khi nó nằm trong
+            # ``known_plugin_toolsets[platform]`` mà vắng trong danh sách của
+            # lượt này. Thiếu khoá đó thì _get_platform_tools trả về cả
+            # ``zalo_owner``, nên một lượt khách đo ra 53 công cụ kèm
+            # ``zalo_grant_guest`` — bài kiểm thử tự dựng một thế giới lỏng hơn
+            # thế giới thật rồi báo lỗi ở đó. Config đã triển khai có khoá này
+            # (config.yaml:446); với nó, khách đo đúng 16 công cụ, không
+            # ``terminal``, không ``zalo_grant_guest``. Ai sửa số 16 thành 53
+            # cho test xanh là đang xoá đúng phép kiểm cửa 3.
+            probe = {
+                "platform_toolsets": {"zalo": override},
+                "known_plugin_toolsets": {
+                    "zalo": [zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_PUBLIC,
+                             zalo_tools.TOOLSET_CRON],
+                },
+            }
             return {tool for toolset in _get_platform_tools(probe, "zalo")
                     for tool in resolve_toolset(toolset)}
 
@@ -1736,7 +1786,10 @@ class ZaloToolSchemaTest(unittest.TestCase):
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 16)
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 34)
+        # 34 → 36 ngày 18/09/2026: ``zalo_grant_guest`` và ``zalo_revoke_guest``.
+        # Con số đếm này là dây bẫy: mọi công cụ mới phải bước qua nó, nên đừng
+        # đổi nó mà không nói rõ công cụ nào vừa thêm và nó thuộc tầng nào.
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 36)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 
     def test_zalo_ids_remain_strings_through_hermes_argument_coercion(self):
@@ -2856,7 +2909,15 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
         self.assertIn(zalo_tools.TOOLSET_OWNER, dm)
         self.assertFalse(bound[0]["is_owner"])
         self.assertTrue(bound[0]["core_tools"])
-        self.assertEqual(group, [zalo_tools.TOOLSET_PUBLIC])
+        # Trong nhóm, một lượt KHÔNG buộc được vào tin nhắn nào thì mất sạch
+        # công cụ, không phải rơi về ``zalo_public``. Bài kiểm thử này viết
+        # trước cửa 3 nên từng chờ ``zalo_public``; chạy thật lần đầu trong
+        # container ngày 18/09/2026 mới lộ ra nó chờ sai. adapter.py:1499 xếp
+        # "không buộc được lượt" và "không có trong danh sách khách" vào cùng
+        # một chỗ: ``[zalo_denied]``. Đó là phía an toàn của lỗi — kẻ mạo danh
+        # UID chủ nhân trong nhóm không được tặng mười sáu công cụ tác động — và
+        # chủ nhân thật không đi qua đường này vì tin của họ buộc được.
+        self.assertEqual(group, [zalo_tools.TOOLSET_DENIED])
         self.assertFalse(bound[1]["core_tools"])
 
         zalo_tools.bind_turn(bound[0])
