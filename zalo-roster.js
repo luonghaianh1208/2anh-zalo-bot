@@ -10,7 +10,10 @@ export function emptyRoster() {
 function idsOf(roster, field) {
   const values = roster[field] ?? [];
   if (!Array.isArray(values)) throw new Error(`Roster field ${field} phải là một mảng`);
-  return new Set(values.map(String));
+  if (!values.every((value) => typeof value === 'string' && value === value.trim() && value)) {
+    throw new Error(`Roster field ${field}: mỗi phần tử phải là chuỗi không rỗng`);
+  }
+  return new Set(values);
 }
 
 // Roster thiếu hoặc không đọc được thì ném lỗi, không trả roster rỗng. Roster

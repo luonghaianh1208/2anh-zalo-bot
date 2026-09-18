@@ -253,6 +253,37 @@ test('attached /sethome is forwarded to Hermes instead of bootstrapping', async 
   assert.equal(sent.length, 0);
 });
 
+// /sethome nay dung TRUOC cua 1 (xem bot-handler.js): no la duong bootstrap cho
+// ban cai moi chua co allowlist, nen no phai chay khi chua ai duoc ke ten. Gioi
+// han duy nhat giu no vo hai la `!isHermesAttached()`. Ca kiem nay ghim dung gioi
+// han do: he thong dang chay binh thuong thi nguoi ngoai roster nhan ZERO phan
+// hoi — khong bootstrap, va cung khong duoc chuyen cho Hermes.
+test('/sethome từ người ngoài roster hoàn toàn im lặng khi Hermes đã cắm', async (t) => {
+  const { listener, sent, server } = await harness(t, {
+    roster: { version: 1, owners: ['owner-123'], guests: [], guestGroups: [] },
+  });
+  const ws = new WebSocket(`ws://${'127.0.0.1'}:${server.address().port}`);
+  t.after(() => ws.close());
+  const hello = onceMessage(ws, (message) => message.type === 'hello');
+  await new Promise((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+  await hello;
+
+  const forwarded = [];
+  ws.on('message', (raw) => {
+    const message = JSON.parse(raw.toString());
+    if (message.type === 'message') forwarded.push(message);
+  });
+
+  listener.emit('message', incoming({ senderUid: 'nguoi-la', threadId: 'nguoi-la' }));
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  assert.equal(sent.length, 0, 'khong duoc tra loi bootstrap cho nguoi ngoai roster');
+  assert.equal(forwarded.length, 0, 'khong duoc chuyen tin cua nguoi ngoai roster cho Hermes');
+});
+
 test('disconnected /sethome without sender UID is ignored safely', async (t) => {
   const { listener, sent } = await harness(t);
 

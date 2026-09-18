@@ -23,6 +23,7 @@ import os
 import re
 import secrets
 import tempfile
+import threading
 import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
@@ -2245,32 +2246,64 @@ def _append_guest_grant_log(path: Path, action: str, user_id: str) -> None:
         os.umask(previous_umask)
     os.chmod(path, 0o600)
 
+_GUEST_ROSTER_LOCK = threading.Lock()
+
 
 def _change_guest(args: Dict[str, Any], action: str) -> str:
-    user_id = str(args.get("user_id") or "").strip()
-    if not user_id:
-        return _err("cần `user_id`")
+    raw_user_id = args.get("user_id")
+    if (
+        not isinstance(raw_user_id, str)
+        or not raw_user_id
+        or raw_user_id != raw_user_id.strip()
+        or any(char.isspace() or ord(char) < 32 for char in raw_user_id)
+    ):
+        return _err("user_id phải là UID Zalo dạng chuỗi không có khoảng trắng")
+    user_id = raw_user_id
     try:
-        guests_path, roster_path, log_path = _guest_roster_paths()
-        if user_id in _read_roster_owner_uids(roster_path):
-            return _err(f"UID {user_id} là chủ nhân trong roster, không thể cấp quyền khách")
-        guest_uids = _read_guest_uids(guests_path)
-        if action == "grant":
-            guest_uids.add(user_id)
-        else:
-            guest_uids.discard(user_id)
-        roster_data = _roster_data(guest_uids)
-        _write_json_atomic(guests_path, {"version": 1, "guests": sorted(guest_uids)})
-        _write_json_atomic(roster_path, roster_data)
-        _append_guest_grant_log(log_path, action, user_id)
+        with _GUEST_ROSTER_LOCK:
+            guests_path, roster_path, log_path = _guest_roster_paths()
+            if user_id in _read_roster_owner_uids(roster_path):
+                return _err(f"UID {user_id} là chủ nhân trong roster, không thể cấp quyền khách")
+
+            previous_guests = _read_guest_uids(guests_path)
+            guests_existed = guests_path.exists()
+            guest_uids = set(previous_guests)
+            if action == "grant":
+                guest_uids.add(user_id)
+            else:
+                guest_uids.discard(user_id)
+            roster_data = _roster_data(guest_uids)
+            _write_json_atomic(guests_path, {"version": 1, "guests": sorted(guest_uids)})
+            try:
+                _write_json_atomic(roster_path, roster_data)
+            except OSError:
+                try:
+                    if guests_existed:
+                        _write_json_atomic(guests_path, {"version": 1, "guests": sorted(previous_guests)})
+                    else:
+                        guests_path.unlink(missing_ok=True)
+                except OSError as rollback_error:
+                    raise ValueError("không cập nhật được roster và không khôi phục được guests.json; cần kiểm tra thủ công") from rollback_error
+                raise
+
+            warning = None
+            try:
+                _append_guest_grant_log(log_path, action, user_id)
+            except OSError as exc:
+                logger.warning("[zalo] đã %s khách %s nhưng không ghi được nhật ký: %s", action, user_id, exc)
+                warning = "Quyền khách đã có hiệu lực, nhưng không ghi được nhật ký."
     except (OSError, ValueError) as exc:
         logger.warning("[zalo] không %s được khách %s: %s", action, user_id, exc)
         return _err(f"không cập nhật được danh sách khách: {exc}")
-    return _ok({
+
+    result = {
         "user_id": user_id,
         "action": "granted" if action == "grant" else "revoked",
         "message": "Đã cập nhật quyền khách; thay đổi có hiệu lực ngay.",
-    })
+    }
+    if warning:
+        result["warning"] = warning
+    return _ok(result)
 
 
 async def zalo_grant_guest(args: Dict[str, Any], **_kw) -> str:

@@ -204,20 +204,9 @@ async function handleIncomingMessage(api, msg, stickers = null) {
   const where = isGroup ? `Nhóm ${threadId}` : `DM ${threadId}`;
   console.log(`[bot] 📩 [${where}] ${msg.data?.dName || '?'} (${senderUid}): ${content.slice(0, 80)}`);
 
-  if (!mayReachHermes(senderUid, isGroup, threadId)) {
-    console.log(`[bot] 🚪 [${where}] ${senderUid} không có trong roster — bỏ qua`);
-    return;
-  }
-
-  if (isHermesAttached()) {
-    forwardToHermes(msg);
-    console.log('[bot] ➡️ đã chuyển cho Hermes Agent');
-    return;
-  }
-
   // Cài mới chưa có allowlist nên gateway chưa thể nhìn thấy lệnh này. Chỉ tiết
   // lộ UID của chính người nhắn; tuyệt đối không ghi .env hay tự cấp quyền chủ.
-  if (!isGroup && senderUid && content.toLowerCase() === '/sethome') {
+  if (!isHermesAttached() && !isGroup && senderUid && content.toLowerCase() === '/sethome') {
     try {
       await sendSystemNotice({
         api,
@@ -243,6 +232,18 @@ async function handleIncomingMessage(api, msg, stickers = null) {
     }
     return;
   }
+
+  if (!mayReachHermes(senderUid, isGroup, threadId)) {
+    console.log(`[bot] 🚪 [${where}] ${senderUid} không có trong roster — bỏ qua`);
+    return;
+  }
+
+  if (isHermesAttached()) {
+    forwardToHermes(msg);
+    console.log('[bot] ➡️ đã chuyển cho Hermes Agent');
+    return;
+  }
+
 
   // Hermes chưa cắm. Chỉ báo cho người thật sự đang gọi bot — người khác nói
   // chuyện với nhau trong nhóm thì không việc gì phải nghe.
