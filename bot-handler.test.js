@@ -188,7 +188,9 @@ function incoming({ text = '/sethome', senderUid = 'owner-123', threadId = 'dm-1
 }
 
 test('disconnected exact DM /sethome reveals the sender UID without granting owner access', async (t) => {
-  const { listener, sent } = await harness(t);
+  const { listener, sent } = await harness(t, {
+    roster: { version: 1, owners: [], guests: [], guestGroups: [] },
+  });
 
   listener.emit('message', incoming({ senderUid: 'uid-123', threadId: 'uid-123' }));
   await waitFor(() => sent.length === 1, 'bootstrap reply');

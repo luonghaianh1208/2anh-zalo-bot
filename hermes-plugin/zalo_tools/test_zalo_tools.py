@@ -189,5 +189,49 @@ class ZaloGuestGrantTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_roster, script_roster)
 
 
+    async def test_roster_write_failure_restores_guest_source(self):
+        self.set_turn()
+        before_guests = self.guests_path.read_text(encoding="utf-8")
+        before_roster = self.roster_path.read_text(encoding="utf-8")
+        write_json = zalo_tools._write_json_atomic
+
+        def fail_roster_write(path, data):
+            if path == self.roster_path:
+                raise OSError("injected roster write failure")
+            write_json(path, data)
+
+        with patch.object(zalo_tools, "_write_json_atomic", side_effect=fail_roster_write):
+            result = json.loads(await self.grant({"user_id": self.NEW_GUEST_UID}))
+
+        self.assertFalse(result["success"])
+        self.assertEqual(self.guests_path.read_text(encoding="utf-8"), before_guests)
+        self.assertEqual(self.roster_path.read_text(encoding="utf-8"), before_roster)
+
+    async def test_audit_failure_reports_live_access_truthfully(self):
+        self.set_turn()
+        with patch.object(zalo_tools, "_append_guest_grant_log", side_effect=OSError("injected audit failure")):
+            result = json.loads(await self.grant({"user_id": self.NEW_GUEST_UID}))
+
+        self.assertTrue(result["success"])
+        self.assertIn("nhật ký", result["result"]["warning"])
+        self.assertIn(self.NEW_GUEST_UID, self.guest_data()["guests"])
+        roster = json.loads(self.roster_path.read_text(encoding="utf-8"))
+        self.assertIn(self.NEW_GUEST_UID, roster["guests"])
+
+    async def test_rejects_non_string_or_multiline_guest_ids(self):
+        self.set_turn()
+        before_guests = self.guests_path.read_text(encoding="utf-8")
+        before_roster = self.roster_path.read_text(encoding="utf-8")
+
+        for user_id in (9000000000000000004, "9000000000000000004\nforged grant"):
+            with self.subTest(user_id=user_id):
+                result = json.loads(await self.grant({"user_id": user_id}))
+                self.assertFalse(result["success"])
+                self.assertIn("UID Zalo dạng chuỗi", result["error"])
+
+        self.assertEqual(self.guests_path.read_text(encoding="utf-8"), before_guests)
+        self.assertEqual(self.roster_path.read_text(encoding="utf-8"), before_roster)
+        self.assertFalse(self.log_path.exists())
+
 if __name__ == "__main__":
     unittest.main()

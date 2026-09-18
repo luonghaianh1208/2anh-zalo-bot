@@ -52,6 +52,11 @@ test('loadRoster rejects invalid JSON, an unsupported version, and conflicting o
     guests: ['9000000000000000001'],
     guestGroups: [],
   })), /owners.*guests/);
+  for (const field of ["owners", "guests", "guestGroups"]) {
+    const roster = { version: 1, owners: [], guests: [], guestGroups: [] };
+    roster[field] = [9000000000000000001];
+    assert.throws(() => loadRoster(rosterFile(t, roster)), /mỗi phần tử.*chuỗi/);
+  }
 });
 
 test('reloadRosterIfChanged sees a renamed roster and keeps old roster on malformed or missing files', (t) => {

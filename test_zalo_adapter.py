@@ -55,6 +55,40 @@ class ZaloResolvedAllowlistTest(unittest.TestCase):
                 self.assertEqual(adapter.resolved_allowlist_user_ids(), set())
 
 
+class ZaloGuestTierSourcesTest(unittest.TestCase):
+    """_is_guest phải nhìn cả hai nguồn khách, không chỉ env.
+
+    Lỗi đo được trên VM 18/09/2026: một khách cấp bằng lệnh chat qua được cửa 1
+    và qua được admission của gateway, rồi bị toolsets_for_source xếp là "không
+    phải chủ nhân cũng không phải khách" và nhận TOOLSET_DENIED — không còn công
+    cụ nào. Nhìn từ phía người dùng là bot không làm được gì, không phải một câu
+    từ chối.
+    """
+
+    def test_guest_only_in_roster_is_still_a_guest(self):
+        owner_uid = "9000000000000000001"
+        chat_granted_guest = "9000000000000000002"
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = os.path.join(directory, "roster.json")
+            with open(roster_path, "w", encoding="utf-8") as roster_file:
+                json.dump({
+                    "version": 1,
+                    "owners": [owner_uid],
+                    "guests": [chat_granted_guest],
+                    "guestGroups": [],
+                }, roster_file)
+            # GATEWAY_ALLOWED_USERS rỗng: khách này CHỈ có trong roster, đúng
+            # trạng thái sau một lần cấp bằng chat.
+            with patch.dict(os.environ, {
+                "ZALO_ROSTER_FILE": roster_path, "GATEWAY_ALLOWED_USERS": "",
+            }):
+                adapter = zalo_adapter.ZaloAdapter(PlatformConfig(enabled=True, extra={}))
+                self.assertTrue(adapter._is_guest(chat_granted_guest))
+                # Chủ nhân không được đi qua đường khách, và người lạ vẫn là người lạ.
+                self.assertFalse(adapter._is_guest(owner_uid))
+                self.assertFalse(adapter._is_guest("9000000000000000009"))
+
+
 class CapturingSocket:
     def __init__(self):
         self.frames = []
@@ -1645,18 +1679,20 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(result["seconds"], 1.0)
 
 
-    async def test_platform_tools_enforce_owner_guest_and_stranger_tiers(self):
+    async def test_platform_tools_enforce_owner_file_guest_and_stranger_tiers(self):
         from hermes_cli.tools_config import _get_platform_tools
         from toolsets import resolve_toolset
 
         zalo_tools.define_platform_composite()
         zalo_tools.define_denied_toolset()
         adapter = self.make_adapter()
-        owner_uid, guest_uid, stranger_uid = "owner-fake", "guest-fake", "stranger-fake"
+        owner_uid = "9000000000000000001"
+        guest_uid = "9000000000000000002"
+        stranger_uid = "9000000000000000003"
 
         def effective_tools(uid):
             source = adapter.build_source(
-                chat_id="group-1", chat_name="group-1", chat_type="group",
+                chat_id="9000000000000000004", chat_name="group-1", chat_type="group",
                 user_id=uid, user_name=uid, message_id=f"message-{uid}",
             )
             override = adapter.toolsets_for_source(source)
@@ -1664,20 +1700,31 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             return {tool for toolset in _get_platform_tools(probe, "zalo")
                     for tool in resolve_toolset(toolset)}
 
-        with patch.dict(os.environ, {
-            "ZALO_ALLOWED_USERS": owner_uid,
-            "GATEWAY_ALLOWED_USERS": guest_uid,
-            "ZALO_ALLOW_ALL_USERS": "true",
-        }), patch.object(adapter, "_bind_turn_for_source", side_effect=lambda _source, uid: uid == owner_uid):
-            owner_tools = effective_tools(owner_uid)
-            guest_tools = effective_tools(guest_uid)
-            stranger_tools = effective_tools(stranger_uid)
-            self.assertIn("terminal", owner_tools)
-            self.assertEqual(len(guest_tools), 16)
-            self.assertFalse({"terminal", "execute_code", "read_file", "write_file"} & guest_tools)
-            self.assertEqual(stranger_tools, set())
-            self.assertTrue(adapter._may_greet(guest_uid))
-            self.assertFalse(adapter._may_greet(stranger_uid))
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = os.path.join(directory, "roster.json")
+            with open(roster_path, "w", encoding="utf-8") as roster_file:
+                json.dump({
+                    "version": 1,
+                    "owners": [owner_uid],
+                    "guests": [guest_uid],
+                    "guestGroups": ["9000000000000000004"],
+                }, roster_file)
+
+            with patch.dict(os.environ, {
+                "ZALO_ALLOWED_USERS": owner_uid,
+                "GATEWAY_ALLOWED_USERS": "",
+                "ZALO_ROSTER_FILE": roster_path,
+                "ZALO_ALLOW_ALL_USERS": "true",
+            }), patch.object(adapter, "_bind_turn_for_source", side_effect=lambda _source, uid: uid == owner_uid):
+                owner_tools = effective_tools(owner_uid)
+                guest_tools = effective_tools(guest_uid)
+                stranger_tools = effective_tools(stranger_uid)
+                self.assertIn("terminal", owner_tools)
+                self.assertEqual(len(guest_tools), 16)
+                self.assertFalse({"terminal", "execute_code", "read_file", "write_file"} & guest_tools)
+                self.assertEqual(stranger_tools, set())
+                self.assertTrue(adapter._may_greet(guest_uid))
+                self.assertFalse(adapter._may_greet(stranger_uid))
 
 
 class ZaloToolSchemaTest(unittest.TestCase):

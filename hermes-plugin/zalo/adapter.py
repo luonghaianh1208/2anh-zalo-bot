@@ -1599,8 +1599,21 @@ class ZaloAdapter(BasePlatformAdapter):
         return bool(allowed) and str(sender_uid) in allowed
 
     def _is_guest(self, sender_uid: str) -> bool:
-        allowed = _split_ids(_get_scoped_secret("GATEWAY_ALLOWED_USERS", "") or "")
-        return bool(allowed) and str(sender_uid) in allowed
+        """Khách theo cả hai nguồn: env và roster.
+
+        Chỉ đọc env là lỗi đã gặp trên VM ngày 18/09/2026: một khách được cấp
+        bằng lệnh chat qua được cửa 1 (sidecar nạp lại roster) và qua được
+        admission của gateway (móc resolved_allowlist_user_ids), rồi tới đây bị
+        xếp là "không phải chủ nhân cũng không phải khách" và nhận
+        TOOLSET_DENIED — tức không còn công cụ nào. Người dùng thấy bot im hoặc
+        báo không đọc được gì, chứ không thấy một câu từ chối.
+
+        Hai nơi phân hạng khách thì phải nhìn cùng một tập nguồn.
+        """
+        uid = str(sender_uid)
+        if uid in _split_ids(_get_scoped_secret("GATEWAY_ALLOWED_USERS", "") or ""):
+            return True
+        return uid in self.resolved_allowlist_user_ids()
 
     def _may_greet(self, sender_uid: str) -> bool:
         """Có nên báo đã xem và thả cảm xúc cho tin nhắn này không.
