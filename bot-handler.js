@@ -1,5 +1,5 @@
 import {
-  GUEST_REFUSAL, isHermesAttached, forwardToHermes, extractMediaUrls, extractText,
+  isHermesAttached, forwardToHermes, extractMediaUrls, extractText,
   rememberZaloMessage, sendSystemNotice,
 } from './hermes-bridge.js';
 import { ThreadType } from 'zca-js';
@@ -7,6 +7,8 @@ import { createStickerDirectory, enrichSticker } from './zalo-stickers.js';
 import {
   emptyGuestGroups, emptyRoster, reloadGuestGroupsIfChanged, reloadRosterIfChanged,
 } from './zalo-roster.js';
+
+const GUEST_REFUSAL = 'I can help with public questions for this group, but cannot provide internal operating instructions.';
 
 /**
  * Định tuyến tin nhắn Zalo sang Hermes Agent.

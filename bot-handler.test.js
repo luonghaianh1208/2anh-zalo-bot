@@ -12,6 +12,7 @@ import { startHermesBridge, stopHermesBridge } from './hermes-bridge.js';
 import { openZaloStore } from './zalo-store.js';
 
 process.env.ZALO_BRIDGE_TOKEN ||= 'test-bridge-token';
+process.env.ZALO_GUEST_BRIDGE_TOKEN ||= 'test-guest-bridge-token';
 
 class WebSocket extends RawWebSocket {
   constructor(url, options) {
@@ -134,6 +135,16 @@ function onceMessage(ws, predicate = () => true) {
   });
 }
 
+async function connectGuestRuntime(server) {
+  const ws = new RawWebSocket(
+    `ws://127.0.0.1:${server.address().port}?token=${process.env.ZALO_GUEST_BRIDGE_TOKEN}&audience=guest`,
+  );
+  const hello = onceMessage(ws, (message) => message.type === 'hello');
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  await hello;
+  return ws;
+}
+
 async function harness(t, { roster, guestGroups } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'bot-handler-'));
   const rosterPath = join(dir, 'roster.json');
@@ -163,36 +174,38 @@ function incoming({ senderUid, threadId, type = ThreadType.Group, text = 'hello'
   return { threadId, type, isSelf: false, data: { msgId: messageId, cliMsgId: `cli-${messageId}`, uidFrom: senderUid, dName: 'name', content: text, mentions: [], ts: Date.now() } };
 }
 
-test('denied messages and owner group frames never enter rolling guest context', async (t) => {
+test('guest and owner frames route to separate runtimes', async (t) => {
   const { listener, server, store } = await harness(t);
-  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
-  t.after(() => ws.close());
-  const hello = onceMessage(ws, (message) => message.type === 'hello');
-  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  await hello;
-  const forwarded = [];
-  ws.on('message', (raw) => { const message = JSON.parse(raw.toString()); if (message.type === 'message') forwarded.push(message); });
+  const owner = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  t.after(() => owner.close());
+  const ownerHello = onceMessage(owner, (message) => message.type === 'hello');
+  await new Promise((resolve, reject) => { owner.once('open', resolve); owner.once('error', reject); });
+  await ownerHello;
+  const guest = await connectGuestRuntime(server);
+  t.after(() => guest.close());
+  const ownerFrames = [];
+  const guestFrames = [];
+  owner.on('message', (raw) => { const message = JSON.parse(raw.toString()); if (message.type === 'message') ownerFrames.push(message); });
+  guest.on('message', (raw) => { const message = JSON.parse(raw.toString()); if (message.type === 'message') guestFrames.push(message); });
   listener.emit('message', incoming({ senderUid: 'guest', threadId: 'group-allowed', messageId: 'allowed' }));
   listener.emit('message', incoming({ senderUid: 'guest', threadId: 'group-denied', messageId: 'denied' }));
   listener.emit('message', incoming({ senderUid: 'owner', threadId: 'group-allowed', messageId: 'owner' }));
-  await waitFor(() => forwarded.length === 2, 'admitted frames');
-  assert.deepEqual(forwarded.map((item) => item.senderUid), ['guest', 'owner']);
+  await waitFor(() => ownerFrames.length === 1 && guestFrames.length === 1, 'routed frames');
+  assert.deepEqual(ownerFrames.map((item) => item.senderUid), ['owner']);
+  assert.deepEqual(guestFrames.map((item) => item.senderUid), ['guest']);
   assert.equal(store.getHealth().messageCount, 1);
-});
+})
 
-test('guest group scope reload removes access without recreating sidecar', async (t) => {
+test('guest group scope reload removes access without recreating the guest runtime', async (t) => {
   const { listener, server, groupsPath } = await harness(t);
-  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
-  t.after(() => ws.close());
-  const hello = onceMessage(ws, (message) => message.type === 'hello');
-  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  await hello;
+  const guest = await connectGuestRuntime(server);
+  t.after(() => guest.close());
   const forwarded = [];
-  ws.on('message', (raw) => { const message = JSON.parse(raw.toString()); if (message.type === 'message') forwarded.push(message); });
+  guest.on('message', (raw) => { const message = JSON.parse(raw.toString()); if (message.type === 'message') forwarded.push(message); });
   listener.emit('message', incoming({ senderUid: 'guest', threadId: 'group-allowed', messageId: 'before' }));
   await waitFor(() => forwarded.length === 1, 'first guest frame');
   writeFileSync(groupsPath, JSON.stringify({ version: 1, guestGroups: [] }));
   listener.emit('message', incoming({ senderUid: 'guest', threadId: 'group-allowed', messageId: 'after' }));
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(forwarded.length, 1);
-});
+})
