@@ -1,4 +1,5 @@
 import importlib.util
+import sys
 import json
 import os
 from pathlib import Path
@@ -64,174 +65,116 @@ class ZaloFindUserTest(unittest.IsolatedAsyncioTestCase):
             invoke.assert_awaited_once_with("findUser", ["+0000000000"])
 
 
-class ZaloGuestGrantTest(unittest.IsolatedAsyncioTestCase):
-    OWNER_UID = "9000000000000000001"
-    ENV_GUEST_UID = "9000000000000000002"
-    FILE_GUEST_UID = "9000000000000000003"
-    NEW_GUEST_UID = "9000000000000000004"
-    GROUP_UID = "9000000000000000005"
+class ZaloGuestGroupTest(unittest.IsolatedAsyncioTestCase):
+    OWNER = "owner"
 
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
-        self.data_root = Path(self.directory.name)
-        self.zalo_dir = self.data_root / "hermes" / "zalo"
+        self.zalo_dir = Path(self.directory.name) / "hermes" / "zalo"
         self.zalo_dir.mkdir(parents=True)
-        self.guests_path = self.zalo_dir / "guests.json"
-        self.roster_path = self.zalo_dir / "roster.json"
-        self.log_path = self.zalo_dir / "guest-grants.log"
-        self.guests_path.write_text(
-            json.dumps({"version": 1, "guests": [self.FILE_GUEST_UID]}), encoding="utf-8"
+        self.groups_path = self.zalo_dir / "guest-groups.json"
+        self.groups_path.write_text(
+            json.dumps({"version": 1, "guestGroups": ["group-a"]}), encoding="utf-8"
         )
-        self.roster_path.write_text(json.dumps({
-            "version": 1,
-            "owners": [self.OWNER_UID],
-            "guests": [self.ENV_GUEST_UID, self.FILE_GUEST_UID],
-            "guestGroups": [self.GROUP_UID],
-        }), encoding="utf-8")
-        self.environment = patch.dict(os.environ, {
-            # DATA_ROOT rỗng là đúng điều kiện production: đo trong container
-            # hermes ngày 18/09/2026 thì biến này không được đặt. Công cụ phải
-            # lấy đường từ ZALO_ROSTER_FILE, nên test đặt DATA_ROOT rỗng để một
-            # lần quay lại dùng DATA_ROOT sẽ làm test đỏ ngay.
-            "DATA_ROOT": "",
-            "ZALO_ROSTER_FILE": str(self.roster_path),
-            "ZALO_ALLOWED_USERS": f" {self.OWNER_UID} ",
-            "GATEWAY_ALLOWED_USERS": f" {self.ENV_GUEST_UID} ",
-            "ZALO_GUEST_GROUPS": f" {self.GROUP_UID} ",
-        })
+        self.environment = patch.dict(os.environ, {"ZALO_GUEST_GROUPS_FILE": str(self.groups_path)})
         self.environment.start()
         context = FakeToolContext()
         zalo_tools.register_tools(context)
-        self.grant = context.handlers["zalo_grant_guest"]
-        self.revoke = context.handlers["zalo_revoke_guest"]
+        self.grant_group = context.handlers["zalo_grant_guest_group"]
+        self.revoke_group = context.handlers["zalo_revoke_guest_group"]
 
     async def asyncTearDown(self):
         zalo_tools.bind_turn(None)
         self.environment.stop()
         self.directory.cleanup()
 
-    def set_turn(self, *, is_owner=True, is_group=False):
-        zalo_tools.set_turn_context(
-            sender_uid=self.OWNER_UID if is_owner else "9000000000000000006",
-            thread_id=self.GROUP_UID if is_group else "9000000000000000007",
-            is_group=is_group,
-            is_owner=is_owner,
-        )
+    def owner_dm(self):
+        zalo_tools.set_turn_context(sender_uid=self.OWNER, thread_id="dm", is_group=False, is_owner=True)
 
-    def guest_data(self):
-        return json.loads(self.guests_path.read_text(encoding="utf-8"))
-
-    async def test_registered_tools_refuse_non_owner_and_owner_in_group(self):
-        entries = {name: toolset for name, _emoji, _schema, _handler, toolset in zalo_tools.TOOLS}
-        self.assertEqual(entries["zalo_grant_guest"], zalo_tools.TOOLSET_OWNER)
-        self.assertEqual(entries["zalo_revoke_guest"], zalo_tools.TOOLSET_OWNER)
-
-        self.set_turn(is_owner=False)
-        non_owner = json.loads(await self.grant({"user_id": self.NEW_GUEST_UID}))
-        self.assertEqual(non_owner, {"success": False, "error": "công cụ này chỉ chủ nhân dùng được"})
-
-        self.set_turn(is_group=True)
-        in_group = json.loads(await self.grant({"user_id": self.NEW_GUEST_UID}))
-        self.assertEqual(in_group, {
-            "success": False,
-            "error": "việc này chỉ làm được khi nhắn riêng với mình, không làm trong nhóm",
-        })
-
-    async def test_refuses_owner_uid_from_roster(self):
-        self.set_turn()
-        result = json.loads(await self.grant({"user_id": self.OWNER_UID}))
-        self.assertEqual(result, {
-            "success": False,
-            "error": f"UID {self.OWNER_UID} là chủ nhân trong roster, không thể cấp quyền khách",
-        })
-        self.assertEqual(self.guest_data()["guests"], [self.FILE_GUEST_UID])
-
-    async def test_grant_then_revoke_restores_guests_writes_modes_and_audits_each_operation(self):
-        self.set_turn()
-        before = self.guest_data()
-        granted = json.loads(await self.grant({"user_id": self.NEW_GUEST_UID}))
-        self.assertEqual(granted["result"]["user_id"], self.NEW_GUEST_UID)
-        self.assertEqual(granted["result"]["action"], "granted")
-        self.assertIn(self.NEW_GUEST_UID, self.guest_data()["guests"])
-        self.assertEqual(stat.S_IMODE(self.guests_path.stat().st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(self.roster_path.stat().st_mode), 0o600)
-        grant_lines = self.log_path.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(grant_lines), 1)
-        self.assertRegex(grant_lines[0], rf"\bgrant {self.NEW_GUEST_UID}$")
-
-        revoked = json.loads(await self.revoke({"user_id": self.NEW_GUEST_UID}))
-        self.assertEqual(revoked["result"]["user_id"], self.NEW_GUEST_UID)
-        self.assertEqual(revoked["result"]["action"], "revoked")
-        self.assertEqual(self.guest_data(), before)
-        revoke_lines = self.log_path.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(revoke_lines), 2)
-        self.assertRegex(revoke_lines[-1], rf"\brevoke {self.NEW_GUEST_UID}$")
-
-    async def test_tool_and_sync_script_produce_the_same_roster(self):
-        env_file = self.data_root / "hermes" / ".env"
-        env_file.write_text(
-            "\n".join([
-                f"ZALO_ALLOWED_USERS= {self.OWNER_UID} ",
-                f"GATEWAY_ALLOWED_USERS= {self.ENV_GUEST_UID} ",
-                f"ZALO_GUEST_GROUPS= {self.GROUP_UID} ",
-                "",
-            ]),
-            encoding="utf-8",
-        )
-        sync_script = Path(__file__).resolve().parents[3] / "my-ultron" / "deploy" / "sync-zalo-roster.sh"
-        subprocess.run(["bash", str(sync_script), str(self.data_root)], check=True, capture_output=True, text=True)
-
-        self.set_turn()
-        await self.grant({"user_id": self.NEW_GUEST_UID})
-        tool_roster = self.roster_path.read_text(encoding="utf-8")
-        subprocess.run(["bash", str(sync_script), str(self.data_root)], check=True, capture_output=True, text=True)
-        script_roster = self.roster_path.read_text(encoding="utf-8")
-        self.assertEqual(tool_roster, script_roster)
-
-
-    async def test_roster_write_failure_restores_guest_source(self):
-        self.set_turn()
-        before_guests = self.guest_data()
-        before_roster = json.loads(self.roster_path.read_text(encoding="utf-8"))
-        write_json = zalo_tools._write_json_atomic
-
-        def fail_roster_write(path, data):
-            if path == self.roster_path:
-                raise OSError("injected roster write failure")
-            write_json(path, data)
-
-        with patch.object(zalo_tools, "_write_json_atomic", side_effect=fail_roster_write):
-            result = json.loads(await self.grant({"user_id": self.NEW_GUEST_UID}))
-
-        self.assertFalse(result["success"])
-        self.assertEqual(self.guest_data(), before_guests)
-        self.assertEqual(json.loads(self.roster_path.read_text(encoding="utf-8")), before_roster)
-
-    async def test_audit_failure_reports_live_access_truthfully(self):
-        self.set_turn()
-        with patch.object(zalo_tools, "_append_guest_grant_log", side_effect=OSError("injected audit failure")):
-            result = json.loads(await self.grant({"user_id": self.NEW_GUEST_UID}))
-
+    async def test_owner_dm_updates_only_group_source_atomically(self):
+        self.owner_dm()
+        inode = self.groups_path.stat().st_ino
+        result = json.loads(await self.grant_group({"group_id": "group-b"}))
         self.assertTrue(result["success"])
-        self.assertIn("nhật ký", result["result"]["warning"])
-        self.assertIn(self.NEW_GUEST_UID, self.guest_data()["guests"])
-        roster = json.loads(self.roster_path.read_text(encoding="utf-8"))
-        self.assertIn(self.NEW_GUEST_UID, roster["guests"])
+        self.assertEqual(
+            json.loads(self.groups_path.read_text()),
+            {"version": 1, "guestGroups": ["group-a", "group-b"]},
+        )
+        self.assertNotEqual(self.groups_path.stat().st_ino, inode)
+        self.assertEqual(stat.S_IMODE(self.groups_path.stat().st_mode), 0o600)
+        result = json.loads(await self.revoke_group({"group_id": "group-a"}))
+        self.assertTrue(result["success"])
+        self.assertEqual(json.loads(self.groups_path.read_text())["guestGroups"], ["group-b"])
 
-    async def test_rejects_non_string_or_multiline_guest_ids(self):
-        self.set_turn()
-        before_guests = self.guest_data()
-        before_roster = json.loads(self.roster_path.read_text(encoding="utf-8"))
+    async def test_final_group_removal_leaves_empty_deny_scope(self):
+        self.owner_dm()
+        result = json.loads(await self.revoke_group({"group_id": "group-a"}))
+        self.assertTrue(result["success"])
+        self.assertEqual(json.loads(self.groups_path.read_text())["guestGroups"], [])
 
-        for user_id in (9000000000000000004, "9000000000000000004\nforged grant"):
-            with self.subTest(user_id=user_id):
-                result = json.loads(await self.grant({"user_id": user_id}))
-                self.assertFalse(result["success"])
-                self.assertIn("UID Zalo dạng chuỗi", result["error"])
+    async def test_group_outsider_and_unknown_context_leave_source_unchanged(self):
+        before = self.groups_path.read_bytes()
+        for turn in (
+            {"sender_uid": "outsider", "thread_id": "dm", "is_group": False, "is_owner": False},
+            {"sender_uid": self.OWNER, "thread_id": "group-a", "is_group": True, "is_owner": True},
+            None,
+        ):
+            if turn is None:
+                zalo_tools.bind_turn(None)
+            else:
+                zalo_tools.set_turn_context(**turn)
+            result = json.loads(await self.grant_group({"group_id": "group-b"}))
+            self.assertFalse(result["success"])
+            self.assertEqual(self.groups_path.read_bytes(), before)
 
-        self.assertEqual(self.guest_data(), before_guests)
-        self.assertEqual(json.loads(self.roster_path.read_text(encoding="utf-8")), before_roster)
-        self.assertFalse(self.log_path.exists())
+    async def test_invalid_identifier_leaves_source_unchanged(self):
+        self.owner_dm()
+        before = self.groups_path.read_bytes()
+        result = json.loads(await self.grant_group({"group_id": "group id"}))
+        self.assertFalse(result["success"])
+        self.assertEqual(self.groups_path.read_bytes(), before)
 
+
+class ZaloCoreToolDenyTest(unittest.TestCase):
+    def setUp(self):
+        self.turn_token = zalo_tools._TURN.set(None)
+
+    def tearDown(self):
+        zalo_tools._TURN.reset(self.turn_token)
+
+    def test_every_zalo_role_denies_generic_core_tools(self):
+        for turn in (
+            {"sender_uid": "guest", "thread_id": "group", "is_group": True, "is_owner": False},
+            {"sender_uid": "owner", "thread_id": "dm", "is_group": False, "is_owner": True},
+        ):
+            zalo_tools.bind_turn(turn)
+            for tool_name in zalo_tools.ZALO_DENIED_CORE_TOOLS:
+                with self.subTest(role=turn["sender_uid"], tool_name=tool_name):
+                    verdict = zalo_tools.guard_member_tool_call(tool_name=tool_name)
+                    self.assertEqual(verdict, {
+                        "action": "block",
+                        "message": "Hành động này không khả dụng qua Zalo.",
+                    })
+
+    def test_every_zalo_role_denies_unresolved_tool_call(self):
+        for turn in (
+            {"sender_uid": "guest", "thread_id": "group", "is_group": True, "is_owner": False},
+            {"sender_uid": "owner", "thread_id": "dm", "is_group": False, "is_owner": True},
+        ):
+            with self.subTest(role=turn["sender_uid"]), \
+                    patch.dict(sys.modules, {"tools.tool_search": None}):
+                zalo_tools.bind_turn(turn)
+                verdict = zalo_tools.guard_member_tool_call(tool_name="tool_call", args={})
+                self.assertEqual(verdict, {
+                    "action": "block",
+                    "message": "Hành động này không khả dụng qua Zalo.",
+                })
+
+    def test_owner_retains_narrow_guest_group_lifecycle_tools(self):
+        zalo_tools.bind_turn({
+            "sender_uid": "owner", "thread_id": "dm", "is_group": False, "is_owner": True,
+        })
+        self.assertIsNone(zalo_tools.guard_member_tool_call(tool_name="zalo_grant_guest_group"))
+        self.assertIsNone(zalo_tools.guard_member_tool_call(tool_name="zalo_revoke_guest_group"))
 if __name__ == "__main__":
     unittest.main()

@@ -51,7 +51,6 @@ earlier iteration of this integration.
 
 import asyncio
 import json
-import logging
 import os
 import re
 import shutil
@@ -454,14 +453,14 @@ def _bridge_token_from_file() -> str:
     return token
 
 
-def _authenticated_bridge_url(url: str, token: str) -> str:
-    """Attach the shared bridge token without logging or altering other query keys."""
+def _authenticated_bridge_url(url: str, token: str, audience: str = "owner") -> str:
+    """Attach bridge authentication and immutable runtime audience."""
     if not str(token or "").strip():
         raise ValueError("Thiếu ZALO_BRIDGE_TOKEN trong cấu hình Zalo")
     parts = urlsplit(str(url))
     query = parse_qsl(parts.query, keep_blank_values=True)
-    query = [(key, value) for key, value in query if key != "token"]
-    query.append(("token", str(token)))
+    query = [(key, value) for key, value in query if key not in {"token", "audience"}]
+    query.extend((("token", str(token)), ("audience", audience)))
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
@@ -521,15 +520,16 @@ class ZaloAdapter(BasePlatformAdapter):
             roster = json.loads(Path(roster_path).read_text(encoding="utf-8"))
             if (
                 not isinstance(roster, dict)
+                or set(roster) != {"version", "owners", "guests"}
                 or roster.get("version") != 1
                 or not isinstance(roster.get("owners"), list)
                 or not isinstance(roster.get("guests"), list)
-                or not all(isinstance(item, str) and item.strip() for item in roster["owners"])
-                or not all(isinstance(item, str) and item.strip() for item in roster["guests"])
+                or not all(isinstance(item, str) and item == item.strip() and item for item in roster["owners"])
+                or not all(isinstance(item, str) and item == item.strip() and item for item in roster["guests"])
             ):
                 return set()
-            owners = {item.strip() for item in roster["owners"]}
-            return {item.strip() for item in roster["guests"]} - owners
+            owners = set(roster["owners"])
+            return set(roster["guests"]) - owners
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return set()
 
@@ -551,6 +551,11 @@ class ZaloAdapter(BasePlatformAdapter):
             or extra.get("bridge_token")
             or _get_scoped_secret("ZALO_BRIDGE_TOKEN", "")
         ).strip()
+        self._bridge_audience = str(
+            _get_scoped_secret("ZALO_BRIDGE_AUDIENCE", "") or extra.get("bridge_audience") or "owner"
+        ).strip().lower()
+        if self._bridge_audience not in {"owner", "guest"}:
+            raise ValueError("ZALO_BRIDGE_AUDIENCE must be owner or guest")
         self._reply_only_tagged: bool = _truthy(
             extra.get("reply_only_tagged",
                       _get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "true")),
@@ -636,7 +641,9 @@ class ZaloAdapter(BasePlatformAdapter):
 
         self._closing = False
         try:
-            authenticated_url = _authenticated_bridge_url(self._bridge_url, self._bridge_token)
+            authenticated_url = _authenticated_bridge_url(
+                self._bridge_url, self._bridge_token, self._bridge_audience
+            )
             self._ws = await asyncio.wait_for(
                 websockets.connect(
                     authenticated_url,
@@ -742,7 +749,9 @@ class ZaloAdapter(BasePlatformAdapter):
                 try:
                     self._ws = await asyncio.wait_for(
                         websockets.connect(
-                            _authenticated_bridge_url(self._bridge_url, self._bridge_token),
+                            _authenticated_bridge_url(
+                                self._bridge_url, self._bridge_token, self._bridge_audience
+                            ),
                             ping_interval=BRIDGE_PING_INTERVAL_SECONDS,
                             ping_timeout=BRIDGE_PING_TIMEOUT_SECONDS,
                         ),
@@ -785,7 +794,11 @@ class ZaloAdapter(BasePlatformAdapter):
 
         logger.debug("[zalo] unhandled frame type: %s", kind)
 
+
     async def _on_message(self, frame: Dict[str, Any]) -> None:
+        if frame.get("audience", "owner") != self._bridge_audience:
+            logger.warning("[zalo] dropping frame for a different runtime audience")
+            return
         text = (frame.get("text") or "").strip()
         # Chỉ nhặt URL khi tin thật sự có tệp đính kèm: thẻ chia sẻ link cũng có
         # href và ảnh thu nhỏ, nhặt luôn thì link bị tải về như ảnh.
@@ -882,6 +895,8 @@ class ZaloAdapter(BasePlatformAdapter):
             "reply_cli_msg_id": str(quote.get("cliMsgId") or "") if quote else "",
             "reply_is_own": quote_is_own,
             "msg_id": msg_id,
+            "audience": self._bridge_audience,
+            "bridge_verified": True,
         }
         self._remember_turn(turn)
         _zalo_tools().set_turn_context(**turn)
@@ -1460,8 +1475,7 @@ class ZaloAdapter(BasePlatformAdapter):
 
             platform_key = str(self.platform.value)
             for label, override in (
-                ("chủ nhân", [f"hermes-{platform_key}", "kanban",
-                              TOOLSET_OWNER, TOOLSET_PUBLIC]),
+                ("chủ nhân", [f"hermes-{platform_key}", "kanban", TOOLSET_OWNER, TOOLSET_PUBLIC]),
                 ("người trong nhóm", [TOOLSET_PUBLIC]),
             ):
                 probe = dict(cfg)
@@ -1470,13 +1484,10 @@ class ZaloAdapter(BasePlatformAdapter):
                 probe["platform_toolsets"] = pts
                 toolsets = sorted(_get_platform_tools(probe, platform_key))
                 tools = {t for ts in toolsets for t in resolve_toolset(ts)}
-                leaks = sorted(t for t in ("terminal", "read_file", "write_file",
-                                           "kanban_create", "zalo_forward")
-                               if t in tools)
+                leaks = sorted(t for t in ("terminal", "read_file", "write_file", "browser_open") if t in tools)
                 logger.info(
-                    "[zalo] tự kiểm quyền — %s: %d công cụ (%d Zalo)%s",
-                    label, len(tools),
-                    len([t for t in tools if t.startswith("zalo_")]),
+                    "[zalo] %s: %d toolsets, %d Zalo tools%s",
+                    label, len(toolsets), len([t for t in tools if t.startswith("zalo_")]),
                     f", nhạy cảm: {leaks}" if leaks else ", không có công cụ nhạy cảm",
                 )
         except Exception as exc:
@@ -1488,11 +1499,9 @@ class ZaloAdapter(BasePlatformAdapter):
         Gateway hỏi hàm này trước mỗi lượt agent chạy. Trả về ``None`` nghĩa là
         dùng cấu hình mặc định của nền tảng.
 
-        Điểm cốt lõi: ``hermes-zalo`` kéo theo cả bộ công cụ lõi của Hermes —
-        ``terminal``, ``read_file``, ``write_file``, ``browser_*``. Ai được
-        dùng nó là chạy được lệnh shell và đọc được mọi tệp trên máy chủ, kể cả
-        tệp chứa khoá API. Nên người ngoài chỉ nhận ``zalo_public``: mười công
-        cụ tác động trong đúng cuộc trò chuyện của họ, không hơn.
+        Owner and guest Zalo turns receive only native Zalo toolsets. Generic
+        Hermes core capabilities stay on the SSH/terminal control plane; a
+        pre-tool execution guard also denies them if a resolver regresses.
         """
         uid = str(getattr(source, "user_id", "") or "")
         owner = self._bind_turn_for_source(source, uid)
@@ -1500,18 +1509,7 @@ class ZaloAdapter(BasePlatformAdapter):
             logger.warning("[zalo] %s không phải chủ nhân cũng không phải khách", uid)
             return [TOOLSET_DENIED]
 
-        # Dùng khoá nền tảng, KHÔNG dùng ``self.name``: thuộc tính đó trả về
-        # ``platform.value.title()`` — "Zalo" chứ không phải "zalo" — nên
-        # ``hermes-Zalo`` không khớp toolset nào và agent lặng lẽ mất sạch
-        # công cụ. Đúng loại lỗi chỉ lộ ra khi đo ở nơi người dùng thật chạm
-        # tới, chứ không lộ khi tự gọi resolve_toolset trong bài kiểm thử.
-        platform_key = str(self.platform.value)
-        # ``kanban`` được liệt kê thẳng cho chủ nhân, không nằm trong
-        # ``hermes-zalo``: bảng công việc đã bị loại khỏi composite ở
-        # define_platform_composite() để người trong nhóm không với tới. Liệt
-        # kê tường minh là đường duy nhất còn lại để chủ nhân vẫn dùng được.
-        chosen = ([f"hermes-{platform_key}", "kanban", TOOLSET_OWNER, TOOLSET_PUBLIC]
-                  if owner else [TOOLSET_PUBLIC])
+        chosen = [TOOLSET_OWNER, TOOLSET_PUBLIC] if owner else [TOOLSET_PUBLIC]
 
         logger.debug("[zalo] %s (%s) → %s",
                      "chủ nhân" if owner else "người trong nhóm",

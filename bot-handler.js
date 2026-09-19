@@ -1,10 +1,12 @@
 import {
-  isHermesAttached, forwardToHermes, extractMediaUrls, extractText, rememberZaloMessage,
-  sendSystemNotice,
+  GUEST_REFUSAL, isHermesAttached, forwardToHermes, extractMediaUrls, extractText,
+  rememberZaloMessage, sendSystemNotice,
 } from './hermes-bridge.js';
 import { ThreadType } from 'zca-js';
 import { createStickerDirectory, enrichSticker } from './zalo-stickers.js';
-import { emptyRoster, reloadRosterIfChanged } from './zalo-roster.js';
+import {
+  emptyGuestGroups, emptyRoster, reloadGuestGroupsIfChanged, reloadRosterIfChanged,
+} from './zalo-roster.js';
 
 /**
  * Định tuyến tin nhắn Zalo sang Hermes Agent.
@@ -30,29 +32,36 @@ let selfUid = '';
 let activeRoster = emptyRoster();
 let activeRosterPath = '';
 let activeRosterState = null;
+let activeGuestGroups = emptyGuestGroups();
+let activeGuestGroupsPath = '';
+let activeGuestGroupsState = null;
 
-function refreshActiveRoster() {
-  if (!activeRosterPath) return;
-  const next = reloadRosterIfChanged(activeRosterPath, activeRoster, activeRosterState);
-  activeRoster = next.roster;
-  activeRosterState = next.state;
+function refreshAuthorizationState() {
+  if (activeRosterPath) {
+    const next = reloadRosterIfChanged(activeRosterPath, activeRoster, activeRosterState);
+    activeRoster = next.roster;
+    activeRosterState = next.state;
+  }
+  if (activeGuestGroupsPath) {
+    const next = reloadGuestGroupsIfChanged(
+      activeGuestGroupsPath, activeGuestGroups, activeGuestGroupsState,
+    );
+    activeGuestGroups = next.groups;
+    activeGuestGroupsState = next.state;
+  }
 }
 
-/** Ai được nghe câu báo lỗi khi Hermes chưa sẵn sàng (UID Zalo, phân tách bởi dấu phẩy). */
 function ownerUids() {
-  return String(process.env.ZALO_ALLOWED_USERS || '')
-    .split(',').map((s) => s.trim()).filter(Boolean);
+  return [...activeRoster.owners];
 }
 
-// Khách chỉ với tới Hermes trong một nhóm được kê tên. Danh sách nhóm rỗng
-// nghĩa là *không nhóm nào*, không phải mọi nhóm: ZALO_GUEST_GROUPS là biến mới
-// nên trạng thái hay gặp nhất là chưa ai khai nó, và mặc định của một trạng thái
-// chưa khai phải là hẹp nhất.
-function mayReachHermes(senderUid, isGroup, threadId) {
-  refreshActiveRoster();
-  if (activeRoster.owners.has(senderUid)) return true;
-  if (!activeRoster.guests.has(senderUid)) return false;
-  return isGroup && activeRoster.guestGroups.has(String(threadId));
+function audienceFor(senderUid, isGroup, threadId) {
+  refreshAuthorizationState();
+  if (activeRoster.owners.has(senderUid)) return 'owner';
+  if (activeRoster.guests.has(senderUid) && isGroup && activeGuestGroups.has(String(threadId))) {
+    return 'guest';
+  }
+  return null;
 }
 
 /**
@@ -71,15 +80,17 @@ const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
  */
 const RESTART_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
 
-export function setupBotListener(api, profile = null, { health = null, restartDelaysMs = RESTART_DELAYS_MS, roster = null } = {}) {
-  if (!api?.listener) {
-    console.warn('[bot] ❌ api.listener không tồn tại — bot sẽ không nhận được tin nhắn');
-    return () => {};
-  }
+export function setupBotListener(
+  api, profile = null,
+  { health = null, restartDelaysMs = RESTART_DELAYS_MS, roster = null, guestGroups = null } = {},
+) {
   selfUid = String(profile?.user_id ?? profile?.userId ?? '');
   activeRoster = roster || emptyRoster();
   activeRosterPath = roster ? String(process.env.ZALO_ROSTER_FILE || '') : '';
   activeRosterState = null;
+  activeGuestGroups = guestGroups || emptyGuestGroups();
+  activeGuestGroupsPath = guestGroups ? String(process.env.ZALO_GUEST_GROUPS_FILE || '') : '';
+  activeGuestGroupsState = null;
 
   let stopped = false;
   let restartTimer = null;
@@ -174,44 +185,25 @@ function isAddressedToBot(msg, isGroup, senderUid) {
 }
 
 async function handleIncomingMessage(api, msg, stickers = null) {
-  // Tra nhãn dán trước khi lưu: lịch sử ghi "[Nhãn dán: cười]" thay vì một
-  // dòng trống, và các tầng sau không phải biết gì thêm.
-  await enrichSticker(msg, stickers);
-  rememberZaloMessage(msg);
   if (msg.isSelf) return;
+  const threadType = msg.type;
+  const isGroup = threadType === ThreadType.Group;
+  const threadId = String(msg.threadId || '');
+  const senderUid = String(msg.data?.uidFrom ?? '');
+  if (!threadId || !senderUid) {
+    console.warn('[bot] discarded message with incomplete routing metadata');
+    return;
+  }
 
-  // Dùng chung bộ rút chữ với cầu nối: tin có link hay tệp thì content là
-  // object chứ không phải chuỗi, lọc theo chuỗi ở đây là vứt mất tin trước
-  // cả khi Hermes kịp nhìn thấy. Ảnh-only cũng được giữ lại để adapter Python
-  // lưu làm ngữ cảnh nhóm cho câu hỏi kiểu "đây là..." gửi ngay sau đó.
   const content = extractText(msg).trim();
   const mediaUrls = extractMediaUrls(msg);
   if (!content && !mediaUrls.length) return;
 
-  // zca-js đã tính sẵn msg.threadId và msg.type cho cả hai loại hội thoại.
-  // (Trước đây code đọc msg.isGroup — property KHÔNG tồn tại — nên mọi tin
-  //  nhắn nhóm đều bị trả lời vào DM của người gửi.)
-  const threadType = msg.type;
-  const isGroup = threadType === ThreadType.Group;
-  const threadId = msg.threadId;
-  const senderUid = String(msg.data?.uidFrom ?? '');
-
-  if (!threadId) {
-    console.warn('[bot] bỏ qua: không xác định được threadId');
-    return;
-  }
-
-  const where = isGroup ? `Nhóm ${threadId}` : `DM ${threadId}`;
-  console.log(`[bot] 📩 [${where}] ${msg.data?.dName || '?'} (${senderUid}): ${content.slice(0, 80)}`);
-
-  // Cài mới chưa có allowlist nên gateway chưa thể nhìn thấy lệnh này. Chỉ tiết
-  // lộ UID của chính người nhắn; tuyệt đối không ghi .env hay tự cấp quyền chủ.
-  if (!isHermesAttached() && !isGroup && senderUid && content.toLowerCase() === '/sethome') {
+  // Bootstrap is a local owner-identity recovery path, never agent-visible state.
+  if (!isHermesAttached() && !isGroup && content.toLowerCase() === '/sethome') {
     try {
       await sendSystemNotice({
-        api,
-        threadId,
-        threadType,
+        api, threadId, threadType,
         text: [
           `UID Zalo của bạn: ${senderUid}`,
           '',
@@ -219,8 +211,6 @@ async function handleIncomingMessage(api, msg, stickers = null) {
           'Thêm vào .env của Hermes:',
           `ZALO_ALLOWED_USERS=${senderUid}`,
           '',
-          // Để chữ "tuỳ chọn" ra dòng riêng: khách chép nguyên dòng giá trị
-          // thì không dính chữ thừa vào .env.
           'Tuỳ chọn — nhận báo cáo định kỳ qua tin riêng:',
           `ZALO_HOME_CHANNEL=${senderUid}`,
           '',
@@ -228,46 +218,44 @@ async function handleIncomingMessage(api, msg, stickers = null) {
         ].join('\n'),
       });
     } catch (err) {
-      console.error('[bot] không gửi được UID bootstrap:', err?.message || err);
+      console.error('[bot] bootstrap notice failed');
     }
     return;
   }
 
-  if (!mayReachHermes(senderUid, isGroup, threadId)) {
-    console.log(`[bot] 🚪 [${where}] ${senderUid} không có trong roster — bỏ qua`);
+  // Mint audience before enrichment, history, or bridge fan-out. A guest never
+  // falls back to the owner runtime when its isolated runtime is unavailable.
+  const audience = audienceFor(senderUid, isGroup, threadId);
+  if (!audience) {
+    console.log('[bot] discarded denied message');
+    return;
+  }
+  if (!isHermesAttached(audience)) {
+    if (audience === 'guest') {
+      await sendSystemNotice({ api, threadId, threadType, text: GUEST_REFUSAL });
+      return;
+    }
+    if (!isAddressedToBot(msg, isGroup, senderUid)) return;
+    const last = notified.get(threadId) || 0;
+    if (Date.now() - last < NOTIFY_COOLDOWN_MS) return;
+    notified.set(threadId, Date.now());
+    try {
+      await sendSystemNotice({
+        api,
+        threadId,
+        threadType,
+        text: 'Mình đang mất kết nối với bộ não xử lý nên chưa trả lời được. Bạn nhắn lại giúp mình sau ít phút nhé!',
+      });
+    } catch (err) {
+      console.error('[bot] unavailable notice failed');
+    }
     return;
   }
 
-  if (isHermesAttached()) {
-    forwardToHermes(msg);
-    console.log('[bot] ➡️ đã chuyển cho Hermes Agent');
-    return;
-  }
+  await enrichSticker(msg, stickers);
+  if (audience === 'guest') rememberZaloMessage(msg);
+  forwardToHermes(msg, audience);
+  console.log('[bot] forwarded admitted message');
+  return;
 
-
-  // Hermes chưa cắm. Chỉ báo cho người thật sự đang gọi bot — người khác nói
-  // chuyện với nhau trong nhóm thì không việc gì phải nghe.
-  if (!isAddressedToBot(msg, isGroup, senderUid)) {
-    console.log('[bot] ⚠️ Hermes chưa cắm — tin này không gọi bot, bỏ qua');
-    return;
-  }
-
-  const last = notified.get(threadId) || 0;
-  if (Date.now() - last < NOTIFY_COOLDOWN_MS) {
-    console.log('[bot] ⚠️ Hermes chưa cắm — đã báo cho thread này rồi, không nhắc lại');
-    return;
-  }
-  notified.set(threadId, Date.now());
-
-  console.warn('[bot] ⚠️ Hermes chưa cắm — báo lỗi cho người dùng');
-  try {
-    await sendSystemNotice({
-      api,
-      threadId,
-      threadType,
-      text: 'Mình đang mất kết nối với bộ não xử lý nên chưa trả lời được 😔 Bạn nhắn lại giúp mình sau ít phút nhé!',
-    });
-  } catch (err) {
-    console.error('[bot] không gửi được thông báo lỗi:', err?.message || err);
-  }
 }

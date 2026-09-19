@@ -44,8 +44,12 @@ function useRoster(t, roster) {
   return loadRoster(path);
 }
 
-function auth(threadId, threadType, { actorUid = 'owner', confirmed = false } = {}) {
-  return { actorUid, actorRole: actorUid === 'owner' ? 'owner' : 'public', sourceThreadId: threadId, sourceThreadType: threadType, confirmed };
+function auth(threadId, threadType, { actorUid = 'owner', confirmed = false, audience = 'owner' } = {}) {
+  return {
+    actorUid, actorRole: actorUid === 'owner' ? 'owner' : 'public',
+    sourceThreadId: threadId, sourceThreadType: threadType, confirmed,
+    audience, bridgeVerified: true,
+  };
 }
 
 function onceMessage(ws, predicate = () => true) {
@@ -167,6 +171,48 @@ test('forwardToHermes chuẩn hóa đúng cấu trúc quote thực tế của zc
     assert.equal(payload.quote.text, 'Quá hay và quá chuẩn luôn anh Hải Anh ơi!');
   } finally {
     ws.close();
+    stopHermesBridge();
+  }
+});
+
+test('guest frames route only to the guest runtime and guest egress requires guest provenance', async (t) => {
+  const server = startHermesBridge({
+    api: {}, profile: { user_id: 'bot-uid' }, port: 0, store: testStore(t),
+    bridgeToken: 'owner-token', guestBridgeToken: 'guest-token',
+  });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const { port } = server.address();
+  const connect = (audience, token) => new Promise((resolve, reject) => {
+    const ws = new RawWebSocket(`ws://127.0.0.1:${port}?token=${token}&audience=${audience}`);
+    ws.once('open', () => resolve(ws));
+    ws.once('error', reject);
+  });
+  const owner = await connect('owner', 'owner-token');
+  const guest = await connect('guest', 'guest-token');
+  const ownerFrames = [];
+  owner.on('message', (raw) => ownerFrames.push(JSON.parse(raw.toString())));
+
+  try {
+    const guestMessage = onceMessage(guest, (frame) => frame.type === 'message');
+    const { forwardToHermes } = await import('./hermes-bridge.js');
+    assert.equal(forwardToHermes({
+      threadId: 'guest-group', type: 1,
+      data: { msgId: 'guest-message', uidFrom: 'guest', dName: 'Guest', content: 'public question' },
+    }, 'guest'), true);
+    const frame = await guestMessage;
+    assert.equal(frame.audience, 'guest');
+    assert.equal(ownerFrames.some((item) => item.type === 'message'), false);
+
+    guest.send(JSON.stringify({
+      type: 'send', reqId: 'forged-audience', threadId: 'guest-group', threadType: 1, text: 'x',
+      auth: { ...auth('guest-group', 1, { actorUid: 'guest' }), audience: 'owner' },
+    }));
+    const denied = await onceMessage(guest, (item) => item.type === 'ack' && item.reqId === 'forged-audience');
+    assert.equal(denied.ok, false);
+    assert.equal(denied.errorCode, 'audience_denied');
+  } finally {
+    owner.close();
+    guest.close();
     stopHermesBridge();
   }
 });
@@ -460,7 +506,7 @@ test('group_members hỏi getGroupInfo lấy ID thành viên rồi mới tra h�
   try {
     ws.send(JSON.stringify({
       type: 'group_members', reqId: 'gm1', threadId: 'g1', threadType: 1,
-      auth: { actorUid: 'member-1', actorRole: 'public', sourceThreadId: 'g1', sourceThreadType: 1, confirmed: false },
+      auth: auth('g1', 1, { actorUid: 'member-1' }),
     }));
     const ack = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'gm1');
 
@@ -1040,7 +1086,7 @@ test('tin system (kết quả cron) gửi được vào nhóm không phải kên
     await hello;
     ws.send(JSON.stringify({
       type: 'send', reqId: 'cron-send', threadId: 'group-9', threadType: 1, text: 'Nhắc họp',
-      auth: { actorUid: '', actorRole: 'system', sourceThreadId: '', sourceThreadType: 0, confirmed: false },
+      auth: { actorUid: '', actorRole: 'system', sourceThreadId: '', sourceThreadType: 0, confirmed: false, audience: 'owner', bridgeVerified: false },
     }));
     const ack = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'cron-send');
     assert.equal(ack.ok, true);
@@ -1292,7 +1338,7 @@ test('history_range đọc cả khoảng thời gian từ kho, lật trang khôn
 
 test('bridge reads owner authorization from roster', async (t) => {
   const ownerUid = '9000000000000000001';
-  const roster = useRoster(t, { version: 1, owners: [ownerUid], guests: ['9000000000000000002'], guestGroups: [] });
+  const roster = useRoster(t, { version: 1, owners: [ownerUid], guests: ['9000000000000000002'] });
   const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store: testStore(t), roster });
   await new Promise((resolve) => server.once('listening', resolve));
   const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
@@ -1312,7 +1358,7 @@ test('bridge reads owner authorization from roster', async (t) => {
 });
 
 test('bridge denies owner-only commands when roster is empty', async (t) => {
-  const roster = useRoster(t, { version: 1, owners: [], guests: [], guestGroups: [] });
+  const roster = useRoster(t, { version: 1, owners: [], guests: [] });
   const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store: testStore(t), roster });
   await new Promise((resolve) => server.once('listening', resolve));
   const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);

@@ -9,7 +9,7 @@ import { loadRepoEnv, loadHermesEnv } from './scripts/setup-env.js';
 import { Zalo, LoginQRCallbackEventType } from 'zca-js';
 import { tryReconnect, saveSession, clearSession, fetchProfile } from './auth.js';
 import { setupBotListener } from './bot-handler.js';
-import { loadRoster } from './zalo-roster.js';
+import { loadGuestGroups, loadRoster } from './zalo-roster.js';
 import { startAutomaticBackfill, startHermesBridge, stopHermesBridge, isHermesAttached } from './hermes-bridge.js';
 import { openZaloStore } from './zalo-store.js';
 import { createRuntimeHealth } from './runtime-health.js';
@@ -91,13 +91,12 @@ function activateZaloRuntime() {
       console.error('[history] legacy import failed:', error?.message || error);
     }
   }
-  // Điểm fail-fast duy nhất cho roster: thiếu tệp thì tiến trình chết ngay tại
-  // đây. Một container không khởi động được thì thấy ngay; một container chạy mà
-  // không trả lời ai thì mất hàng giờ mới phát hiện.
+  // Authorization files must both be valid before listener starts.
   const roster = loadRoster(process.env.ZALO_ROSTER_FILE);
+  const guestGroups = loadGuestGroups(process.env.ZALO_GUEST_GROUPS_FILE);
   startHermesBridge({ api, profile: loginInfo, store: zaloStore, health: runtimeHealth, roster });
   stopBotListener();
-  stopBotListener = setupBotListener(api, loginInfo, { health: runtimeHealth, roster });
+  stopBotListener = setupBotListener(api, loginInfo, { health: runtimeHealth, roster, guestGroups });
   startAutomaticBackfill().catch((error) => {
     runtimeHealth.recordError('automatic_backfill_failed', error?.message || error);
     console.error('[history] automatic backfill failed:', error?.message || error);

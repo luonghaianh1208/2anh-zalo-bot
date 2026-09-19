@@ -59,8 +59,7 @@ class ZaloResolvedAllowlistTest(unittest.TestCase):
                 json.dump({
                     "version": 1,
                     "owners": [owner_uid],
-                    "guests": [owner_uid, guest_uid],
-                    "guestGroups": [],
+                    "guests": [guest_uid],
                 }, roster_file)
             with patch.dict(os.environ, {"ZALO_ROSTER_FILE": roster_path}):
                 adapter = zalo_adapter.ZaloAdapter(PlatformConfig(enabled=True, extra={}))
@@ -91,7 +90,6 @@ class ZaloGuestTierSourcesTest(unittest.TestCase):
                     "version": 1,
                     "owners": [owner_uid],
                     "guests": [chat_granted_guest],
-                    "guestGroups": [],
                 }, roster_file)
             # GATEWAY_ALLOWED_USERS rỗng: khách này CHỈ có trong roster, đúng
             # trạng thái sau một lần cấp bằng chat.
@@ -1729,17 +1727,11 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                 user_id=uid, user_name=uid, message_id=f"message-{uid}",
             )
             override = adapter.toolsets_for_source(source)
-            # ``known_plugin_toolsets`` phải có, và đây không phải chi tiết vụn.
-            # Đo trong container ngày 18/09/2026: hermes_cli/tools_config.py:538
-            # chỉ loại một plugin toolset khi nó nằm trong
-            # ``known_plugin_toolsets[platform]`` mà vắng trong danh sách của
-            # lượt này. Thiếu khoá đó thì _get_platform_tools trả về cả
-            # ``zalo_owner``, nên một lượt khách đo ra 53 công cụ kèm
-            # ``zalo_grant_guest`` — bài kiểm thử tự dựng một thế giới lỏng hơn
-            # thế giới thật rồi báo lỗi ở đó. Config đã triển khai có khoá này
-            # (config.yaml:446); với nó, khách đo đúng 16 công cụ, không
-            # ``terminal``, không ``zalo_grant_guest``. Ai sửa số 16 thành 53
-            # cho test xanh là đang xoá đúng phép kiểm cửa 3.
+            # ``known_plugin_toolsets`` phải có. Thiếu khoá này thì
+            # _get_platform_tools trả về cả ``zalo_owner`` cho lượt khách,
+            # biến fixture thành một thế giới lỏng hơn runtime. Config đã triển
+            # khai có khoá này; với nó, khách đo đúng 16 công cụ và không có
+            # ``terminal``. Đừng tăng count để che mất ranh giới đó.
             probe = {
                 "platform_toolsets": {"zalo": override},
                 "known_plugin_toolsets": {
@@ -1757,8 +1749,9 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                     "version": 1,
                     "owners": [owner_uid],
                     "guests": [guest_uid],
-                    "guestGroups": ["9000000000000000004"],
                 }, roster_file)
+            with open(os.path.join(directory, "guest-groups.json"), "w", encoding="utf-8") as groups_file:
+                json.dump({"version": 1, "guestGroups": ["9000000000000000004"]}, groups_file)
 
             with patch.dict(os.environ, {
                 "ZALO_ALLOWED_USERS": owner_uid,
@@ -1769,9 +1762,9 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                 owner_tools = effective_tools(owner_uid)
                 guest_tools = effective_tools(guest_uid)
                 stranger_tools = effective_tools(stranger_uid)
-                self.assertIn("terminal", owner_tools)
+                self.assertFalse(set(zalo_tools.ZALO_DENIED_CORE_TOOLS) & owner_tools)
                 self.assertEqual(len(guest_tools), 16)
-                self.assertFalse({"terminal", "execute_code", "read_file", "write_file"} & guest_tools)
+                self.assertFalse(set(zalo_tools.ZALO_DENIED_CORE_TOOLS) & guest_tools)
                 self.assertEqual(stranger_tools, set())
                 self.assertTrue(adapter._may_greet(guest_uid))
                 self.assertFalse(adapter._may_greet(stranger_uid))
@@ -1786,10 +1779,9 @@ class ZaloToolSchemaTest(unittest.TestCase):
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 16)
-        # 34 → 36 ngày 18/09/2026: ``zalo_grant_guest`` và ``zalo_revoke_guest``.
-        # Con số đếm này là dây bẫy: mọi công cụ mới phải bước qua nó, nên đừng
-        # đổi nó mà không nói rõ công cụ nào vừa thêm và nó thuộc tầng nào.
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 36)
+        # Owner tool count excludes guest-user lifecycle tools. Any new owner
+        # tool must update this explicit boundary assertion.
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 34)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 
     def test_zalo_ids_remain_strings_through_hermes_argument_coercion(self):
@@ -2796,22 +2788,25 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
     def tearDown(self):
         zalo_tools._TURN.reset(self.turn_token)
 
-    def guard(self, tool_name):
+    def guard(self, tool_name, args=None):
         return zalo_tools.guard_member_tool_call(
-            tool_name=tool_name, args={}, task_id="t", session_id="s", tool_call_id="c",
+            tool_name=tool_name, args=args if args is not None else {}, task_id="t", session_id="s", tool_call_id="c",
         )
 
     def bind_member(self):
         zalo_tools.bind_turn({"sender_uid": self.MEMBER, "thread_id": self.GROUP,
                               "is_group": True, "is_owner": False, "text": ""})
 
-    def test_member_turn_cannot_run_pinned_core_tools(self):
-        self.bind_member()
-        for name in ("terminal", "search_files", "read_file", "write_file",
-                     "vision_analyze", "execute_code", "delegate_task"):
-            verdict = self.guard(name)
-            self.assertEqual(verdict["action"], "block", name)
-            self.assertIn(name, verdict["message"])
+    def test_every_zalo_role_denies_generic_mutation_tools(self):
+        for turn in (
+            {"sender_uid": self.MEMBER, "thread_id": self.GROUP, "is_group": True, "is_owner": False, "text": ""},
+            {"sender_uid": "9200000000000000001", "thread_id": self.GROUP, "is_group": True, "is_owner": True, "text": ""},
+        ):
+            zalo_tools.bind_turn(turn)
+            for name in zalo_tools.ZALO_DENIED_CORE_TOOLS:
+                verdict = self.guard(name)
+                self.assertEqual(verdict["action"], "block", name)
+                self.assertEqual(verdict["message"], "Hành động này không khả dụng qua Zalo.")
 
     def test_member_turn_keeps_public_zalo_mcp_and_tool_search_bridge(self):
         self.bind_member()
@@ -2825,13 +2820,14 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
         with patch.object(registry, "get_toolset_for_tool", return_value="mcp-rag"):
             self.assertIsNone(self.guard("rag_search"))
 
-    def test_owner_turn_and_non_zalo_contexts_are_untouched(self):
+    def test_non_zalo_context_is_untouched_and_owner_keeps_narrow_group_lifecycle(self):
         self.assertIsNone(self.guard("terminal"))
         zalo_tools.bind_turn(None)
         self.assertIsNone(self.guard("terminal"))
         zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
                               "is_group": True, "is_owner": True, "text": ""})
-        self.assertIsNone(self.guard("terminal"))
+        self.assertIsNone(self.guard("zalo_grant_guest_group"))
+        self.assertIsNone(self.guard("zalo_revoke_guest_group"))
 
     def test_plugin_entry_registers_the_guard_as_pre_tool_call_hook(self):
         import plugins.zalo_tools as plugin
@@ -2842,51 +2838,35 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             plugin.register(ctx)
         self.assertEqual(ctx.hooks.get("pre_tool_call"), [zalo_tools.guard_member_tool_call])
 
-    def test_owner_turn_loses_core_tools_once_an_outsider_tags_the_bot_in_the_same_thread(self):
+    def test_owner_turn_blocks_generic_core_even_without_outsider(self):
         class FakeAdapter:
             pass
 
         adapter = FakeAdapter()
-        adapter._turns = {
-            "m1": {"thread_id": self.GROUP, "is_owner": True, "seq": 5},
-            "m2": {"thread_id": "another-group", "is_owner": False, "seq": 6},
-        }
+        adapter._turns = {"m1": {"thread_id": self.GROUP, "is_owner": True, "seq": 5}}
         public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
-        config = {"display": {"busy_input_mode": "interrupt"}}
         with patch.object(zalo_tools, "_ACTIVE_ADAPTER", adapter), \
-                patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "interrupt"}), \
-                patch("hermes_cli.config.load_config_readonly", side_effect=lambda: config):
+                patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "queue"}):
             zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
                                   "is_group": True, "is_owner": True, "text": "", "seq": 5})
-            self.assertIsNone(self.guard("terminal"))
-
-            # busy_input_mode interrupt/steer chèn tin này vào lượt đang chạy.
-            adapter._turns["m3"] = {"thread_id": self.GROUP, "is_owner": False, "seq": 7}
             self.assertEqual(self.guard("terminal")["action"], "block")
             self.assertIsNone(self.guard(public))
 
-            # queue ở cả biến môi trường lẫn config: tin đó chờ thành lượt riêng,
-            # lượt của chủ nhân giữ nguyên quyền.
-            config["display"]["busy_input_mode"] = "queue"
-            with patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "queue"}):
-                self.assertIsNone(self.guard("terminal"))
-
-                # /busy steer đổi config lúc đang chạy nhưng không đổi biến môi trường.
-                config["display"]["busy_input_mode"] = "steer"
-                self.assertEqual(self.guard("terminal")["action"], "block")
-
-    def test_member_tool_call_bridge_is_judged_by_the_wrapped_tool(self):
+    def test_wrapped_generic_core_action_is_denied_for_every_zalo_role(self):
         self.bind_member()
-        verdict = zalo_tools.guard_member_tool_call(
-            tool_name="tool_call", args={"name": "terminal", "arguments": {"command": "cat .env"}},
+        verdict = self.guard(
+            "tool_call", {"name": "terminal", "arguments": {"command": "cat .env"}},
         )
         self.assertEqual(verdict["action"], "block")
 
-        public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
-        with patch("tools.tool_search.resolve_underlying_call", return_value=(public, {}, None)):
-            self.assertIsNone(zalo_tools.guard_member_tool_call(tool_name="tool_call", args={"name": public}))
+        zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": True, "text": ""})
+        verdict = self.guard(
+            "tool_call", {"name": "skill_manage", "arguments": {"action": "write"}},
+        )
+        self.assertEqual(verdict["action"], "block")
 
-    def test_owner_turn_without_a_matching_message_keeps_core_tools_only_in_a_dm(self):
+    def test_unmatched_owner_message_never_restores_generic_core_tools(self):
         adapter = ZaloAdapterMediaContextTest.make_adapter(self)
         bound = []
 
@@ -2906,22 +2886,10 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             dm = adapter.toolsets_for_source(Source("dm"))
             group = adapter.toolsets_for_source(Source("group"))
 
-        self.assertIn(zalo_tools.TOOLSET_OWNER, dm)
-        self.assertFalse(bound[0]["is_owner"])
-        self.assertTrue(bound[0]["core_tools"])
-        # Trong nhóm, một lượt KHÔNG buộc được vào tin nhắn nào thì mất sạch
-        # công cụ, không phải rơi về ``zalo_public``. Bài kiểm thử này viết
-        # trước cửa 3 nên từng chờ ``zalo_public``; chạy thật lần đầu trong
-        # container ngày 18/09/2026 mới lộ ra nó chờ sai. adapter.py:1499 xếp
-        # "không buộc được lượt" và "không có trong danh sách khách" vào cùng
-        # một chỗ: ``[zalo_denied]``. Đó là phía an toàn của lỗi — kẻ mạo danh
-        # UID chủ nhân trong nhóm không được tặng mười sáu công cụ tác động — và
-        # chủ nhân thật không đi qua đường này vì tin của họ buộc được.
+        self.assertEqual(dm, [zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_PUBLIC])
         self.assertEqual(group, [zalo_tools.TOOLSET_DENIED])
-        self.assertFalse(bound[1]["core_tools"])
-
         zalo_tools.bind_turn(bound[0])
-        self.assertIsNone(self.guard("terminal"))
+        self.assertEqual(self.guard("terminal")["action"], "block")
         zalo_tools.bind_turn(bound[1])
         self.assertEqual(self.guard("terminal")["action"], "block")
 
