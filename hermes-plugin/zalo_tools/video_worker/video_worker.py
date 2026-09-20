@@ -18,7 +18,7 @@ from typing import Any, Mapping
 JOBS_ROOT = Path("/opt/data/video-jobs")
 RELAY_SOCKET_PATH = Path("/opt/data/video/vivibe-relay.sock")
 HYPERFRAMES_BIN = Path("/opt/hermes-video-worker/node_modules/.bin/hyperframes")
-HYPERFRAMES_HOME = Path("/opt/hermes-video-worker/.home")
+HYPERFRAMES_HOME = Path("/opt/data")
 FFPROBE_BIN = "ffprobe"
 MAX_TITLE_LENGTH = 120
 MAX_SCRIPT_LENGTH = 4_000
