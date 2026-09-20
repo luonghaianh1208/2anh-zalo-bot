@@ -45,25 +45,6 @@ class VideoWorkerTest(unittest.TestCase):
         with self.assertRaises(video_worker.VideoJobError):
             video_worker.validate_request(payload)
 
-    def test_secret_file_must_be_regular_nonsymlink_and_0600(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            secure = root / "secure"
-            secure.write_text("key\n", encoding="utf-8")
-            secure.chmod(0o600)
-            self.assertEqual(video_worker._read_secret(secure), "key")
-            insecure = root / "insecure"
-            insecure.write_text("key\n", encoding="utf-8")
-            insecure.chmod(0o640)
-            with self.assertRaises(video_worker.VideoJobError):
-                video_worker._read_secret(insecure)
-            target = root / "target"
-            target.write_text("key\n", encoding="utf-8")
-            target.chmod(0o600)
-            link = root / "link"
-            link.symlink_to(target)
-            with self.assertRaises(video_worker.VideoJobError):
-                video_worker._read_secret(link)
 
     def test_accepts_only_secure_precreated_job_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -86,38 +67,54 @@ class VideoWorkerTest(unittest.TestCase):
         self.assertIn('data-width="720" data-height="1280" data-fps="30"', composition)
         self.assertEqual(composition.count('data-start="0" data-duration="12"'), 3)
 
-    def test_lucylab_request_has_exact_method_input_and_bearer_auth(self):
-        response = Mock()
-        response.status = 200
-        response.read.return_value = b'{"result":{"projectExportId":"project"}}'
-        response.__enter__ = Mock(return_value=response)
-        response.__exit__ = Mock(return_value=False)
-        opener = Mock()
-        opener.open.return_value = response
-        with patch.object(video_worker, "build_opener", return_value=opener):
-            result = video_worker._rpc(
-                "ttsLongText", {"text": "Narration", "userVoiceId": "voice", "speed": 1}, "key", float("inf")
-            )
-        self.assertEqual(result, {"projectExportId": "project"})
-        request = opener.open.call_args.args[0]
-        self.assertEqual(request.full_url, video_worker.LUCYLAB_ENDPOINT)
-        self.assertEqual(request.get_header("Authorization"), "Bearer key")
-        self.assertEqual(request.get_header("User-agent"), "curl/8.0")
-        self.assertEqual(json.loads(request.data), {
-            "method": "ttsLongText",
-            "input": {"text": "Narration", "userVoiceId": "voice", "speed": 1},
-        })
+    def test_relay_client_requires_exact_safe_responses(self):
+        deadline = float("inf")
+        with patch.object(video_worker, "_relay", return_value={"ok": True, "project_export_id": "export"}):
+            self.assertEqual(video_worker._submit_audio(self.payload["job_id"], "Narration", deadline), "export")
+        with patch.object(video_worker, "_relay", return_value={"ok": True, "state": "completed", "progress": 100, "ready": True}):
+            self.assertIsNone(video_worker._wait_for_audio(self.payload["job_id"], "export", deadline))
+        with patch.object(video_worker, "_relay", return_value={"ok": True}):
+            self.assertEqual(video_worker._download_audio(self.payload["job_id"], "export", 0, deadline).name, "chunk-0.mp3")
+        with patch.object(video_worker, "_relay", return_value={"ok": True, "url": "https://provider.test/audio"}):
+            with self.assertRaises(video_worker.VideoJobError):
+                video_worker._download_audio(self.payload["job_id"], "export", 0, deadline)
 
-    def test_poll_rejects_provider_error_and_non_https_result_urls(self):
-        with patch.object(video_worker, "_rpc", return_value={"jobId": "job", "state": "completed", "progress": 100, "result": "http://audio.test/x"}):
-            with self.assertRaises(video_worker.VideoJobError):
-                video_worker._wait_for_audio("project", "key", float("inf"))
-        with patch.object(video_worker, "_rpc", return_value={"jobId": "job", "state": "failed", "progress": 0, "result": "https://audio.test/x"}):
-            with self.assertRaises(video_worker.VideoJobError):
-                video_worker._wait_for_audio("project", "key", float("inf"))
-        with patch.object(video_worker.socket, "getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]):
-            with self.assertRaises(video_worker.VideoJobError):
-                video_worker._audio_url("https://audio.test/x")
+    def test_submit_rejects_malformed_relay_export_ids(self):
+        deadline = float("inf")
+        for export_id in (None, "", "has space", "has\twhitespace", "has\x7fcontrol", "x" * 513, "é" * 257):
+            with self.subTest(export_id=repr(export_id)):
+                with patch.object(video_worker, "_relay", return_value={"ok": True, "project_export_id": export_id}):
+                    with self.assertRaises(video_worker.VideoJobError):
+                        video_worker._submit_audio(self.payload["job_id"], "Narration", deadline)
+
+    def test_worker_uses_bounded_relay_sequence_without_provider_or_secret_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "jobs"
+            root.mkdir(mode=0o700)
+            calls = []
+
+            def relay_call(request, deadline):
+                self.assertLessEqual(deadline - video_worker.time.monotonic(), video_worker.WORKER_DEADLINE_SECONDS)
+                calls.append(request["operation"])
+                if request["operation"] == "submit":
+                    return {"ok": True, "project_export_id": "export"}
+                if request["operation"] == "poll":
+                    return {"ok": True, "state": "completed", "progress": 100, "ready": True}
+                (root / self.payload["job_id"] / "chunk-0.mp3").write_bytes(b"mp3")
+                return {"ok": True}
+
+            with patch.object(video_worker, "JOBS_ROOT", root), \
+                    patch.object(video_worker, "_relay", side_effect=relay_call), \
+                    patch.object(video_worker, "_validate_audio"), \
+                    patch.object(video_worker, "_combine_audio", return_value=root / self.payload["job_id"] / "narration.mp3"), \
+                    patch.object(video_worker, "_write_composition"), \
+                    patch.object(video_worker, "_render", return_value=root / self.payload["job_id"] / "video.mp4"), \
+                    patch.object(video_worker, "_validate_video"):
+                result = video_worker.run_job(self.payload)
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(calls, ["submit", "poll", "download"])
+        self.assertFalse(hasattr(video_worker, "API_KEY_PATH"))
+        self.assertFalse(hasattr(video_worker, "VOICE_ID_PATH"))
 
     def test_atomic_status_never_contains_secret_or_job_directory(self):
         with tempfile.TemporaryDirectory() as temporary:

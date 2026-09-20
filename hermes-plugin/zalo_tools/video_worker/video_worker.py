@@ -1,31 +1,22 @@
 #!/usr/bin/env python3
-"""Owner-scoped LucyLab narration and HyperFrames video worker."""
+"""Owner-scoped host-relayed narration and HyperFrames video worker."""
 
 from __future__ import annotations
 
 import html
-import http.client
-import ipaddress
 import json
 import os
 import re
 import socket
-import ssl
 import stat
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 JOBS_ROOT = Path("/opt/data/video-jobs")
-API_KEY_PATH = Path("/opt/data/video/vivibe-api-key")
-VOICE_ID_PATH = Path("/opt/data/video/vivibe-voice-id")
-LUCYLAB_ENDPOINT = "https://api.lucylab.io/json-rpc"
+RELAY_SOCKET_PATH = Path("/opt/data/video/vivibe-relay.sock")
 HYPERFRAMES_BIN = Path("/opt/hermes-video-worker/node_modules/.bin/hyperframes")
 FFPROBE_BIN = "ffprobe"
 MAX_TITLE_LENGTH = 120
@@ -40,6 +31,17 @@ MAX_AUDIO_DURATION_SECONDS = 62
 UNSAFE_TEXT = re.compile(r"[\\/$`;&|<>{}\[\]*()]")
 JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 URL_IN_TEXT = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)
+MAX_PROJECT_EXPORT_ID_LENGTH = 512
+
+
+def _validate_project_export_id(value: Any) -> str:
+    if (not isinstance(value, str) or not 1 <= len(value) <= MAX_PROJECT_EXPORT_ID_LENGTH
+            or not value.isprintable() or any(ord(character) <= 32 for character in value)
+            or len(value.encode("utf-8")) > MAX_PROJECT_EXPORT_ID_LENGTH):
+        raise _fail()
+    return value
+
+
 ASPECTS = {
     "9:16": (720, 1280),
     "1:1": (1080, 1080),
@@ -50,18 +52,6 @@ ASPECTS = {
 class VideoJobError(Exception):
     """Expected job failure with no sensitive detail."""
 
-
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
-        return None
-
-
-@dataclass(frozen=True)
-class AudioTarget:
-    hostname: str
-    peer_ip: str
-    port: int
-    request_target: str
 
 
 def _remaining(deadline: float) -> float:
@@ -79,31 +69,6 @@ def _fail() -> VideoJobError:
     return VideoJobError("video generation failed")
 
 
-def _read_secret(path: Path) -> str:
-    """Read exactly one regular, 0600, non-symlink secret file."""
-    try:
-        initial = path.lstat()
-        if not stat.S_ISREG(initial.st_mode) or stat.S_ISLNK(initial.st_mode):
-            raise _fail()
-        if stat.S_IMODE(initial.st_mode) != 0o600:
-            raise _fail()
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags)
-        try:
-            opened = os.fstat(descriptor)
-            if not stat.S_ISREG(opened.st_mode) or stat.S_IMODE(opened.st_mode) != 0o600:
-                raise _fail()
-            with os.fdopen(descriptor, "r", encoding="utf-8") as secret_file:
-                descriptor = -1
-                value = secret_file.read().strip()
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-        if not value:
-            raise _fail()
-        return value
-    except (OSError, UnicodeError):
-        raise _fail() from None
 
 
 def _validate_text(value: Any, *, maximum: int) -> str:
@@ -157,7 +122,8 @@ def _create_job_directory(job_id: str) -> Path:
     try:
         JOBS_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
         root_stat = JOBS_ROOT.lstat()
-        if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+        if (stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode)
+                or stat.S_IMODE(root_stat.st_mode) != 0o700):
             raise _fail()
         directory = _job_directory(job_id)
         try:
@@ -228,112 +194,86 @@ def chunk_narration(script: str) -> list[str]:
     return chunks
 
 
-def _rpc(method: str, payload: Mapping[str, Any], api_key: str, deadline: float) -> Mapping[str, Any]:
-    body = json.dumps({"method": method, "input": dict(payload)}, separators=(",", ":")).encode("utf-8")
-    request = Request(
-        LUCYLAB_ENDPOINT,
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "curl/8.0",
-        },
-    )
+def _safe_relay_socket() -> None:
     try:
-        with build_opener(_NoRedirect()).open(request, timeout=_request_timeout(deadline)) as response:
-            if response.status != 200:
-                raise _fail()
-            decoded = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, OSError, UnicodeError, ValueError):
+        entry = RELAY_SOCKET_PATH.lstat()
+    except OSError:
         raise _fail() from None
-    if not isinstance(decoded, Mapping) or not isinstance(decoded.get("result"), Mapping):
+    if stat.S_ISLNK(entry.st_mode) or not stat.S_ISSOCK(entry.st_mode) or stat.S_IMODE(entry.st_mode) != 0o600:
         raise _fail()
-    return decoded["result"]
 
 
-def _audio_url(result: Any) -> AudioTarget:
-    candidate = result.get("url") or result.get("audioUrl") if isinstance(result, Mapping) else result
-    if not isinstance(candidate, str):
-        raise _fail()
-    parsed = urlsplit(candidate)
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-            or parsed.port not in {None, 443}):
-        raise _fail()
+def _relay(request: Mapping[str, Any], deadline: float) -> Mapping[str, Any]:
     try:
-        addresses = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
-        peer_ips = [item[4][0] for item in addresses]
-        peer_ip = next(ip for ip in peer_ips if ipaddress.ip_address(ip).is_global)
-    except (OSError, StopIteration, ValueError):
-        raise _fail() from None
-    if any(not ipaddress.ip_address(ip).is_global for ip in peer_ips):
-        raise _fail()
-    request_target = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
-    return AudioTarget(parsed.hostname, peer_ip, 443, request_target)
-
-
-class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, target: AudioTarget, timeout: float):
-        super().__init__(target.hostname, target.port, timeout=timeout, context=ssl.create_default_context())
-        self._target = target
-
-    def connect(self) -> None:
-        raw = socket.create_connection((self._target.peer_ip, self._target.port), self.timeout)
-        self.sock = self._context.wrap_socket(raw, server_hostname=self._target.hostname)
-
-
-def _wait_for_audio(export_id: str, api_key: str, deadline: float) -> AudioTarget:
-    for _ in range(POLL_ATTEMPTS):
-        result = _rpc("getExportStatus", {"projectExportId": export_id}, api_key, deadline)
-        if not isinstance(result.get("jobId"), str) or not result["jobId"]:
+        encoded = json.dumps(dict(request), separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
+        if len(encoded) > 16 * 1024:
             raise _fail()
+        _safe_relay_socket()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(_request_timeout(deadline))
+            connection.connect(str(RELAY_SOCKET_PATH))
+            connection.sendall(encoded)
+            response = bytearray()
+            while len(response) <= 16 * 1024:
+                part = connection.recv(min(4096, 16 * 1024 + 1 - len(response)))
+                if not part:
+                    break
+                response.extend(part)
+                if b"\n" in part:
+                    break
+        if (not response or len(response) > 16 * 1024 or response.count(b"\n") != 1
+                or not response.endswith(b"\n")):
+            raise _fail()
+        decoded = json.loads(response[:-1].decode("utf-8"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        raise _fail() from None
+    if not isinstance(decoded, Mapping) or decoded.get("ok") is not True:
+        raise _fail()
+    return decoded
+
+
+def _submit_audio(job_id: str, text: str, deadline: float) -> str:
+    result = _relay({"version": 1, "operation": "submit", "job_id": job_id, "text": text}, deadline)
+    export_id = result.get("project_export_id")
+    if set(result) != {"ok", "project_export_id"}:
+        raise _fail()
+    return _validate_project_export_id(export_id)
+
+
+def _wait_for_audio(job_id: str, export_id: str, deadline: float) -> None:
+    for _ in range(POLL_ATTEMPTS):
+        result = _relay(
+            {"version": 1, "operation": "poll", "job_id": job_id, "project_export_id": export_id}, deadline,
+        )
         state = result.get("state")
         progress = result.get("progress")
-        if (not isinstance(state, str) or isinstance(progress, bool)
-                or not isinstance(progress, (int, float)) or not 0 <= progress <= 100):
+        ready = result.get("ready")
+        if (set(result) != {"ok", "state", "progress", "ready"} or not isinstance(state, str)
+                or isinstance(progress, bool) or not isinstance(progress, int) or not 0 <= progress <= 100
+                or not isinstance(ready, bool)):
             raise _fail()
-        if state.lower() == "completed":
-            return _audio_url(result.get("result"))
+        if ready:
+            return
         if state.lower() in {"failed", "cancelled", "canceled", "error"}:
             raise _fail()
         time.sleep(min(POLL_INTERVAL_SECONDS, _remaining(deadline)))
     raise _fail()
 
 
-def _download_audio(target: AudioTarget, destination: Path, deadline: float) -> None:
-    try:
-        connection = _PinnedHTTPSConnection(target, _request_timeout(deadline))
-        connection.request("GET", target.request_target, headers={"Host": target.hostname, "Accept": "audio/*"})
-        response = connection.getresponse()
-        if response.status != 200:
-            raise _fail()
-        content_length = response.getheader("Content-Length")
-        if content_length is not None and (not content_length.isdigit() or int(content_length) > MAX_AUDIO_BYTES):
-            raise _fail()
-        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(descriptor, "wb") as output:
-                descriptor = -1
-                total = 0
-                while True:
-                    _remaining(deadline)
-                    chunk = response.read(64 * 1024)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > MAX_AUDIO_BYTES:
-                        raise _fail()
-                    output.write(chunk)
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-            connection.close()
-    except (OSError, http.client.HTTPException):
-        destination.unlink(missing_ok=True)
-        raise _fail() from None
-    except VideoJobError:
-        destination.unlink(missing_ok=True)
-        raise
+def _download_audio(job_id: str, export_id: str, chunk_index: int, deadline: float) -> Path:
+    result = _relay(
+        {
+            "version": 1,
+            "operation": "download",
+            "job_id": job_id,
+            "project_export_id": export_id,
+            "chunk_index": chunk_index,
+        },
+        deadline,
+    )
+    if set(result) != {"ok"}:
+        raise _fail()
+    return _job_directory(job_id) / f"chunk-{chunk_index}.mp3"
 
 
 def _validate_audio(path: Path, deadline: float) -> None:
@@ -469,21 +409,12 @@ def run_job(raw: Any) -> dict[str, Any]:
     deadline = time.monotonic() + WORKER_DEADLINE_SECONDS
     try:
         _write_status(directory, job, "running", 5)
-        api_key = _read_secret(API_KEY_PATH)
-        voice_id = _read_secret(VOICE_ID_PATH)
         chunks = chunk_narration(job["script"])
-        export_ids: list[str] = []
-        for chunk in chunks:
-            result = _rpc("ttsLongText", {"text": chunk, "userVoiceId": voice_id, "speed": 1}, api_key, deadline)
-            export_id = result.get("projectExportId")
-            if not isinstance(export_id, str) or not export_id:
-                raise _fail()
-            export_ids.append(export_id)
+        export_ids = [_submit_audio(job["job_id"], chunk, deadline) for chunk in chunks]
         _write_status(directory, job, "running", 45)
         for index, export_id in enumerate(export_ids):
-            audio_target = _wait_for_audio(export_id, api_key, deadline)
-            audio = directory / f"chunk-{index}.mp3"
-            _download_audio(audio_target, audio, deadline)
+            _wait_for_audio(job["job_id"], export_id, deadline)
+            audio = _download_audio(job["job_id"], export_id, index, deadline)
             _validate_audio(audio, deadline)
         _combine_audio(directory, len(export_ids), deadline)
         _write_composition(directory, job)
