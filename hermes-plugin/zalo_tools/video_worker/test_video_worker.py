@@ -67,6 +67,33 @@ class VideoWorkerTest(unittest.TestCase):
         self.assertIn('data-width="720" data-height="1280" data-fps="30"', composition)
         self.assertEqual(composition.count('data-start="0" data-duration="12"'), 3)
 
+    def test_combine_transcodes_provider_audio_to_canonical_mp3(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "chunk-0.mp3").write_bytes(b"wav-content")
+
+            def fake_run(command, **_kwargs):
+                (directory / "narration.mp3").write_bytes(b"mp3-content")
+                return Mock()
+
+            with patch.object(video_worker.subprocess, "run", side_effect=fake_run) as run:
+                narration = video_worker._combine_audio(directory, 1, float("inf"))
+        command = run.call_args.args[0]
+        self.assertEqual(narration.name, "narration.mp3")
+        self.assertEqual(command[:7], ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i"])
+        self.assertEqual(command[-3:], ["-c:a", "libmp3lame", "narration.mp3"])
+
+    def test_validate_audio_accepts_provider_wav_before_normalization(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            audio = Path(temporary) / "chunk-0.mp3"
+            audio.write_bytes(b"wav-content")
+            completed = Mock(stdout=json.dumps({
+                "streams": [{"codec_type": "audio", "codec_name": "pcm_s16le"}],
+                "format": {"format_name": "wav", "duration": "3.6"},
+            }))
+            with patch.object(video_worker.subprocess, "run", return_value=completed):
+                video_worker._validate_audio(audio, float("inf"))
+
     def test_relay_client_requires_exact_safe_responses(self):
         deadline = float("inf")
         with patch.object(video_worker, "_relay", return_value={"ok": True, "project_export_id": "export"}):

@@ -293,8 +293,8 @@ def _validate_audio(path: Path, deadline: float) -> None:
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, json.JSONDecodeError):
         raise _fail() from None
     if (not isinstance(streams, list) or len(streams) != 1 or not isinstance(streams[0], Mapping)
-            or streams[0].get("codec_type") != "audio" or streams[0].get("codec_name") not in {"mp3", "aac", "opus"}
-            or not any(name in format_name for name in ("mp3", "mpeg", "aac", "ogg", "opus"))
+            or streams[0].get("codec_type") != "audio" or streams[0].get("codec_name") not in {"mp3", "aac", "opus", "pcm_s16le"}
+            or not any(name in format_name for name in ("mp3", "mpeg", "aac", "ogg", "opus", "wav", "wave"))
             or not 0 < duration <= MAX_AUDIO_DURATION_SECONDS):
         raise _fail()
 
@@ -302,14 +302,6 @@ def _validate_audio(path: Path, deadline: float) -> None:
 def _combine_audio(directory: Path, chunk_count: int, deadline: float) -> Path:
     if chunk_count < 1:
         raise _fail()
-    if chunk_count == 1:
-        source = directory / "chunk-0.mp3"
-        destination = directory / "narration.mp3"
-        try:
-            os.replace(source, destination)
-        except OSError:
-            raise _fail() from None
-        return destination
     manifest = directory / "audio-concat.txt"
     try:
         descriptor = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -317,7 +309,7 @@ def _combine_audio(directory: Path, chunk_count: int, deadline: float) -> Path:
             for index in range(chunk_count):
                 output.write(f"file 'chunk-{index}.mp3'\n")
         subprocess.run(
-            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "audio-concat.txt", "-c", "copy", "narration.mp3"],
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "audio-concat.txt", "-c:a", "libmp3lame", "narration.mp3"],
             cwd=directory, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=True, timeout=min(60, _remaining(deadline)),
         )
