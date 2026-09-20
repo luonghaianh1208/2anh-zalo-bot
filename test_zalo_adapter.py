@@ -47,6 +47,9 @@ requires_file_maker_deps = unittest.skipIf(
 class DummyZaloTools:
     def set_turn_context(self, **kwargs):
         self.context = kwargs
+    def bind_turn(self, turn):
+        self.turn = turn
+
 
 
 class ZaloResolvedAllowlistTest(unittest.TestCase):
@@ -1768,6 +1771,8 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(stranger_tools, set())
                 self.assertTrue(adapter._may_greet(guest_uid))
                 self.assertFalse(adapter._may_greet(stranger_uid))
+
+
 
 
 class ZaloToolSchemaTest(unittest.TestCase):

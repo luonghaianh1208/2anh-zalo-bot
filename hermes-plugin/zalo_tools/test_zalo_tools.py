@@ -176,5 +176,96 @@ class ZaloCoreToolDenyTest(unittest.TestCase):
         })
         self.assertIsNone(zalo_tools.guard_member_tool_call(tool_name="zalo_grant_guest_group"))
         self.assertIsNone(zalo_tools.guard_member_tool_call(tool_name="zalo_revoke_guest_group"))
+
+
+class ZaloVideoToolTest(unittest.IsolatedAsyncioTestCase):
+    OWNER = "owner"
+    JOB_ID = "a" * 32
+
+    async def asyncSetUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name) / "video-jobs"
+        self.root.mkdir()
+        self.root_patch = patch.object(zalo_tools, "VIDEO_ROOT", self.root)
+        self.root_patch.start()
+        zalo_tools.VIDEO_TASKS.clear()
+        zalo_tools.VIDEO_DELIVERED.clear()
+
+    async def asyncTearDown(self):
+        zalo_tools.bind_turn(None)
+        zalo_tools.VIDEO_TASKS.clear()
+        zalo_tools.VIDEO_DELIVERED.clear()
+        self.root_patch.stop()
+        self.directory.cleanup()
+
+    def owner_dm(self, thread_id="owner-dm"):
+        zalo_tools.set_turn_context(
+            sender_uid=self.OWNER, thread_id=thread_id, is_group=False, is_owner=True,
+        )
+
+    def write_status(self, *, owner_uid=OWNER, thread_id="owner-dm", state="completed"):
+        directory = self.root / self.JOB_ID
+        directory.mkdir()
+        (directory / "status.json").write_text(json.dumps({
+            "job_id": self.JOB_ID,
+            "owner_uid": owner_uid,
+            "thread_id": thread_id,
+            "state": state,
+            "progress": 100,
+        }), encoding="utf-8")
+        return directory
+
+    async def test_create_video_rejects_non_owner_and_group_before_worker(self):
+        payload = {
+            "title": "Launch", "script": "Narration", "aspect_ratio": "9:16", "duration_seconds": 12,
+        }
+        for turn in (
+            {"sender_uid": "guest", "thread_id": "guest-dm", "is_group": False, "is_owner": False},
+            {"sender_uid": self.OWNER, "thread_id": "group", "is_group": True, "is_owner": True},
+        ):
+            with self.subTest(turn=turn), patch.object(zalo_tools.subprocess, "run") as run:
+                zalo_tools.set_turn_context(**turn)
+                result = json.loads(await zalo_tools.zalo_create_video(payload))
+                self.assertFalse(result["success"])
+                run.assert_not_called()
+
+    async def test_create_video_allows_only_one_active_job_per_owner(self):
+        self.owner_dm()
+        zalo_tools.VIDEO_TASKS["b" * 32] = {"owner_uid": self.OWNER, "task": object()}
+        payload = {
+            "title": "Launch", "script": "Narration", "aspect_ratio": "9:16", "duration_seconds": 12,
+        }
+        with patch.object(zalo_tools.subprocess, "run") as run:
+            result = json.loads(await zalo_tools.zalo_create_video(payload))
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "đã có video đang xử lý")
+        run.assert_not_called()
+
+    async def test_status_is_bound_to_originating_owner_and_thread(self):
+        self.write_status()
+        self.owner_dm("other-dm")
+        with patch.object(zalo_tools, "_invoke", new_callable=AsyncMock) as invoke:
+            result = json.loads(await zalo_tools.zalo_video_status({"job_id": self.JOB_ID}))
+        self.assertFalse(result["success"])
+        invoke.assert_not_awaited()
+
+    async def test_completed_status_sends_only_fixed_origin_video(self):
+        directory = self.write_status()
+        video = directory / "video.mp4"
+        video.write_bytes(b"mp4")
+        self.owner_dm()
+        with patch.object(
+            zalo_tools, "_invoke", new_callable=AsyncMock, return_value='{"success":true,"result":{}}',
+        ) as invoke:
+            result = json.loads(await zalo_tools.zalo_video_status({"job_id": self.JOB_ID}))
+        self.assertEqual(result, {
+            "success": True,
+            "result": {"job_id": self.JOB_ID, "state": "completed", "progress": 100, "delivery": "sent"},
+        })
+        invoke.assert_awaited_once_with("sendMessage", [
+            {"msg": "Video đã hoàn tất.", "attachments": [str(video.resolve())]}, "owner-dm", zalo_tools.THREAD_USER,
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()

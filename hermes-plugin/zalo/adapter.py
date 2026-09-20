@@ -1504,6 +1504,7 @@ class ZaloAdapter(BasePlatformAdapter):
         Hermes core capabilities stay on the SSH/terminal control plane; a
         pre-tool execution guard also denies them if a resolver regresses.
         """
+
         uid = str(getattr(source, "user_id", "") or "")
         owner = self._bind_turn_for_source(source, uid)
         if not owner and not self._is_guest(uid):
@@ -1516,6 +1517,8 @@ class ZaloAdapter(BasePlatformAdapter):
                      "chủ nhân" if owner else "người trong nhóm",
                      uid, chosen)
         return chosen
+
+
 
     def _bind_turn_for_source(self, source, uid: str) -> bool:
         """Gắn danh tính đúng của lượt này trước khi agent chạy.
