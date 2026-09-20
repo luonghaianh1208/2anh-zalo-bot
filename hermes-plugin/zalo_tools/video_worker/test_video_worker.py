@@ -171,7 +171,8 @@ class VideoWorkerTest(unittest.TestCase):
         self.assertEqual(render_command, [str(video_worker.HYPERFRAMES_BIN), "render"])
         self.assertEqual(output.name, "video.mp4")
         self.assertEqual(probe_command[-1], str(output))
-        self.assertEqual(run.call_args_list[0].kwargs["env"]["HOME"], str(video_worker.HYPERFRAMES_HOME))
+        self.assertEqual(run.call_args_list[0].kwargs["env"]["HOME"], video_worker.HYPERFRAMES_ENV["HOME"])
+        self.assertEqual(run.call_args_list[0].kwargs["env"]["HYPERFRAMES_BROWSER_PATH"], video_worker.HYPERFRAMES_ENV["HYPERFRAMES_BROWSER_PATH"])
 
 
 if __name__ == "__main__":
