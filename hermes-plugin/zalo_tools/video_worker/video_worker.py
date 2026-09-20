@@ -18,6 +18,7 @@ from typing import Any, Mapping
 JOBS_ROOT = Path("/opt/data/video-jobs")
 RELAY_SOCKET_PATH = Path("/opt/data/video/vivibe-relay.sock")
 HYPERFRAMES_BIN = Path("/opt/hermes-video-worker/node_modules/.bin/hyperframes")
+HYPERFRAMES_HOME = Path("/opt/hermes-video-worker/.home")
 FFPROBE_BIN = "ffprobe"
 MAX_TITLE_LENGTH = 120
 MAX_SCRIPT_LENGTH = 4_000
@@ -353,6 +354,7 @@ def _render(directory: Path, deadline: float) -> Path:
         subprocess.run(
             [str(HYPERFRAMES_BIN), "render"],
             cwd=directory,
+            env={**os.environ, "HOME": str(HYPERFRAMES_HOME)},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
