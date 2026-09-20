@@ -102,6 +102,7 @@ class VideoWorkerTest(unittest.TestCase):
         request = opener.open.call_args.args[0]
         self.assertEqual(request.full_url, video_worker.LUCYLAB_ENDPOINT)
         self.assertEqual(request.get_header("Authorization"), "Bearer key")
+        self.assertEqual(request.get_header("User-agent"), "curl/8.0")
         self.assertEqual(json.loads(request.data), {
             "method": "ttsLongText",
             "input": {"text": "Narration", "userVoiceId": "voice", "speed": 1},

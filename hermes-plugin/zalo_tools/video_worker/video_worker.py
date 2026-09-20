@@ -234,7 +234,11 @@ def _rpc(method: str, payload: Mapping[str, Any], api_key: str, deadline: float)
         LUCYLAB_ENDPOINT,
         data=body,
         method="POST",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "curl/8.0",
+        },
     )
     try:
         with build_opener(_NoRedirect()).open(request, timeout=_request_timeout(deadline)) as response:
