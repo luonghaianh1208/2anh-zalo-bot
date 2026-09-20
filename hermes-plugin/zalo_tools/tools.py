@@ -1935,11 +1935,12 @@ async def zalo_create_video(args: Dict[str, Any], **_kw) -> str:
     turn = _video_turn()
     if not turn:
         return _err("không thể xử lý yêu cầu video này")
-    if (set(args) != {"title", "script", "aspect_ratio", "duration_seconds"}
-            or args.get("aspect_ratio") not in {"9:16", "1:1", "16:9"}
-            or isinstance(args.get("duration_seconds"), bool)
-            or not isinstance(args.get("duration_seconds"), int)
-            or not 5 <= args["duration_seconds"] <= 60):
+    allowed = {"title", "script", "aspect_ratio", "duration_seconds"}
+    if (not {"title", "script"}.issubset(args) or set(args) - allowed
+            or args.get("aspect_ratio", "9:16") not in {"9:16", "1:1", "16:9"}
+            or isinstance(args.get("duration_seconds", 30), bool)
+            or not isinstance(args.get("duration_seconds", 30), int)
+            or not 5 <= args.get("duration_seconds", 30) <= 60):
         return _err("không thể xử lý yêu cầu video này")
     if any(not isinstance(args.get(key), str) or not args[key] or args[key] != args[key].strip()
            or len(args[key]) > maximum or re.search(r"(?:https?|file)://|[\\/;&|`$<>\[\]{}()]", args[key], re.I)
@@ -2950,14 +2951,14 @@ TOOLS = [
     ), zalo_forget_person, TOOLSET_OWNER),
     ("zalo_create_video", "🎬", _schema(
         "zalo_create_video",
-        "Tạo video trong DM chủ nhân.",
+        "Tạo video trong DM chủ nhân. Viết title và toàn bộ narration tiếng Việt; ratio mặc định 9:16, duration mặc định 30 giây.",
         {
             "title": {"type": "string", "maxLength": 120},
             "script": {"type": "string", "maxLength": 4000},
-            "aspect_ratio": {"type": "string", "enum": ["9:16", "1:1", "16:9"]},
-            "duration_seconds": {"type": "integer", "minimum": 5, "maximum": 60},
+            "aspect_ratio": {"type": "string", "enum": ["9:16", "1:1", "16:9"], "default": "9:16"},
+            "duration_seconds": {"type": "integer", "minimum": 5, "maximum": 60, "default": 30},
         },
-        ["title", "script", "aspect_ratio", "duration_seconds"],
+        ["title", "script"],
     ), zalo_create_video, TOOLSET_OWNER),
     ("zalo_video_status", "🎞️", _schema(
         "zalo_video_status",

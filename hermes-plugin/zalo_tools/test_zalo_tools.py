@@ -241,6 +241,16 @@ class ZaloVideoToolTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["error"], "đã có video đang xử lý")
         run.assert_not_called()
 
+    async def test_create_video_applies_safe_defaults(self):
+        self.owner_dm()
+        with patch.object(zalo_tools.subprocess, "run", return_value=None):
+            result = json.loads(await zalo_tools.zalo_create_video({
+                "title": "RTK", "script": "Narration tiếng Việt.",
+            }))
+            job = next(iter(zalo_tools.VIDEO_TASKS.values()))["task"]
+            await job
+        self.assertTrue(result["success"])
+        self.assertEqual(result["result"]["state"], "queued")
     async def test_status_is_bound_to_originating_owner_and_thread(self):
         self.write_status()
         self.owner_dm("other-dm")
