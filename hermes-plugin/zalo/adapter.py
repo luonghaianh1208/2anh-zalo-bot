@@ -50,6 +50,7 @@ earlier iteration of this integration.
 """
 
 import asyncio
+import logging
 import json
 import os
 import re
