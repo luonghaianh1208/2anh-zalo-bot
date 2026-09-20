@@ -1953,7 +1953,10 @@ async def zalo_create_video(args: Dict[str, Any], **_kw) -> str:
         "job_id": secrets.token_hex(16),
         "owner_uid": owner,
         "thread_id": str(turn["thread_id"]),
-        **args,
+        "title": args["title"],
+        "script": args["script"],
+        "aspect_ratio": args.get("aspect_ratio", "9:16"),
+        "duration_seconds": args.get("duration_seconds", 30),
     }
     task = asyncio.create_task(asyncio.to_thread(
         subprocess.run,
