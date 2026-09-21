@@ -167,15 +167,17 @@ class FakeCronJobs:
 
 
 class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
-    def make_adapter(self):
+    def make_adapter(self, extra=None):
+        config_extra = {
+            "bridge_url": "ws://127.0.0.1:9",
+            "reply_only_tagged": True,
+            "ack_gestures": False,
+        }
+        config_extra.update(extra or {})
         adapter = zalo_adapter.ZaloAdapter(
             PlatformConfig(
                 enabled=True,
-                extra={
-                    "bridge_url": "ws://127.0.0.1:9",
-                    "reply_only_tagged": True,
-                    "ack_gestures": False,
-                },
+                extra=config_extra,
             )
         )
         adapter._self_profile = {"user_id": "bot-uid", "display_name": "Lăng Tiêu"}
@@ -1117,6 +1119,26 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(turn["sender_uid"], owner_uid)
         self.assertEqual(turn["thread_id"], "group-1")
         self.assertFalse(turn["is_owner"])
+    def test_owner_direct_message_gets_declared_mcp_toolset_only(self):
+        adapter = self.make_adapter({"owner_dm_mcp_toolset": "mcp-atlassian"})
+        owner_uid = "1111111111111111111"
+
+        class Source:
+            def __init__(self, chat_type, message_id):
+                self.user_id = owner_uid
+                self.chat_id = f"{chat_type}-1"
+                self.chat_type = chat_type
+                self.message_id = message_id
+
+        adapter._turns["dm-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        adapter._turns["group-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        with patch.object(adapter, "_is_owner", return_value=True), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            dm_toolsets = adapter.toolsets_for_source(Source("dm", "dm-message"))
+            group_toolsets = adapter.toolsets_for_source(Source("group", "group-message"))
+
+        self.assertIn("mcp-atlassian", dm_toolsets)
+        self.assertNotIn("mcp-atlassian", group_toolsets)
 
     async def test_group_turn_text_drops_bot_mention_so_confirmation_can_match(self):
         adapter = self.make_adapter()
@@ -2813,7 +2835,7 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
                 self.assertEqual(verdict["action"], "block", name)
                 self.assertEqual(verdict["message"], "Hành động này không khả dụng qua Zalo.")
 
-    def test_member_turn_keeps_public_zalo_mcp_and_tool_search_bridge(self):
+    def test_member_turn_keeps_public_zalo_and_tool_search_bridge(self):
         self.bind_member()
         public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
         owner_only = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_OWNER)
@@ -2821,9 +2843,30 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
         self.assertIsNone(self.guard("tool_search"))
         self.assertEqual(self.guard(owner_only)["action"], "block")
 
+    def test_mcp_requires_owner_direct_message_even_through_tool_call(self):
         from tools.registry import registry
-        with patch.object(registry, "get_toolset_for_tool", return_value="mcp-rag"):
-            self.assertIsNone(self.guard("rag_search"))
+
+        with patch("tools.tool_search.resolve_underlying_call", return_value=("jira_search", {}, None)), \
+                patch.object(registry, "get_toolset_for_tool", return_value="mcp-atlassian"):
+            self.bind_member()
+            self.assertEqual(self.guard("tool_call", {"name": "jira_search"})["action"], "block")
+
+            zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                                  "is_group": True, "is_owner": True, "text": ""})
+            self.assertEqual(self.guard("tool_call", {"name": "jira_search"})["action"], "block")
+
+            zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": "dm-owner",
+                                  "is_group": False, "is_owner": True, "text": ""})
+            self.assertIsNone(self.guard("tool_call", {"name": "jira_search"}))
+    def test_mcp_registry_failure_fails_closed(self):
+        from tools.registry import registry
+
+        zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": True, "text": ""})
+        with patch.object(registry, "get_toolset_for_tool", side_effect=RuntimeError("registry failed")), \
+                patch("tools.tool_search.resolve_underlying_call", return_value=("jira_search", {}, None)):
+            self.assertEqual(self.guard("jira_search")["action"], "block")
+            self.assertEqual(self.guard("tool_call", {"name": "jira_search"})["action"], "block")
 
     def test_non_zalo_context_is_untouched_and_owner_keeps_narrow_group_lifecycle(self):
         self.assertIsNone(self.guard("terminal"))

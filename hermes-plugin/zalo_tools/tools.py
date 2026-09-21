@@ -3215,13 +3215,16 @@ def _member_may_call(name: str, args: Any) -> bool:
     if name == "tool_call":
         underlying = _resolved_tool_name(name, args)
         return bool(underlying) and _member_may_call(underlying, {})
+    return False
+
+
+def _is_mcp_tool(name: str) -> Optional[bool]:
     try:
         from tools.registry import registry
 
         return str(registry.get_toolset_for_tool(name) or "").startswith("mcp-")
     except Exception:
-        return False
-
+        return None
 
 def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Optional[Dict[str, str]]:
     """Execution boundary for every Zalo turn; non-Zalo callers are untouched."""
@@ -3236,6 +3239,22 @@ def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Opti
             "action": "block",
             "message": "Hành động này không khả dụng qua Zalo.",
         }
+    mcp_tool = _is_mcp_tool(resolved)
+    if mcp_tool is None:
+        logger.warning("[zalo] cannot classify tool while enforcing MCP boundary: %s", resolved)
+        return {
+            "action": "block",
+            "message": "Hành động này không khả dụng qua Zalo.",
+        }
+    if mcp_tool:
+        if turn.get("is_owner") and not turn.get("is_group") and not _outsider_spoke_after(turn):
+            return None
+        logger.warning("[zalo] MCP tool denied outside owner direct message: %s", resolved)
+        return {
+            "action": "block",
+            "message": "MCP chỉ khả dụng trong tin nhắn riêng của chủ nhân.",
+        }
+
     if (turn.get("is_owner") or turn.get("core_tools")) and not _outsider_spoke_after(turn):
         return None
     if _member_may_call(name, args):
