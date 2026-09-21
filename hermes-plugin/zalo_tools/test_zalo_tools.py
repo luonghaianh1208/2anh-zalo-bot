@@ -156,19 +156,18 @@ class ZaloCoreToolDenyTest(unittest.TestCase):
                         "message": "Hành động này không khả dụng qua Zalo.",
                     })
 
-    def test_every_zalo_role_denies_unresolved_tool_call(self):
-        for turn in (
-            {"sender_uid": "guest", "thread_id": "group", "is_group": True, "is_owner": False},
-            {"sender_uid": "owner", "thread_id": "dm", "is_group": False, "is_owner": True},
-        ):
-            with self.subTest(role=turn["sender_uid"]), \
-                    patch.dict(sys.modules, {"tools.tool_search": None}):
-                zalo_tools.bind_turn(turn)
-                verdict = zalo_tools.guard_member_tool_call(tool_name="tool_call", args={})
-                self.assertEqual(verdict, {
-                    "action": "block",
-                    "message": "Hành động này không khả dụng qua Zalo.",
-                })
+    def test_only_owner_dm_delegates_unresolved_tool_call(self):
+        guest_turn = {"sender_uid": "guest", "thread_id": "group", "is_group": True, "is_owner": False}
+        owner_dm_turn = {"sender_uid": "owner", "thread_id": "dm", "is_group": False, "is_owner": True}
+        with patch.dict(sys.modules, {"tools.tool_search": None}):
+            zalo_tools.bind_turn(guest_turn)
+            self.assertEqual(zalo_tools.guard_member_tool_call(tool_name="tool_call", args={}), {
+                "action": "block",
+                "message": "Hành động này không khả dụng qua Zalo.",
+            })
+
+            zalo_tools.bind_turn(owner_dm_turn)
+            self.assertIsNone(zalo_tools.guard_member_tool_call(tool_name="tool_call", args={}))
 
     def test_owner_retains_narrow_guest_group_lifecycle_tools(self):
         zalo_tools.bind_turn({
