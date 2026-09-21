@@ -3233,7 +3233,19 @@ def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Opti
         return None
     name = str(tool_name or "")
     resolved = _resolved_tool_name(name, args)
-    if resolved is None or resolved in ZALO_DENIED_CORE_TOOLS:
+    owner_dm = bool(turn.get("is_owner") and not turn.get("is_group") and not _outsider_spoke_after(turn))
+    if resolved is None:
+        # The progressive tool bridge validates its own payload before dispatch. Let
+        # an owner DM reach that validator so malformed calls get its actionable
+        # schema error; non-owner and group turns remain fail-closed.
+        if name == "tool_call" and owner_dm:
+            return None
+        logger.warning("[zalo] generic core action denied")
+        return {
+            "action": "block",
+            "message": "Hành động này không khả dụng qua Zalo.",
+        }
+    if resolved in ZALO_DENIED_CORE_TOOLS:
         logger.warning("[zalo] generic core action denied")
         return {
             "action": "block",
@@ -3247,15 +3259,14 @@ def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Opti
             "message": "Hành động này không khả dụng qua Zalo.",
         }
     if mcp_tool:
-        if turn.get("is_owner") and not turn.get("is_group") and not _outsider_spoke_after(turn):
+        if owner_dm:
             return None
         logger.warning("[zalo] MCP tool denied outside owner direct message: %s", resolved)
         return {
             "action": "block",
             "message": "MCP chỉ khả dụng trong tin nhắn riêng của chủ nhân.",
         }
-
-    if (turn.get("is_owner") or turn.get("core_tools")) and not _outsider_spoke_after(turn):
+    if owner_dm:
         return None
     if _member_may_call(name, args):
         return None

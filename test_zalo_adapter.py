@@ -2858,6 +2858,18 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": "dm-owner",
                                   "is_group": False, "is_owner": True, "text": ""})
             self.assertIsNone(self.guard("tool_call", {"name": "jira_search"}))
+    def test_owner_dm_delegates_unresolved_tool_call_to_safe_bridge(self):
+        with patch("tools.tool_search.resolve_underlying_call", return_value=(None, {}, "invalid bridge payload")):
+            self.bind_member()
+            self.assertEqual(self.guard("tool_call", {})["action"], "block")
+
+            zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                                  "is_group": True, "is_owner": True, "text": ""})
+            self.assertEqual(self.guard("tool_call", {})["action"], "block")
+
+            zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": "dm-owner",
+                                  "is_group": False, "is_owner": True, "text": ""})
+            self.assertIsNone(self.guard("tool_call", {}))
     def test_mcp_registry_failure_fails_closed(self):
         from tools.registry import registry
 
