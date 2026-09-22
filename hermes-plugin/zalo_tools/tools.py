@@ -1637,10 +1637,16 @@ async def zalo_web_read(args: Dict[str, Any], **_kw) -> str:
 #    không có chính sách retention. Những gì người dùng gõ vào đây sẽ rời đi.
 
 LAYA_STATE_MAX = 4000
-LAYA_QUESTION_MAX = 500
-LAYA_QUESTIONS_MAX = 20
-LAYA_TIMEOUT_SECONDS = 30
+LAYA_INSTRUCTIONS_MAX = 500
+LAYA_CRITERION_MAX = 200
+LAYA_CRITERIA_MAX = 20
+LAYA_QUESTIONS_MAX = 5
+LAYA_TIMEOUT_SECONDS = 60
 LAYA_MODELS = ("english", "multilingual", "typed-decisions")
+# Hình dạng duy nhất đã thấy Laya trả 200. Giữ hẹp có chủ ý: mọi biến thể khác
+# thử qua gateway đều trả 500, nên danh sách này là thứ đo được, không phải thứ
+# suy ra từ tài liệu.
+LAYA_QUESTION_TYPES = ("choice",)
 
 
 def _laya_base() -> str:
@@ -1669,6 +1675,40 @@ def _laya_call(base: str, payload: Dict[str, Any]) -> tuple[int, Any]:
         return status, None
 
 
+def _laya_question(name: str, spec: Any) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Kiểm một câu hỏi, trả (đã chuẩn hoá, lỗi)."""
+    if not isinstance(spec, dict):
+        return None, f"`{name}` phải là một đối tượng có `instructions` và `criteria`"
+
+    kind = str(spec.get("type") or "choice").strip()
+    if kind not in LAYA_QUESTION_TYPES:
+        return None, f"`{name}.type` phải là: {', '.join(LAYA_QUESTION_TYPES)}"
+
+    instructions = str(spec.get("instructions") or "").strip()
+    if not instructions:
+        return None, f"`{name}` cần `instructions` — câu hỏi đặt cho Laya"
+    if len(instructions) > LAYA_INSTRUCTIONS_MAX:
+        return None, f"`{name}.instructions` dài quá {LAYA_INSTRUCTIONS_MAX} ký tự"
+
+    criteria = spec.get("criteria")
+    if not isinstance(criteria, dict) or len(criteria) < 2:
+        return None, f"`{name}` cần `criteria` với ít nhất hai lựa chọn"
+    if len(criteria) > LAYA_CRITERIA_MAX:
+        return None, f"`{name}.criteria` tối đa {LAYA_CRITERIA_MAX} lựa chọn"
+
+    cleaned: Dict[str, str] = {}
+    for label, meaning in criteria.items():
+        key = str(label).strip()
+        text = str(meaning).strip() if not isinstance(meaning, (dict, list)) else ""
+        if not key or not text:
+            return None, f"mỗi lựa chọn trong `{name}.criteria` cần một nhãn và một mô tả"
+        if len(text) > LAYA_CRITERION_MAX:
+            return None, f"mô tả lựa chọn trong `{name}` dài tối đa {LAYA_CRITERION_MAX} ký tự"
+        cleaned[key] = text
+
+    return {"type": kind, "instructions": instructions, "criteria": cleaned}, None
+
+
 async def zalo_laya_route(args: Dict[str, Any], **_kw) -> str:
     base = _laya_base()
     if not base:
@@ -1684,20 +1724,22 @@ async def zalo_laya_route(args: Dict[str, Any], **_kw) -> str:
 
     questions = args.get("questions")
     if not isinstance(questions, dict) or not questions:
-        return _err('cần `questions` — ví dụ {"chu_de": "câu hỏi này thuộc nhóm nào?"}')
+        return _err("cần `questions` — mỗi câu hỏi có `instructions` và `criteria`")
     if len(questions) > LAYA_QUESTIONS_MAX:
         return _err(f"tối đa {LAYA_QUESTIONS_MAX} câu hỏi mỗi lần")
-    cleaned: Dict[str, Any] = {}
-    for key, value in questions.items():
-        name = str(key).strip()
-        text = str(value).strip() if not isinstance(value, (list, dict)) else ""
-        if not name or not text:
-            return _err("mỗi câu hỏi cần một tên và một nội dung dạng chữ")
-        if len(text) > LAYA_QUESTION_MAX:
-            return _err(f"mỗi câu hỏi dài tối đa {LAYA_QUESTION_MAX} ký tự")
-        cleaned[name] = text
 
-    payload: Dict[str, Any] = {"state": state, "questions": cleaned}
+    cleaned: Dict[str, Any] = {}
+    for key, spec in questions.items():
+        name = str(key).strip()
+        if not name:
+            return _err("mỗi câu hỏi cần một tên")
+        question, problem = _laya_question(name, spec)
+        if problem:
+            return _err(problem)
+        cleaned[name] = question
+
+    # `state` đi dưới dạng object. Một chuỗi trần trả 500 — đo được, không đoán.
+    payload: Dict[str, Any] = {"state": {"body": state}, "questions": cleaned}
     model = str(args.get("model") or "").strip()
     if model:
         if model not in LAYA_MODELS:
@@ -1715,10 +1757,15 @@ async def zalo_laya_route(args: Dict[str, Any], **_kw) -> str:
         logger.warning("[laya] gọi /predict hỏng: %s", type(exc).__name__)
         return _err("không gọi được Laya lúc này")
 
-    if status != 200 or body is None:
+    if status != 200 or not isinstance(body, dict):
         logger.warning("[laya] /predict trả HTTP %s", status)
         return _err(f"Laya từ chối yêu cầu (HTTP {status})")
-    return _ok({"ket_qua": body})
+    # Trả phần người đọc cần, không trả cả đường dẫn kho model trong `routing`.
+    return _ok({
+        "tra_loi": body.get("answers"),
+        "router": (body.get("routing") or {}).get("model"),
+        "ly_do_chon_router": (body.get("routing") or {}).get("reason"),
+    })
 
 
 # =====================================================================
@@ -3046,17 +3093,31 @@ TOOLS = [
     # --- Nhóm 8b: Laya, bộ định tuyến ý định nội bộ ---
     ("zalo_laya_route", "🧭", _schema(
         "zalo_laya_route",
-        "Hỏi Laya — bộ phân loại ý định chạy nội bộ — xem một đoạn ngữ cảnh "
-        "thuộc nhóm nào. Không sinh văn bản: mỗi câu hỏi nhận lại một lựa chọn "
-        "kèm router đã quyết. Dùng để phân loại, định tuyến, gắn nhãn.",
+        "Hỏi Laya — bộ phân loại chạy nội bộ — xem một đoạn ngữ cảnh rơi vào "
+        "lựa chọn nào. Không sinh văn bản: mỗi câu hỏi nhận lại một lựa chọn "
+        "kèm xác suất và độ tin cậy. Dùng để phân loại, định tuyến, gắn nhãn.",
         {
             "state": {"type": "string", "description":
                       "Đoạn ngữ cảnh Laya đọc, tối đa 4000 ký tự."},
-            "questions": {"type": "object", "description":
-                          'Các câu hỏi, dạng {"tên": "nội dung câu hỏi"}. '
-                          "Tối đa 20 câu, mỗi câu 500 ký tự."},
+            "questions": {
+                "type": "object",
+                "description":
+                    "Tối đa 5 câu hỏi. Mỗi câu là một object: `instructions` là "
+                    "câu hỏi, `criteria` là các lựa chọn dạng {nhãn: mô tả}, ít "
+                    "nhất hai lựa chọn.",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "enum": list(LAYA_QUESTION_TYPES)},
+                        "instructions": {"type": "string"},
+                        "criteria": {"type": "object",
+                                     "additionalProperties": {"type": "string"}},
+                    },
+                    "required": ["instructions", "criteria"],
+                },
+            },
             "model": {"type": "string", "enum": list(LAYA_MODELS), "description":
-                      "Router chỉ định. Bỏ trống để Laya tự chọn."},
+                      "Router chỉ định. Bỏ trống để Laya tự chọn theo ngôn ngữ."},
             "lang": {"type": "string", "description":
                      "Mã ngôn ngữ, ví dụ 'vi'. Bỏ trống để Laya tự đoán."},
             "task": {"type": "string", "description": "Tên tác vụ, tuỳ chọn."},

@@ -3222,7 +3222,20 @@ class LayaRouteToolTests(unittest.TestCase):
 
     Laya không có xác thực, nên điều giữ nó an toàn không phải là quyền của
     người gọi mà là: đích đến không do người gọi chọn, và kích thước bị chặn.
+
+    Hình dạng payload ở đây là hình dạng ĐO ĐƯỢC từ service thật (câu hỏi có
+    `instructions` + `criteria`, `state` là object). Sáu biến thể khác đều trả
+    500, nên đừng nới nó ra vì thấy "hợp lý hơn".
     """
+
+    QUESTION = {
+        "department": {
+            "type": "choice",
+            "instructions": "Which department should handle this request?",
+            "criteria": {"billing": "invoices, payments, refunds",
+                         "technical": "bugs and outages"},
+        }
+    }
 
     def setUp(self):
         self._env = patch.dict(os.environ, {"LAYA_BASE_URL": "https://laya.example/laya"})
@@ -3232,6 +3245,11 @@ class LayaRouteToolTests(unittest.TestCase):
     @staticmethod
     def _run(args):
         return json.loads(asyncio.run(zalo_tools.zalo_laya_route(args)))
+
+    def _ok_args(self, **overrides):
+        args = {"state": "I was charged twice.", "questions": self.QUESTION}
+        args.update(overrides)
+        return args
 
     def test_it_is_a_public_tool(self):
         toolset = next(t for name, _e, _s, _h, t in zalo_tools.TOOLS
@@ -3251,65 +3269,90 @@ class LayaRouteToolTests(unittest.TestCase):
 
         def fake_call(base, payload):
             seen["base"] = base
-            return 200, {"ok": True}
+            return 200, {"answers": {}, "routing": {}}
 
         with patch.object(zalo_tools, "_laya_call", fake_call):
-            self._run({"state": "xin chào", "questions": {"a": "nhóm nào?"},
-                       "url": "http://10.30.36.254/", "base_url": "http://evil"})
+            self._run(self._ok_args(url="http://10.30.36.254/", base_url="http://evil"))
         self.assertEqual(seen["base"], "https://laya.example/laya")
 
     def test_missing_configuration_does_not_name_the_endpoint(self):
         with patch.dict(os.environ, {"LAYA_BASE_URL": ""}):
-            out = self._run({"state": "x", "questions": {"a": "b"}})
+            out = self._run(self._ok_args())
         self.assertFalse(out["success"])
         self.assertNotIn("LAYA_BASE_URL", out["error"])
         self.assertNotIn("http", out["error"])
 
-    def test_oversized_input_is_refused_before_any_request(self):
-        def explode(*_a, **_kw):
-            raise AssertionError("không được gửi request khi đầu vào quá cỡ")
-
-        with patch.object(zalo_tools, "_laya_call", explode):
-            for args in (
-                {"state": "x" * (zalo_tools.LAYA_STATE_MAX + 1), "questions": {"a": "b"}},
-                {"state": "x", "questions": {str(i): "b" for i in range(
-                    zalo_tools.LAYA_QUESTIONS_MAX + 1)}},
-                {"state": "x", "questions": {"a": "b" * (zalo_tools.LAYA_QUESTION_MAX + 1)}},
-                {"state": "x", "questions": {}},
-                {"state": "", "questions": {"a": "b"}},
-            ):
-                with self.subTest(args=sorted(args)):
-                    self.assertFalse(self._run(args)["success"])
-
-    def test_payload_carries_only_what_laya_accepts(self):
+    def test_the_wire_payload_matches_what_laya_answers(self):
         seen = {}
 
         def fake_call(base, payload):
             seen.update(payload)
-            return 200, {"routing": {"model": "multilingual"}}
+            return 200, {
+                "answers": {"department": {"choice": "billing", "confidence": 0.85}},
+                "routing": {"model": "english", "reason": "English Latin text",
+                            "repo": "/models/laya"},
+                "usage": {"input_tokens": 52},
+            }
 
         with patch.object(zalo_tools, "_laya_call", fake_call):
-            out = self._run({"state": " chào ", "questions": {" chu_de ": " nhóm nào? "},
-                             "model": "multilingual", "lang": "vi", "task": "phanloai"})
-        self.assertEqual(set(seen), {"state", "questions", "model", "lang", "task"})
-        self.assertEqual(seen["state"], "chào")
-        self.assertEqual(seen["questions"], {"chu_de": "nhóm nào?"})
-        self.assertTrue(out["success"])
+            out = self._run(self._ok_args(lang="en", model="english"))
 
-    def test_an_unknown_router_is_refused(self):
+        # `state` là object; một chuỗi trần trả 500 trên service thật.
+        self.assertEqual(seen["state"], {"body": "I was charged twice."})
+        self.assertEqual(seen["questions"]["department"]["criteria"],
+                         self.QUESTION["department"]["criteria"])
+        self.assertEqual(seen["questions"]["department"]["type"], "choice")
+        self.assertEqual(out["result"]["router"], "english")
+        self.assertEqual(out["result"]["tra_loi"]["department"]["choice"], "billing")
+        # Đường dẫn kho model trên host của Laya không phải việc của nhóm Zalo.
+        self.assertNotIn("/models/laya", json.dumps(out, ensure_ascii=False))
+
+    def test_type_defaults_to_choice_when_omitted(self):
+        seen = {}
+
+        def fake_call(base, payload):
+            seen.update(payload)
+            return 200, {"answers": {}, "routing": {}}
+
+        question = {"department": {k: v for k, v in self.QUESTION["department"].items()
+                                   if k != "type"}}
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            self.assertTrue(self._run(self._ok_args(questions=question))["success"])
+        self.assertEqual(seen["questions"]["department"]["type"], "choice")
+
+    def test_malformed_input_is_refused_before_any_request(self):
         def explode(*_a, **_kw):
-            raise AssertionError("không được gửi router lạ sang Laya")
+            raise AssertionError("không được gửi request khi đầu vào sai")
+
+        one_option = {"department": {**self.QUESTION["department"],
+                                     "criteria": {"billing": "only one"}}}
+        long_instructions = {"department": {
+            **self.QUESTION["department"],
+            "instructions": "x" * (zalo_tools.LAYA_INSTRUCTIONS_MAX + 1)}}
 
         with patch.object(zalo_tools, "_laya_call", explode):
-            self.assertFalse(self._run(
-                {"state": "x", "questions": {"a": "b"}, "model": "khong-co"})["success"])
+            for label, args in (
+                ("state rỗng", self._ok_args(state="")),
+                ("state quá dài", self._ok_args(state="x" * (zalo_tools.LAYA_STATE_MAX + 1))),
+                ("questions rỗng", self._ok_args(questions={})),
+                ("câu hỏi là chuỗi", self._ok_args(questions={"a": "nhóm nào?"})),
+                ("thiếu criteria", self._ok_args(questions={"a": {"instructions": "x"}})),
+                ("chỉ một lựa chọn", self._ok_args(questions=one_option)),
+                ("instructions quá dài", self._ok_args(questions=long_instructions)),
+                ("router lạ", self._ok_args(model="khong-co")),
+                ("quá nhiều câu hỏi", self._ok_args(questions={
+                    f"q{i}": self.QUESTION["department"]
+                    for i in range(zalo_tools.LAYA_QUESTIONS_MAX + 1)})),
+            ):
+                with self.subTest(label=label):
+                    self.assertFalse(self._run(args)["success"])
 
     def test_a_failing_call_reports_without_leaking_the_address(self):
         def boom(*_a, **_kw):
             raise OSError("connection to https://laya.example/laya/predict refused")
 
         with patch.object(zalo_tools, "_laya_call", boom):
-            out = self._run({"state": "x", "questions": {"a": "b"}})
+            out = self._run(self._ok_args())
         self.assertFalse(out["success"])
         self.assertNotIn("laya.example", out["error"])
 
