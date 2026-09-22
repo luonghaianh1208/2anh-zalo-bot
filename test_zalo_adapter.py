@@ -1140,6 +1140,61 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mcp-atlassian", dm_toolsets)
         self.assertNotIn("mcp-atlassian", group_toolsets)
 
+    def test_owner_direct_message_gets_every_declared_mcp_toolset(self):
+        """Một khe duy nhất nghĩa là Jira hoặc Sentry, không bao giờ cả hai.
+
+        Cấu hình khai báo danh sách; owner DM nhận đủ, nhóm không nhận gì.
+        """
+        adapter = self.make_adapter(
+            {"owner_dm_mcp_toolsets": ["mcp-atlassian", "mcp-sentry"]})
+        owner_uid = "1111111111111111111"
+
+        class Source:
+            def __init__(self, chat_type, message_id):
+                self.user_id = owner_uid
+                self.chat_id = f"{chat_type}-1"
+                self.chat_type = chat_type
+                self.message_id = message_id
+
+        adapter._turns["dm-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        adapter._turns["group-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        with patch.object(adapter, "_is_owner", return_value=True), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            dm_toolsets = adapter.toolsets_for_source(Source("dm", "dm-message"))
+            group_toolsets = adapter.toolsets_for_source(Source("group", "group-message"))
+
+        self.assertIn("mcp-atlassian", dm_toolsets)
+        self.assertIn("mcp-sentry", dm_toolsets)
+        self.assertNotIn("mcp-atlassian", group_toolsets)
+        self.assertNotIn("mcp-sentry", group_toolsets)
+
+    def test_owner_dm_mcp_toolsets_keeps_the_mcp_prefix_boundary(self):
+        """`mcp-` là ranh giới guard dùng để cấm MCP ngoài owner DM.
+
+        Một tên không mang tiền tố ấy sẽ được guard xếp là công cụ thường và
+        thoát khỏi quy tắc đó, nên danh sách phải loại nó ngay từ cấu hình.
+        Trùng lặp cũng bị gộp để schema không nhận hai bản cùng một toolset.
+        """
+        adapter = self.make_adapter(
+            {"owner_dm_mcp_toolsets": ["sentry", "mcp-sentry", "mcp-sentry", "  mcp-atlassian  "]})
+        owner_uid = "1111111111111111111"
+
+        class Source:
+            def __init__(self):
+                self.user_id = owner_uid
+                self.chat_id = "dm-1"
+                self.chat_type = "dm"
+                self.message_id = "dm-message"
+
+        adapter._turns["dm-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        with patch.object(adapter, "_is_owner", return_value=True), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            dm_toolsets = adapter.toolsets_for_source(Source())
+
+        self.assertNotIn("sentry", dm_toolsets)
+        self.assertEqual(dm_toolsets.count("mcp-sentry"), 1)
+        self.assertIn("mcp-atlassian", dm_toolsets)
+
     async def test_group_turn_text_drops_bot_mention_so_confirmation_can_match(self):
         adapter = self.make_adapter()
         adapter.handle_message = lambda _event: asyncio.sleep(0)

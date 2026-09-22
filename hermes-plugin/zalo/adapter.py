@@ -594,10 +594,27 @@ class ZaloAdapter(BasePlatformAdapter):
         if isinstance(owner_only, (list, tuple, set)):
             owner_only = ",".join(str(gid) for gid in owner_only)
         self._owner_only_groups = set(_split_ids(str(owner_only or "")))
-        owner_dm_mcp_toolset = str(extra.get("owner_dm_mcp_toolset") or "").strip()
-        self._owner_dm_mcp_toolset = (
-            owner_dm_mcp_toolset if owner_dm_mcp_toolset.startswith("mcp-") else ""
-        )
+        # Trước đây đây là một khe duy nhất, nên chủ nhân chỉ chọn được Jira
+        # HOẶC Sentry chứ không bao giờ cả hai. Nhận danh sách; khoá cũ ở dạng
+        # chuỗi vẫn đọc được để cấu hình sinh ra từ bản trước không im lặng mất
+        # công cụ.
+        #
+        # Tiền tố ``mcp-`` không phải quy ước đặt tên: ``_is_mcp_tool`` trong
+        # zalo_tools dùng đúng nó để cấm MCP ngoài tin nhắn riêng của chủ nhân.
+        # Một toolset không mang tiền tố ấy sẽ bị xếp nhầm là công cụ thường và
+        # thoát khỏi luật đó, nên nó bị loại ngay tại cấu hình.
+        declared = extra.get("owner_dm_mcp_toolsets", extra.get("owner_dm_mcp_toolset"))
+        if isinstance(declared, str) or declared is None:
+            declared = [declared or ""]
+        elif not isinstance(declared, (list, tuple, set)):
+            declared = []
+        toolsets: List[str] = []
+        for name in (str(item or "").strip() for item in declared):
+            if name.startswith("mcp-") and name not in toolsets:
+                toolsets.append(name)
+        self._owner_dm_mcp_toolsets = toolsets
+        # Giữ tên cũ cho mọi thứ còn đọc một giá trị đơn.
+        self._owner_dm_mcp_toolset = toolsets[0] if toolsets else ""
         # (chat, tệp, cỡ, giờ sửa) -> (lúc gửi, kết quả), chặn một đoạn thoại đi hai lần.
         self._sent_voices: Dict[tuple, tuple] = {}
 
@@ -1518,9 +1535,9 @@ class ZaloAdapter(BasePlatformAdapter):
         chosen = [TOOLSET_OWNER, TOOLSET_PUBLIC] if owner else [TOOLSET_PUBLIC]
         is_group = str(getattr(source, "chat_type", "") or "") == "group"
         turn = self._turns.get(str(getattr(source, "message_id", "") or ""))
-        if (owner and not is_group and self._owner_dm_mcp_toolset
+        if (owner and not is_group and self._owner_dm_mcp_toolsets
                 and turn and turn.get("is_owner")):
-            chosen.append(self._owner_dm_mcp_toolset)
+            chosen.extend(self._owner_dm_mcp_toolsets)
 
         logger.debug("[zalo] %s (%s) → %s",
                      "chủ nhân" if owner else "người trong nhóm",
