@@ -1860,7 +1860,9 @@ class ZaloToolSchemaTest(unittest.TestCase):
         self.assertEqual(set(assignments), {
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 16)
+        # 17 kể từ khi thêm zalo_laya_route: Laya là bộ phân loại nội bộ mà
+        # thành viên nhóm cũng được dùng, nên nó thuộc public chứ không phải owner.
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 17)
         # Owner tool count excludes guest-user lifecycle tools. Any new owner
         # tool must update this explicit boundary assertion.
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 34)
@@ -3213,6 +3215,103 @@ class PublicUrlGateTests(unittest.TestCase):
         with patch("socket.getaddrinfo", explode):
             self.assertFalse(zalo_tools._is_public_url("http://10.30.36.254/"))
             self.assertTrue(zalo_tools._is_public_url("https://93.184.216.34/"))
+
+
+class LayaRouteToolTests(unittest.TestCase):
+    """`zalo_laya_route` là tool public — thành viên nhóm và khách đều gọi được.
+
+    Laya không có xác thực, nên điều giữ nó an toàn không phải là quyền của
+    người gọi mà là: đích đến không do người gọi chọn, và kích thước bị chặn.
+    """
+
+    def setUp(self):
+        self._env = patch.dict(os.environ, {"LAYA_BASE_URL": "https://laya.example/laya"})
+        self._env.start()
+        self.addCleanup(self._env.stop)
+
+    @staticmethod
+    def _run(args):
+        return json.loads(asyncio.run(zalo_tools.zalo_laya_route(args)))
+
+    def test_it_is_a_public_tool(self):
+        toolset = next(t for name, _e, _s, _h, t in zalo_tools.TOOLS
+                       if name == "zalo_laya_route")
+        self.assertEqual(toolset, zalo_tools.TOOLSET_PUBLIC)
+
+    def test_the_endpoint_cannot_be_chosen_by_the_caller(self):
+        # Đích đến đến từ môi trường. Nếu schema từng nhận url/base_url thì đúng
+        # tool này thành lỗ SSRF mà _is_public_url đang bịt cho zalo_web_read.
+        schema = next(s for name, _e, s, _h, _t in zalo_tools.TOOLS
+                      if name == "zalo_laya_route")
+        properties = schema["parameters"]["properties"]
+        for forbidden in ("url", "urls", "base_url", "endpoint", "host"):
+            self.assertNotIn(forbidden, properties)
+
+        seen = {}
+
+        def fake_call(base, payload):
+            seen["base"] = base
+            return 200, {"ok": True}
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            self._run({"state": "xin chào", "questions": {"a": "nhóm nào?"},
+                       "url": "http://10.30.36.254/", "base_url": "http://evil"})
+        self.assertEqual(seen["base"], "https://laya.example/laya")
+
+    def test_missing_configuration_does_not_name_the_endpoint(self):
+        with patch.dict(os.environ, {"LAYA_BASE_URL": ""}):
+            out = self._run({"state": "x", "questions": {"a": "b"}})
+        self.assertFalse(out["success"])
+        self.assertNotIn("LAYA_BASE_URL", out["error"])
+        self.assertNotIn("http", out["error"])
+
+    def test_oversized_input_is_refused_before_any_request(self):
+        def explode(*_a, **_kw):
+            raise AssertionError("không được gửi request khi đầu vào quá cỡ")
+
+        with patch.object(zalo_tools, "_laya_call", explode):
+            for args in (
+                {"state": "x" * (zalo_tools.LAYA_STATE_MAX + 1), "questions": {"a": "b"}},
+                {"state": "x", "questions": {str(i): "b" for i in range(
+                    zalo_tools.LAYA_QUESTIONS_MAX + 1)}},
+                {"state": "x", "questions": {"a": "b" * (zalo_tools.LAYA_QUESTION_MAX + 1)}},
+                {"state": "x", "questions": {}},
+                {"state": "", "questions": {"a": "b"}},
+            ):
+                with self.subTest(args=sorted(args)):
+                    self.assertFalse(self._run(args)["success"])
+
+    def test_payload_carries_only_what_laya_accepts(self):
+        seen = {}
+
+        def fake_call(base, payload):
+            seen.update(payload)
+            return 200, {"routing": {"model": "multilingual"}}
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            out = self._run({"state": " chào ", "questions": {" chu_de ": " nhóm nào? "},
+                             "model": "multilingual", "lang": "vi", "task": "phanloai"})
+        self.assertEqual(set(seen), {"state", "questions", "model", "lang", "task"})
+        self.assertEqual(seen["state"], "chào")
+        self.assertEqual(seen["questions"], {"chu_de": "nhóm nào?"})
+        self.assertTrue(out["success"])
+
+    def test_an_unknown_router_is_refused(self):
+        def explode(*_a, **_kw):
+            raise AssertionError("không được gửi router lạ sang Laya")
+
+        with patch.object(zalo_tools, "_laya_call", explode):
+            self.assertFalse(self._run(
+                {"state": "x", "questions": {"a": "b"}, "model": "khong-co"})["success"])
+
+    def test_a_failing_call_reports_without_leaking_the_address(self):
+        def boom(*_a, **_kw):
+            raise OSError("connection to https://laya.example/laya/predict refused")
+
+        with patch.object(zalo_tools, "_laya_call", boom):
+            out = self._run({"state": "x", "questions": {"a": "b"}})
+        self.assertFalse(out["success"])
+        self.assertNotIn("laya.example", out["error"])
 
 
 if __name__ == "__main__":

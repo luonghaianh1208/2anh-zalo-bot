@@ -1616,6 +1616,112 @@ async def zalo_web_read(args: Dict[str, Any], **_kw) -> str:
 
 
 # =====================================================================
+#  Nhóm 8b — Laya: bộ định tuyến ý định chạy nội bộ
+# =====================================================================
+#
+# Laya là một service HTTP nhỏ chạy CPU trên hạ tầng nội bộ. Nó KHÔNG phải model
+# sinh văn bản: đưa vào một đoạn ngữ cảnh (`state`) cùng vài câu hỏi
+# (`questions`), nó trả về lựa chọn cho từng câu hỏi kèm router nào đã quyết.
+#
+# Ba điều phải nhớ về ranh giới, vì tool này thành viên nhóm gọi được:
+#
+# 1. Endpoint đến từ biến môi trường, KHÔNG bao giờ từ `args`. Vì thế nó không
+#    đi qua `_is_public_url`: cổng đó tồn tại để chặn URL do người gọi đưa vào,
+#    còn ở đây người gọi không chọn được đích. Đưa endpoint vào schema sẽ biến
+#    đúng tool này thành lỗ SSRF mà `_is_public_url` đang bịt.
+# 2. Laya KHÔNG có xác thực. Bất cứ thứ gì tới được địa chỉ đó đều gọi được nó.
+#    Nên tool này giới hạn kích thước và đặt timeout ngắn — để bot không bị dùng
+#    làm máy tạo tải nhắm vào một service không tự bảo vệ được.
+# 3. Laya ghi lại NGUYÊN VĂN mọi request và response của `/predict` vào thư mục
+#    collector trên host của nó, ngoài biên dữ liệu mà repo này kiểm soát, và
+#    không có chính sách retention. Những gì người dùng gõ vào đây sẽ rời đi.
+
+LAYA_STATE_MAX = 4000
+LAYA_QUESTION_MAX = 500
+LAYA_QUESTIONS_MAX = 20
+LAYA_TIMEOUT_SECONDS = 30
+LAYA_MODELS = ("english", "multilingual", "typed-decisions")
+
+
+def _laya_base() -> str:
+    return os.environ.get("LAYA_BASE_URL", "").strip().rstrip("/")
+
+
+def _laya_call(base: str, payload: Dict[str, Any]) -> tuple[int, Any]:
+    """Gọi `/predict` và trả về (http_status, body đã parse nếu là JSON)."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(
+        base + "/predict",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=LAYA_TIMEOUT_SECONDS) as response:
+            status, raw = response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        status, raw = exc.code, exc.read()
+    try:
+        return status, json.loads(raw.decode("utf-8", "replace"))
+    except (ValueError, UnicodeDecodeError):
+        return status, None
+
+
+async def zalo_laya_route(args: Dict[str, Any], **_kw) -> str:
+    base = _laya_base()
+    if not base:
+        # Không nói địa chỉ, không nói tên biến: người gọi không sửa được điều
+        # này, và một thông báo cấu hình là một mẩu thông tin nội bộ.
+        return _err("Laya chưa sẵn sàng ở bản cài này")
+
+    state = str(args.get("state") or "").strip()
+    if not state:
+        return _err("cần `state` — đoạn ngữ cảnh để Laya đọc")
+    if len(state) > LAYA_STATE_MAX:
+        return _err(f"`state` dài quá {LAYA_STATE_MAX} ký tự")
+
+    questions = args.get("questions")
+    if not isinstance(questions, dict) or not questions:
+        return _err('cần `questions` — ví dụ {"chu_de": "câu hỏi này thuộc nhóm nào?"}')
+    if len(questions) > LAYA_QUESTIONS_MAX:
+        return _err(f"tối đa {LAYA_QUESTIONS_MAX} câu hỏi mỗi lần")
+    cleaned: Dict[str, Any] = {}
+    for key, value in questions.items():
+        name = str(key).strip()
+        text = str(value).strip() if not isinstance(value, (list, dict)) else ""
+        if not name or not text:
+            return _err("mỗi câu hỏi cần một tên và một nội dung dạng chữ")
+        if len(text) > LAYA_QUESTION_MAX:
+            return _err(f"mỗi câu hỏi dài tối đa {LAYA_QUESTION_MAX} ký tự")
+        cleaned[name] = text
+
+    payload: Dict[str, Any] = {"state": state, "questions": cleaned}
+    model = str(args.get("model") or "").strip()
+    if model:
+        if model not in LAYA_MODELS:
+            return _err(f"`model` phải là một trong: {', '.join(LAYA_MODELS)}")
+        payload["model"] = model
+    for key in ("task", "lang"):
+        value = str(args.get(key) or "").strip()
+        if value:
+            payload[key] = value
+
+    try:
+        status, body = await asyncio.to_thread(_laya_call, base, payload)
+    except Exception as exc:
+        # Chỉ tên lớp lỗi. Chuỗi lỗi của urllib có kèm địa chỉ đích.
+        logger.warning("[laya] gọi /predict hỏng: %s", type(exc).__name__)
+        return _err("không gọi được Laya lúc này")
+
+    if status != 200 or body is None:
+        logger.warning("[laya] /predict trả HTTP %s", status)
+        return _err(f"Laya từ chối yêu cầu (HTTP {status})")
+    return _ok({"ket_qua": body})
+
+
+# =====================================================================
 #  Nhóm 9 — Sổ hồ sơ người quen
 # =====================================================================
 #
@@ -2936,6 +3042,27 @@ TOOLS = [
         },
         [],
     ), zalo_web_read, TOOLSET_PUBLIC),
+
+    # --- Nhóm 8b: Laya, bộ định tuyến ý định nội bộ ---
+    ("zalo_laya_route", "🧭", _schema(
+        "zalo_laya_route",
+        "Hỏi Laya — bộ phân loại ý định chạy nội bộ — xem một đoạn ngữ cảnh "
+        "thuộc nhóm nào. Không sinh văn bản: mỗi câu hỏi nhận lại một lựa chọn "
+        "kèm router đã quyết. Dùng để phân loại, định tuyến, gắn nhãn.",
+        {
+            "state": {"type": "string", "description":
+                      "Đoạn ngữ cảnh Laya đọc, tối đa 4000 ký tự."},
+            "questions": {"type": "object", "description":
+                          'Các câu hỏi, dạng {"tên": "nội dung câu hỏi"}. '
+                          "Tối đa 20 câu, mỗi câu 500 ký tự."},
+            "model": {"type": "string", "enum": list(LAYA_MODELS), "description":
+                      "Router chỉ định. Bỏ trống để Laya tự chọn."},
+            "lang": {"type": "string", "description":
+                     "Mã ngôn ngữ, ví dụ 'vi'. Bỏ trống để Laya tự đoán."},
+            "task": {"type": "string", "description": "Tên tác vụ, tuỳ chọn."},
+        },
+        ["state", "questions"],
+    ), zalo_laya_route, TOOLSET_PUBLIC),
 
     # --- Nhóm 9: sổ hồ sơ người quen ---
     ("zalo_remember_person", "🧠", _schema(
