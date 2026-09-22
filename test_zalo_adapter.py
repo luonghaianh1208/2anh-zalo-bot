@@ -3174,5 +3174,46 @@ class BridgeKeepaliveBoundsTest(unittest.TestCase):
         )
 
 
+class PublicUrlGateTests(unittest.TestCase):
+    """`_is_public_url` gác `zalo_web_read`, công cụ mà khách gọi được.
+
+    Trước đây một *tên* luôn được cho qua với lý do "để tầng mạng lo tiếp".
+    Tầng mạng là firewall bridge, và firewall mở đúng một địa chỉ nội bộ cho
+    runtime gọi model với MCP -- nên một cái tên trỏ vào chính địa chỉ đó đi
+    lọt, và chỉ cần một entry `extra_hosts` là cái tên ấy phân giải được ngay
+    trong container của khách.
+    """
+
+    @staticmethod
+    def _resolver(mapping):
+        def fake_getaddrinfo(host, *_a, **_kw):
+            try:
+                return [(2, 1, 6, "", (mapping[host], 0))]
+            except KeyError:
+                raise OSError("name does not resolve")
+        return fake_getaddrinfo
+
+    def test_name_resolving_to_a_private_address_is_refused(self):
+        with patch("socket.getaddrinfo", self._resolver({"gateway.corp.example": "10.30.36.254"})):
+            self.assertFalse(zalo_tools._is_public_url("https://gateway.corp.example/v1/models"))
+
+    def test_ordinary_public_name_still_passes(self):
+        with patch("socket.getaddrinfo", self._resolver({"example.com": "93.184.216.34"})):
+            self.assertTrue(zalo_tools._is_public_url("https://example.com/page"))
+
+    def test_a_name_that_does_not_resolve_is_refused(self):
+        # Fail closed: không phân giải được thì không biết nó trỏ vào đâu.
+        with patch("socket.getaddrinfo", self._resolver({})):
+            self.assertFalse(zalo_tools._is_public_url("https://nowhere.example/"))
+
+    def test_private_ip_literal_is_still_refused_without_resolving(self):
+        def explode(*_a, **_kw):
+            raise AssertionError("IP literal không được phép đi qua DNS")
+
+        with patch("socket.getaddrinfo", explode):
+            self.assertFalse(zalo_tools._is_public_url("http://10.30.36.254/"))
+            self.assertTrue(zalo_tools._is_public_url("https://93.184.216.34/"))
+
+
 if __name__ == "__main__":
     unittest.main()

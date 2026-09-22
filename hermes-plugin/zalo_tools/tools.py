@@ -1489,6 +1489,7 @@ def _google_export_url(raw: str) -> str:
 def _is_public_url(raw: str) -> bool:
     """Chỉ cho phép http/https trỏ ra địa chỉ công cộng."""
     import ipaddress
+    import socket
     from urllib.parse import urlparse
 
     try:
@@ -1506,9 +1507,31 @@ def _is_public_url(raw: str) -> bool:
         return False
 
     try:
-        ip = ipaddress.ip_address(host)
+        return _is_public_address(ipaddress.ip_address(host))
     except ValueError:
-        return True                       # tên miền — để tầng mạng lo tiếp
+        pass                              # không phải IP literal — nó là một cái tên
+
+    # Tên phải được phân giải rồi mới xét, chứ không "để tầng mạng lo tiếp".
+    # Tầng mạng ở đây là firewall bridge, và firewall mở đúng một địa chỉ nội bộ
+    # cho runtime gọi model với MCP. Một cái tên trỏ vào chính địa chỉ đó thì đi
+    # lọt, rồi nội dung nội bộ được dán thẳng vào hội thoại Zalo; chỉ cần một
+    # entry `extra_hosts` là cái tên ấy phân giải được bên trong container.
+    # Không liệt kê tên nội bộ ở đây: repo này công khai, và một danh sách tên
+    # cũng chỉ chặn được đúng những tên ai đó còn nhớ để viết vào.
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return False                      # không phân giải được ⇒ không cho đi
+    addresses = {info[4][0] for info in infos}
+    if not addresses:
+        return False
+    # MỌI địa chỉ phải công cộng: một tên trả cả địa chỉ công cộng lẫn địa chỉ
+    # nội bộ thì lần kết nối thật vẫn có thể rơi vào cái nội bộ.
+    return all(_is_public_address(ipaddress.ip_address(item)) for item in addresses)
+
+
+def _is_public_address(ip) -> bool:
+    """Một địa chỉ đã phân giải có nằm ngoài mọi dải dành riêng hay không."""
     return not (
         ip.is_private or ip.is_loopback or ip.is_link_local
         or ip.is_reserved or ip.is_multicast or ip.is_unspecified
