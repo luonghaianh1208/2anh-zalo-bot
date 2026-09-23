@@ -3401,5 +3401,84 @@ class LayaRouteToolTests(unittest.TestCase):
         self.assertNotIn("laya.example", out["error"])
 
 
+class SessionExpiryTests(unittest.TestCase):
+    """Hermes không đóng phiên theo thời gian; adapter tự đặt ranh giới.
+
+    Đo được ngày 23/09: phiên nhóm mở 18:45 ngày 22/09 vẫn sống, system prompt
+    ghi "Conversation started: Tuesday, September 22", và bot trả lời "chiều nay
+    22/9" cho một câu hỏi ngày 23/9.
+    """
+
+    from datetime import datetime as _dt
+
+    def test_a_session_from_before_todays_boundary_expires(self):
+        now = self._dt(2026, 9, 23, 14, 50)
+        self.assertEqual(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 22, 18, 45), self._dt(2026, 9, 23, 14, 0), now), "daily")
+
+    def test_before_four_the_boundary_is_yesterday(self):
+        now = self._dt(2026, 9, 23, 2, 0)
+        self.assertIsNone(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 22, 23, 0), self._dt(2026, 9, 23, 1, 30), now))
+        self.assertEqual(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 22, 3, 0), self._dt(2026, 9, 23, 1, 30), now), "daily")
+
+    def test_idle_for_more_than_two_hours_expires(self):
+        now = self._dt(2026, 9, 23, 14, 50)
+        self.assertEqual(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 23, 9, 0), self._dt(2026, 9, 23, 12, 30), now), "idle")
+        self.assertIsNone(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 23, 9, 0), self._dt(2026, 9, 23, 13, 0), now))
+
+    def test_clock_line_names_the_real_day(self):
+        self.assertEqual(zalo_adapter._clock_line(self._dt(2026, 9, 23, 14, 50)),
+                         "[Bây giờ: 14:50 thứ Tư 23/09/2026]")
+
+    def _adapter_with(self, entry):
+        calls = []
+
+        async def reset(event):
+            calls.append(event)
+            return "banner"
+
+        store = SimpleNamespace(lookup_by_session_key=lambda key: entry)
+        runner = SimpleNamespace(session_store=store, _handle_reset_command=reset,
+                                 _session_key_for_source=lambda source: "k")
+        adapter = object.__new__(zalo_adapter.ZaloAdapter)
+        adapter.gateway_runner = runner
+        return adapter, calls
+
+    def test_an_expired_session_is_reset_through_the_new_command(self):
+        stale = SimpleNamespace(session_id="s", created_at=self._dt(2020, 1, 1),
+                                updated_at=self._dt(2020, 1, 1))
+        adapter, calls = self._adapter_with(stale)
+        source = SimpleNamespace(user_id="u", user_name="n")
+        asyncio.run(adapter._expire_stale_session(source))
+        self.assertEqual(len(calls), 1)
+        # Chính xác "/new": với tin thường, /new lấy cả nội dung làm tiêu đề phiên.
+        self.assertEqual(calls[0].text, "/new")
+        self.assertEqual(calls[0].get_command_args(), "")
+        self.assertIs(calls[0].source, source)
+
+    def test_a_fresh_or_missing_session_is_left_alone(self):
+        from datetime import datetime
+        fresh = SimpleNamespace(session_id="s", created_at=datetime.now(), updated_at=datetime.now())
+        for entry in (fresh, None):
+            adapter, calls = self._adapter_with(entry)
+            asyncio.run(adapter._expire_stale_session(SimpleNamespace(user_id="u", user_name="n")))
+            self.assertEqual(calls, [])
+
+    def test_a_failing_reset_does_not_swallow_the_message(self):
+        stale = SimpleNamespace(session_id="s", created_at=self._dt(2020, 1, 1),
+                                updated_at=self._dt(2020, 1, 1))
+        adapter, _ = self._adapter_with(stale)
+
+        async def boom(event):
+            raise RuntimeError("store locked")
+
+        adapter.gateway_runner._handle_reset_command = boom
+        asyncio.run(adapter._expire_stale_session(SimpleNamespace(user_id="u", user_name="n")))
+
+
 if __name__ == "__main__":
     unittest.main()

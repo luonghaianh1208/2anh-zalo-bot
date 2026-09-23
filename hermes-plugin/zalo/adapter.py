@@ -61,7 +61,7 @@ import tempfile
 import time
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -96,6 +96,42 @@ from plugins.zalo_tools.tools import TOOLSET_DENIED, TOOLSET_OWNER, TOOLSET_PUBL
 from .flood import JUST_MUTED as FLOOD_JUST_MUTED
 from .flood import MUTED as FLOOD_MUTED
 from .flood import FloodGuard
+
+
+# Hermes không bao giờ tự đóng phiên theo thời gian ("Only explicit suspension
+# replaces a routed conversation; time never does"). Một nhóm Zalo vì thế giữ
+# nguyên một phiên nhiều ngày: ngữ cảnh cũ của người này lọt sang câu trả lời
+# cho người khác, và system prompt đóng băng "Conversation started: <ngày đầu>"
+# khiến bot coi hôm qua là hôm nay. Adapter tự đặt ranh giới.
+SESSION_RESET_HOUR = 4  # giờ địa phương của container (TZ)
+SESSION_IDLE_SECONDS = 2 * 3600
+_WEEKDAYS_VI = ("thứ Hai", "thứ Ba", "thứ Tư", "thứ Năm", "thứ Sáu", "thứ Bảy", "Chủ nhật")
+
+
+def _local_naive(value: Optional[datetime]) -> Optional[datetime]:
+    """SessionStore ghi giờ địa phương không kèm múi; đưa mọi thứ về đúng dạng đó."""
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone().replace(tzinfo=None)
+
+
+def _session_expiry_reason(created_at: Optional[datetime], updated_at: Optional[datetime],
+                           now: datetime) -> Optional[str]:
+    """Lý do phiên phải bỏ, hoặc None nếu còn dùng được."""
+    created_at, updated_at, now = _local_naive(created_at), _local_naive(updated_at), _local_naive(now)
+    boundary = now.replace(hour=SESSION_RESET_HOUR, minute=0, second=0, microsecond=0)
+    if now < boundary:
+        boundary -= timedelta(days=1)
+    if created_at is not None and created_at < boundary:
+        return "daily"
+    if updated_at is not None and (now - updated_at).total_seconds() > SESSION_IDLE_SECONDS:
+        return "idle"
+    return None
+
+
+def _clock_line(now: datetime) -> str:
+    """Giờ hiện tại cho mỗi tin: system prompt chỉ biết ngày phiên bắt đầu."""
+    return f"[Bây giờ: {now:%H:%M} {_WEEKDAYS_VI[now.weekday()]} {now:%d/%m/%Y}]"
 
 
 def _transcode_to_m4a(audio_path: str) -> Optional[str]:
@@ -1012,6 +1048,9 @@ class ZaloAdapter(BasePlatformAdapter):
             known = ""
         if known:
             prompt_text = f"[Người nhắn — {sender_name}: {known}]\n{prompt_text}"
+        # Lệnh gateway (/new, /stop...) phải giữ nguyên ký tự đầu là "/".
+        if not prompt_text.lstrip().startswith("/"):
+            prompt_text = f"{_clock_line(datetime.now())}\n{prompt_text}"
 
         event = MessageEvent(
             text=prompt_text,
@@ -1074,7 +1113,39 @@ class ZaloAdapter(BasePlatformAdapter):
                 expect_ack=False,
             )
 
+        await self._expire_stale_session(source)
         await self.handle_message(event)
+
+    async def _expire_stale_session(self, source: Any) -> None:
+        """Mở phiên mới trước khi tin này tới, nếu phiên cũ đã qua mốc ngày hoặc im quá lâu.
+
+        Đi đúng đường của ``/new`` để runner dọn agent đang cache, scope hội thoại
+        và delegation còn treo — tự gọi ``reset_session`` trên store sẽ để lại agent
+        cũ giữ nguyên lịch sử. Dòng thông báo phiên mới của ``/new`` bị bỏ đi: nhóm
+        không cần biết.
+        """
+        runner = getattr(self, "gateway_runner", None)
+        store = getattr(runner, "session_store", None) or getattr(self, "_session_store", None)
+        key_for = getattr(runner, "_session_key_for_source", None)
+        reset = getattr(runner, "_handle_reset_command", None)
+        lookup = getattr(store, "lookup_by_session_key", None)
+        if not (callable(key_for) and callable(reset) and callable(lookup)):
+            return
+        try:
+            entry = lookup(key_for(source))
+            reason = entry and _session_expiry_reason(
+                getattr(entry, "created_at", None), getattr(entry, "updated_at", None), datetime.now())
+            if not reason:
+                return
+            logger.info("[zalo] phiên %s hết hạn (%s) — mở phiên mới",
+                        getattr(entry, "session_id", "?"), reason)
+            await reset(MessageEvent(
+                text="/new", message_type=MessageType.TEXT, source=source,
+                user_id=getattr(source, "user_id", None), user_name=getattr(source, "user_name", None),
+            ))
+        except Exception as exc:
+            # Không mở được phiên mới thì vẫn trả lời trên phiên cũ, không nuốt tin.
+            logger.warning("[zalo] không reset được phiên hết hạn: %s", type(exc).__name__)
 
     def _remember_turn(self, turn: Dict[str, Any]) -> None:
         """Nhớ danh tính theo mã tin để mỗi lượt agent gắn lại đúng người."""
