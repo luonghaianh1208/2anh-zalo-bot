@@ -3554,5 +3554,65 @@ class ReminderAndBatchFixTests(unittest.TestCase):
         self.assertNotIn("chen vào", verdict["message"])
 
 
+class MemoryGateTests(unittest.TestCase):
+    """Đo ngày 23/09: lượt của chủ nhân trong nhóm alert nhận <memory-context> với ghi
+    chú phiên dev, rồi đem chúng khuyên cả nhóm — dù toolset memory đã tắt."""
+
+    def setUp(self):
+        self.calls = []
+        calls = self.calls
+
+        class FakeManager:
+            def prefetch_all(self, query, *, session_id=""):
+                calls.append("prefetch")
+                return "<memory-context>secret</memory-context>"
+
+            def queue_prefetch_all(self, query, *, session_id=""):
+                calls.append("queue")
+
+            def sync_all(self, user, assistant, *, session_id="", **kw):
+                calls.append("sync")
+
+            def on_turn_start(self, n, message, **kw):
+                calls.append("turn")
+
+        self.cls = FakeManager
+        self.assertTrue(zalo_tools.install_memory_gate(FakeManager))
+        self.token = zalo_tools._TURN.set(None)
+
+    def tearDown(self):
+        zalo_tools._TURN.reset(self.token)
+
+    def _exercise(self):
+        m = self.cls()
+        out = m.prefetch_all("q", session_id="s")
+        m.queue_prefetch_all("q")
+        m.sync_all("u", "a", session_id="s")
+        m.on_turn_start(1, "q")
+        return out
+
+    def test_group_turns_neither_read_nor_write_owner_memory(self):
+        for turn in ({"sender_uid": "o", "thread_id": "g", "is_group": True, "is_owner": True},
+                     {"sender_uid": "m", "thread_id": "g", "is_group": True, "is_owner": False},
+                     {"sender_uid": "m", "thread_id": "d", "is_group": False, "is_owner": False}):
+            self.calls.clear()
+            zalo_tools._TURN.set(turn)
+            with self.subTest(turn=turn):
+                self.assertEqual(self._exercise(), "")
+                self.assertEqual(self.calls, [])
+
+    def test_owner_dm_and_non_zalo_callers_keep_memory(self):
+        for turn in ({"sender_uid": "o", "thread_id": "o", "is_group": False, "is_owner": True}, None):
+            self.calls.clear()
+            zalo_tools._TURN.set(turn)
+            with self.subTest(turn=turn):
+                self.assertIn("secret", self._exercise())
+                self.assertEqual(self.calls, ["prefetch", "queue", "sync", "turn"])
+
+    def test_installing_twice_does_not_double_wrap(self):
+        first = self.cls.prefetch_all
+        zalo_tools.install_memory_gate(self.cls)
+        self.assertIs(self.cls.prefetch_all, first)
+
 if __name__ == "__main__":
     unittest.main()

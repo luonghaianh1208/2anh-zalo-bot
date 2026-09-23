@@ -3515,6 +3515,57 @@ def _is_mcp_tool(name: str) -> Optional[bool]:
     except Exception:
         return None
 
+# =====================================================================
+#  Cổng bộ nhớ — memory của chủ nhân chỉ sống trong tin nhắn riêng
+# =====================================================================
+#
+# Hermes tắt toolset `memory` cho phiên nhóm nhưng vẫn prefetch memory ngoài
+# (agentmemory) và chèn khối <memory-context> vào lượt — log còn ghi "provider
+# tools and system-prompt block are both withheld". Đo ngày 23/09: lượt của chủ
+# nhân trong một nhóm alert nhận ghi chú phiên dev ("Added SessionExpiryTests…")
+# rồi đem chúng khuyên cả nhóm. Chiều ngược lại cũng hở: sync_all ghi tin trong
+# nhóm vào memory của chủ nhân, để lần sau nó hiện ra ở nơi khác.
+#
+# Chỉ lượt Zalo mới bị xét. Không có lượt Zalo (CLI, cron của chủ nhân) thì để
+# nguyên hành vi của Hermes.
+
+_MEMORY_GATED = ("prefetch_all", "queue_prefetch_all", "sync_all", "on_turn_start")
+
+
+def _memory_allowed() -> bool:
+    turn = _TURN.get()
+    if not turn:
+        return True
+    return bool(turn.get("is_owner") and not turn.get("is_group")
+                and not turn.get("cron_job_id") and not _outsider_spoke_after(turn))
+
+
+def install_memory_gate(manager_cls=None) -> bool:
+    """Bọc các lối đọc/ghi memory của MemoryManager. Gọi nhiều lần vẫn an toàn."""
+    if manager_cls is None:
+        try:
+            from agent.memory_manager import MemoryManager as manager_cls
+        except Exception:
+            logger.warning("[zalo] không cài được cổng bộ nhớ: thiếu MemoryManager")
+            return False
+    for name in _MEMORY_GATED:
+        original = getattr(manager_cls, name, None)
+        if original is None or getattr(original, "_zalo_gated", False):
+            continue
+        empty = "" if name == "prefetch_all" else None
+
+        def gated(self, *args, __original=original, __name=name, __empty=empty, **kwargs):
+            if not _memory_allowed():
+                logger.info("[zalo] bỏ %s — lượt không phải tin riêng của chủ nhân", __name)
+                return __empty
+            return __original(self, *args, **kwargs)
+
+        gated._zalo_gated = True
+        gated.__name__ = name
+        setattr(manager_cls, name, gated)
+    return True
+
+
 def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Optional[Dict[str, str]]:
     """Execution boundary for every Zalo turn; non-Zalo callers are untouched."""
     turn = _TURN.get()

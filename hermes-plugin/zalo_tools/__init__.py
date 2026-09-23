@@ -12,7 +12,7 @@ Adapter nền tảng vẫn nằm bên ``platforms/zalo`` và import lại từ �
 """
 
 from .tools import (define_cron_member_toolset, define_denied_toolset, define_platform_composite,
-                    guard_member_tool_call, register_tools)
+                    guard_member_tool_call, install_memory_gate, register_tools)
 
 __all__ = ["register"]
 
@@ -23,6 +23,8 @@ def register(ctx) -> None:
     # Rào chắn tại điểm thực thi: Hermes cấp lại công cụ đã ghim của phiên nhóm
     # cho mọi lượt, kể cả lượt của người ngoài. Xem guard_member_tool_call().
     ctx.register_hook("pre_tool_call", guard_member_tool_call)
+    # Memory của chủ nhân không vào, không ra khỏi lượt nhóm. Xem install_memory_gate().
+    install_memory_gate()
     # Phải chạy sau register_tools: định nghĩa dựa trên bộ công cụ lõi và
     # cần dọn bộ nhớ đệm của resolve_toolset sau khi registry đã đổi.
     define_platform_composite()
