@@ -1647,6 +1647,16 @@ LAYA_MODELS = ("english", "multilingual", "typed-decisions")
 # thử qua gateway đều trả 500, nên danh sách này là thứ đo được, không phải thứ
 # suy ra từ tài liệu.
 LAYA_QUESTION_TYPES = ("choice",)
+# `probabilities` luôn cộng về 1 nên lúc nào cũng có một lựa chọn "thắng", kể cả
+# khi Laya đoán mò. `confidence` mới là tín hiệu: đo trên service thật, mọi câu
+# phân loại sai đều dưới 0.4, câu đúng rõ ràng đều trên 0.9.
+LAYA_CONFIDENCE_MIN = 0.5
+# Router tự chọn đẩy câu tiếng Việt ngắn ("xin chào") sang router `english` —
+# đo được. Chữ cái có dấu riêng của tiếng Việt là đủ để nói `lang=vi`.
+_VIETNAMESE_LETTERS = re.compile(
+    "[ăâđêôơưàáạảãầấậẩẫằắặẳẵèéẹẻẽềếệểễìíịỉĩòóọỏõồốộổỗờớợởỡùúụủũừứựửữỳýỵỷỹ]",
+    re.IGNORECASE,
+)
 
 
 def _laya_base() -> str:
@@ -1749,6 +1759,8 @@ async def zalo_laya_route(args: Dict[str, Any], **_kw) -> str:
         value = str(args.get(key) or "").strip()
         if value:
             payload[key] = value
+    if "lang" not in payload and _VIETNAMESE_LETTERS.search(state):
+        payload["lang"] = "vi"
 
     try:
         status, body = await asyncio.to_thread(_laya_call, base, payload)
@@ -1760,12 +1772,27 @@ async def zalo_laya_route(args: Dict[str, Any], **_kw) -> str:
     if status != 200 or not isinstance(body, dict):
         logger.warning("[laya] /predict trả HTTP %s", status)
         return _err(f"Laya từ chối yêu cầu (HTTP {status})")
+    answers = body.get("answers")
+    unsure = []
+    if isinstance(answers, dict):
+        for name, answer in answers.items():
+            confidence = answer.get("confidence") if isinstance(answer, dict) else None
+            if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+                answer["tin_cay_thap"] = confidence < LAYA_CONFIDENCE_MIN
+                if answer["tin_cay_thap"]:
+                    unsure.append(name)
     # Trả phần người đọc cần, không trả cả đường dẫn kho model trong `routing`.
-    return _ok({
-        "tra_loi": body.get("answers"),
+    result = {
+        "tra_loi": answers,
         "router": (body.get("routing") or {}).get("model"),
         "ly_do_chon_router": (body.get("routing") or {}).get("reason"),
-    })
+    }
+    if unsure:
+        result["canh_bao"] = (
+            f"Laya không chắc ở: {', '.join(unsure)} (confidence < {LAYA_CONFIDENCE_MIN}). "
+            "Nói rõ là Laya không chắc; đừng đọc xác suất như một kết luận."
+        )
+    return _ok(result)
 
 
 # =====================================================================
@@ -3095,7 +3122,10 @@ TOOLS = [
         "zalo_laya_route",
         "Hỏi Laya — bộ phân loại chạy nội bộ — xem một đoạn ngữ cảnh rơi vào "
         "lựa chọn nào. Không sinh văn bản: mỗi câu hỏi nhận lại một lựa chọn "
-        "kèm xác suất và độ tin cậy. Dùng để phân loại, định tuyến, gắn nhãn.",
+        "kèm xác suất và độ tin cậy. Dùng để phân loại, định tuyến, gắn nhãn. "
+        "Câu trả lời có `tin_cay_thap: true` nghĩa là Laya đoán mò — nói rõ là "
+        "không chắc, đừng báo lựa chọn đó như kết quả. Nếu tool báo lỗi đầu vào, "
+        "báo lại lỗi cho người dùng; đừng tự sửa câu hỏi rồi gọi lại.",
         {
             "state": {"type": "string", "description":
                       "Đoạn ngữ cảnh Laya đọc, tối đa 4000 ký tự."},

@@ -3347,6 +3347,50 @@ class LayaRouteToolTests(unittest.TestCase):
                 with self.subTest(label=label):
                     self.assertFalse(self._run(args)["success"])
 
+    def test_low_confidence_answers_are_flagged(self):
+        # Đo trên service thật: "xin chào" ra `hoi_gia` 74% với confidence 0.016.
+        # Xác suất luôn có người thắng; chỉ confidence nói Laya có đoán mò không.
+        def fake_call(base, payload):
+            return 200, {"answers": {
+                "sure": {"choice": "billing", "confidence": 0.93},
+                "guess": {"choice": "technical", "confidence": 0.016},
+            }, "routing": {}}
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            out = self._run(self._ok_args())
+        answers = out["result"]["tra_loi"]
+        self.assertFalse(answers["sure"]["tin_cay_thap"])
+        self.assertTrue(answers["guess"]["tin_cay_thap"])
+        self.assertIn("guess", out["result"]["canh_bao"])
+        self.assertNotIn("sure", out["result"]["canh_bao"])
+
+    def test_no_warning_when_every_answer_is_confident(self):
+        def fake_call(base, payload):
+            return 200, {"answers": {"department": {"choice": "billing",
+                                                    "confidence": 0.9}},
+                         "routing": {}}
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            out = self._run(self._ok_args())
+        self.assertNotIn("canh_bao", out["result"])
+
+    def test_vietnamese_text_is_sent_with_lang_vi(self):
+        # Router tự chọn đẩy "xin chào" sang `english` — đo được.
+        seen = {}
+
+        def fake_call(base, payload):
+            seen.clear()
+            seen.update(payload)
+            return 200, {"answers": {}, "routing": {}}
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            self._run(self._ok_args(state="xin chào"))
+            self.assertEqual(seen.get("lang"), "vi")
+            self._run(self._ok_args(state="xin chào", lang="en"))
+            self.assertEqual(seen.get("lang"), "en")
+            self._run(self._ok_args(state="Please cancel my subscription"))
+            self.assertNotIn("lang", seen)
+
     def test_a_failing_call_reports_without_leaking_the_address(self):
         def boom(*_a, **_kw):
             raise OSError("connection to https://laya.example/laya/predict refused")
