@@ -37,7 +37,10 @@ const PUBLIC_COMMANDS = new Set(['send', 'typing', 'reaction', 'seen', 'ack_mess
 
 const TARGET_ARG_INDEX = new Map([
   ['sendMessage', 1], ['sendVoice', 1], ['sendSticker', 1], ['sendLink', 1],
-  ['uploadAttachment', 1], ['createReminder', 1], ['getListReminder', 0],
+  ['uploadAttachment', 1], ['createReminder', 1],
+  // zca-js: getListReminder(options, threadId, type) — thread ở vị trí 1, không phải 0.
+  // Đọc nhầm vị trí 0 thì so object options với nhóm, và khách luôn bị từ chối.
+  ['getListReminder', 1],
   ['removeReminder', 1],
 ]);
 
@@ -56,8 +59,7 @@ function sameThread(command, auth) {
     const index = TARGET_ARG_INDEX.get(String(command.method || ''));
     if (index == null) return true;
     targetId = Array.isArray(command.args) ? command.args[index] : null;
-    if (['getListReminder'].includes(command.method)) targetType = command.args?.[1];
-    else targetType = command.args?.[index + 1];
+    targetType = command.args?.[index + 1];
   }
   return String(targetId ?? '') === String(auth.sourceThreadId ?? '')
     && Number(targetType) === Number(auth.sourceThreadType);

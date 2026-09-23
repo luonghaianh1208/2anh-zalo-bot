@@ -132,3 +132,14 @@ test('đọc cả khoảng thời gian chỉ dành cho chủ nhân', () => {
     { allowed: true, role: 'owner', code: 'allowed', category: 'read' },
   );
 });
+
+test('public actor can list reminders of the active conversation only', () => {
+  // Chữ ký thật của zca-js: getListReminder(options, threadId, type).
+  assert.deepEqual(authorizeBridgeCommand({
+    type: 'invoke', method: 'getListReminder', args: [{ page: 1, count: 20 }, 'group-1', 1], auth: publicAuth,
+  }, policyOptions), { allowed: true, role: 'public', code: 'allowed', category: 'read' });
+
+  assert.equal(authorizeBridgeCommand({
+    type: 'invoke', method: 'getListReminder', args: [{ page: 1, count: 20 }, 'other-group', 1], auth: publicAuth,
+  }, policyOptions).code, 'cross_thread_denied');
+});
