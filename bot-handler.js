@@ -229,6 +229,11 @@ async function handleIncomingMessage(api, msg, stickers = null) {
   // falls back to the owner runtime when its isolated runtime is unavailable.
   const audience = audienceFor(senderUid, isGroup, threadId);
   if (!audience) {
+    // Không chuyển cho Hermes, nhưng tin trong nhóm vẫn vào lịch sử cục bộ: chủ nhân
+    // hỏi "dựa vào các tin alert trong nhóm" thì bot phải đọc được chúng. Từ 19/09
+    // tới 23/09 chúng bị bỏ không lưu, và nhóm alert mất trắng lịch sử mấy ngày đó.
+    // Tin riêng của người lạ vẫn không lưu.
+    if (isGroup) rememberZaloMessage(msg);
     console.log('[bot] discarded denied message');
     return;
   }
@@ -255,7 +260,9 @@ async function handleIncomingMessage(api, msg, stickers = null) {
   }
 
   await enrichSticker(msg, stickers);
-  if (audience === 'guest') rememberZaloMessage(msg);
+  // history_range đọc thẳng từ kho này với giả định mọi tin đã được ghi lúc nhận;
+  // chỉ ghi tin của khách thì "tổng hợp cả ngày" của chủ nhân thiếu chính tin của mình.
+  rememberZaloMessage(msg);
   forwardToHermes(msg, audience);
   console.log('[bot] forwarded admitted message');
   return;

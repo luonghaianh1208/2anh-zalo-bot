@@ -3498,6 +3498,34 @@ def _tool_call_problem(args: Any) -> Optional[str]:
     return str(error) if error else None
 
 
+# Công cụ của chủ nhân mà lượt của chủ nhân TRONG NHÓM vẫn gọi được, miễn là chỉ
+# nhắm vào chính nhóm đó. Nhóm alert không ai gọi bot, nên "tổng hợp alert hôm
+# nay" chỉ có đường là chủ nhân tag bot trong nhóm rồi đọc lại lịch sử nhóm ấy.
+_OWNER_GROUP_SAME_THREAD_TOOLS = frozenset({"zalo_read_history"})
+
+
+def _owner_group_may_call(turn: Dict[str, Any], name: str, args: Any) -> bool:
+    if not (turn.get("is_owner") and turn.get("is_group")):
+        return False
+    if turn.get("cron_job_id") or _outsider_spoke_after(turn):
+        return False
+    underlying, call_args = name, args
+    if name == "tool_call":
+        try:
+            from tools.tool_search import resolve_underlying_call
+
+            underlying, call_args, error = resolve_underlying_call(args if isinstance(args, dict) else {})
+        except Exception:
+            return False
+        if error:
+            return False
+    if underlying not in _OWNER_GROUP_SAME_THREAD_TOOLS:
+        return False
+    current = str(_current_thread() or "")
+    asked = str((call_args or {}).get("thread_id") or "").strip() if isinstance(call_args, dict) else ""
+    return bool(current) and asked in ("", current)
+
+
 def _member_may_call(name: str, args: Any) -> bool:
     if name in _PUBLIC_TOOL_NAMES or name in _TOOL_SEARCH_READS:
         return True
@@ -3615,6 +3643,8 @@ def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Opti
             "message": "MCP chỉ khả dụng trong tin nhắn riêng của chủ nhân.",
         }
     if owner_dm:
+        return None
+    if _owner_group_may_call(turn, name, args):
         return None
     if _member_may_call(name, args):
         return None

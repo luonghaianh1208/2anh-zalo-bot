@@ -193,6 +193,15 @@ test('guest and owner frames route to separate runtimes', async (t) => {
   await waitFor(() => ownerFrames.length === 1 && guestFrames.length === 1, 'routed frames');
   assert.deepEqual(ownerFrames.map((item) => item.senderUid), ['owner']);
   assert.deepEqual(guestFrames.map((item) => item.senderUid), ['guest']);
+  // Mọi tin trong nhóm vào lịch sử, kể cả tin không được chuyển cho runtime nào.
+  assert.equal(store.getHealth().messageCount, 3);
+})
+
+test('tin riêng của người lạ không được chuyển và không được lưu', async (t) => {
+  const { listener, store } = await harness(t);
+  listener.emit('message', incoming({ senderUid: 'stranger', threadId: 'stranger', type: ThreadType.User, messageId: 'dm' }));
+  listener.emit('message', incoming({ senderUid: 'stranger', threadId: 'group-denied', messageId: 'alert' }));
+  await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(store.getHealth().messageCount, 1);
 })
 

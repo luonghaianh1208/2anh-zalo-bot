@@ -3549,9 +3549,46 @@ class ReminderAndBatchFixTests(unittest.TestCase):
         zalo_tools._TURN.set({"sender_uid": "owner", "thread_id": self.GROUP,
                               "is_group": True, "is_owner": True, "text": ""})
         verdict = zalo_tools.guard_member_tool_call(
-            tool_name="zalo_read_history", args={}, task_id="t", session_id="s", tool_call_id="c")
+            tool_name="zalo_list_groups", args={}, task_id="t", session_id="s", tool_call_id="c")
         self.assertIn("ở trong nhóm", verdict["message"])
         self.assertNotIn("chen vào", verdict["message"])
+
+    def _owner_in_group(self, **extra):
+        turn = {"sender_uid": "owner", "thread_id": self.GROUP, "is_group": True,
+                "is_owner": True, "text": ""}
+        turn.update(extra)
+        zalo_tools._TURN.set(turn)
+
+    def _guard(self, name, args):
+        return zalo_tools.guard_member_tool_call(
+            tool_name=name, args=args, task_id="t", session_id="s", tool_call_id="c")
+
+    def test_owner_in_group_may_read_history_of_this_group(self):
+        # Nhóm alert: chủ nhân tag bot để tổng hợp alert, phải đọc được lịch sử nhóm ấy.
+        self._owner_in_group()
+        self.assertIsNone(self._guard("zalo_read_history", {}))
+        self.assertIsNone(self._guard("zalo_read_history", {"thread_id": self.GROUP, "since_hours": 24}))
+
+    def test_owner_in_group_may_not_read_another_thread(self):
+        self._owner_in_group()
+        verdict = self._guard("zalo_read_history", {"thread_id": "9133000000000000999"})
+        self.assertEqual(verdict["action"], "block")
+
+    def test_owner_group_read_exception_needs_owner_and_no_cron(self):
+        zalo_tools._TURN.set({"sender_uid": self.MEMBER, "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": False, "text": ""})
+        self.assertEqual(self._guard("zalo_read_history", {})["action"], "block")
+        self._owner_in_group(cron_job_id="job1")
+        self.assertEqual(self._guard("zalo_read_history", {})["action"], "block")
+
+    def test_owner_group_read_through_tool_call_checks_the_inner_thread(self):
+        self._owner_in_group()
+        with patch("tools.tool_search.resolve_underlying_call",
+                   return_value=("zalo_read_history", {"thread_id": self.GROUP}, None)):
+            self.assertIsNone(self._guard("tool_call", {"name": "zalo_read_history"}))
+        with patch("tools.tool_search.resolve_underlying_call",
+                   return_value=("zalo_read_history", {"thread_id": "other"}, None)):
+            self.assertEqual(self._guard("tool_call", {"name": "zalo_read_history"})["action"], "block")
 
 
 class MemoryGateTests(unittest.TestCase):
