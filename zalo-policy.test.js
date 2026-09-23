@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { authorizeBridgeCommand } from './zalo-policy.js';
+import { authorizeBridgeCommand, threadArgIndex, ZALO_POLICY_METHODS } from './zalo-policy.js';
 
 const publicAuth = {
   actorUid: 'member-1', actorRole: 'public', sourceThreadId: 'group-1', sourceThreadType: 1, confirmed: false,
@@ -142,4 +142,32 @@ test('public actor can list reminders of the active conversation only', () => {
   assert.equal(authorizeBridgeCommand({
     type: 'invoke', method: 'getListReminder', args: [{ page: 1, count: 20 }, 'other-group', 1], auth: publicAuth,
   }, policyOptions).code, 'cross_thread_denied');
+});
+
+test('method công khai nào cũng phải có chỉ số thread hoặc được khai là không nhắm hội thoại', () => {
+  const publicMethods = [...ZALO_POLICY_METHODS.publicRead, ...ZALO_POLICY_METHODS.publicSideEffects];
+  for (const method of publicMethods) {
+    assert.ok(threadArgIndex(method) != null || ZALO_POLICY_METHODS.threadless.has(method), method);
+  }
+  for (const method of ZALO_POLICY_METHODS.threadless) {
+    assert.equal(threadArgIndex(method), undefined, `${method} vừa có chỉ số vừa được khai không nhắm hội thoại`);
+  }
+});
+
+test('method public không khai chỉ số thread thì bị chặn, không mặc định cùng luồng', () => {
+  // Giả lập lần thêm method mới mà quên khai chỉ số: phải hỏng theo hướng chặn.
+  ZALO_POLICY_METHODS.publicSideEffects.add('sendFutureThing');
+  try {
+    assert.equal(authorizeBridgeCommand({
+      type: 'invoke', method: 'sendFutureThing', args: [{}, 'other-group', 1], auth: publicAuth,
+    }, policyOptions).code, 'cross_thread_denied');
+  } finally {
+    ZALO_POLICY_METHODS.publicSideEffects.delete('sendFutureThing');
+  }
+});
+
+test('audit và policy dùng chung một bảng chỉ số thread', () => {
+  assert.equal(threadArgIndex('getListReminder'), 1);
+  assert.equal(threadArgIndex('removeUserFromGroup'), 1);
+  assert.equal(threadArgIndex('searchSticker'), undefined);
 });

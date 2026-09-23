@@ -10,7 +10,7 @@ import { classifyAttachments } from './zalo-attachments.js';
 import { pickSmartReaction } from './smart-reaction.js';
 import { RateLimiter, RateLimitedError, THROTTLED_METHODS } from './rate-limiter.js';
 import { openZaloStore } from './zalo-store.js';
-import { authorizeBridgeCommand } from './zalo-policy.js';
+import { authorizeBridgeCommand, threadArgIndex } from './zalo-policy.js';
 
 /**
  * Cầu nối Zalo ↔ Hermes Agent.
@@ -760,13 +760,7 @@ function policyErrorMessage(code) {
 
 function auditTargetSummary(cmd) {
   const args = Array.isArray(cmd.args) ? cmd.args : [];
-  const targetIndexes = {
-    sendMessage: 1, sendVoice: 1, sendSticker: 1, sendLink: 1,
-    uploadAttachment: 1, createReminder: 1, removeReminder: 1,
-    changeGroupName: 1, addUserToGroup: 1,
-    removeUserFromGroup: 1, addGroupDeputy: 1, removeGroupDeputy: 1,
-  };
-  const invokeIndex = targetIndexes[String(cmd.method || '')];
+  const invokeIndex = threadArgIndex(cmd.method);
   const invokeThreadId = invokeIndex == null ? undefined : args[invokeIndex];
   const summary = {
     commandType: String(cmd.type || ''),
