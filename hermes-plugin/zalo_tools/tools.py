@@ -887,19 +887,53 @@ async def zalo_create_note(args: Dict[str, Any], **_kw) -> str:
     }, group_id])
 
 
+def _reminder_start(args: Dict[str, Any]) -> tuple[Optional[datetime], Optional[str]]:
+    """Đổi `time` (giờ địa phương, người đọc được) hoặc `start_time` (ms) thành datetime.
+
+    Model tự tính epoch thì sai: lượt 23/09 nó đặt 1790188200000 — 01:30 sáng —
+    rồi báo nhóm là "15:13". Giờ địa phương là TZ của container.
+    """
+    raw = str(args.get("time") or "").strip()
+    if raw:
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%d/%m/%Y %H:%M"):
+            try:
+                return datetime.strptime(raw, fmt).astimezone(), None
+            except ValueError:
+                continue
+        return None, "`time` phải có dạng 'YYYY-MM-DD HH:MM' theo giờ Việt Nam"
+    if args.get("start_time") is not None:
+        try:
+            return datetime.fromtimestamp(int(args["start_time"]) / 1000).astimezone(), None
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None, "`start_time` phải là mili giây kể từ epoch"
+    return None, "cần `time` dạng 'YYYY-MM-DD HH:MM' (giờ Việt Nam)"
+
+
 async def zalo_create_reminder(args: Dict[str, Any], **_kw) -> str:
     title = (args.get("title") or "").strip()
-    start_time = args.get("start_time")
-    if not title or start_time is None:
-        return _err("cần `title` và `start_time` (mốc thời gian tính bằng mili giây)")
+    if not title:
+        return _err("cần `title`")
+    start, problem = _reminder_start(args)
+    if problem:
+        return _err(problem)
+    if start <= datetime.now().astimezone():
+        return _err(f"thời điểm {start:%H:%M %d/%m/%Y} đã qua — chọn một giờ trong tương lai")
     thread_id, kind, err = _scoped_thread(args)
     if err:
         return err
-    return await _invoke("createReminder", [{
+    out = await _invoke("createReminder", [{
         "title": title,
-        "startTime": int(start_time),
+        "startTime": int(start.timestamp() * 1000),
         "repeat": int(args.get("repeat", 0)),
     }, thread_id, _thread_type(kind)])
+    # Kèm giờ đã đặt, đọc được, để câu trả lời cho nhóm nói đúng giờ thật.
+    try:
+        body = json.loads(out)
+    except ValueError:
+        return out
+    if body.get("success"):
+        body["nhac_luc"] = f"{start:%H:%M} {start:%d/%m/%Y}"
+    return json.dumps(body, ensure_ascii=False)
 
 
 async def zalo_list_reminders(args: Dict[str, Any], **_kw) -> str:
@@ -2892,12 +2926,15 @@ TOOLS = [
             "thread_id": _THREAD_ID,
             "thread_kind": _THREAD_KIND,
             "title": {"type": "string", "description": "Nội dung nhắc."},
+            "time": {"type": "string", "description":
+                     "Giờ nhắc theo giờ Việt Nam, dạng 'YYYY-MM-DD HH:MM', ví dụ "
+                     "'2026-09-24 15:00'. Đừng tự tính epoch."},
             "start_time": {"type": "integer",
-                           "description": "Thời điểm nhắc, tính bằng mili giây kể từ epoch."},
+                           "description": "Cách cũ: mili giây kể từ epoch. Dùng `time` thay thế."},
             "repeat": {"type": "integer",
                        "description": "0 không lặp, 1 hằng ngày, 2 hằng tuần, 3 hằng tháng."},
         },
-        ["thread_id", "title", "start_time"],
+        ["thread_id", "title"],
     ), zalo_create_reminder, TOOLSET_PUBLIC),
 
     ("zalo_list_reminders", "🔔", _schema(
@@ -3450,6 +3487,17 @@ def _resolved_tool_name(name: str, args: Any) -> Optional[str]:
     return str(underlying)
 
 
+def _tool_call_problem(args: Any) -> Optional[str]:
+    """Lỗi hình dạng mà chính Hermes báo cho một tool_call, hoặc None."""
+    try:
+        from tools.tool_search import resolve_underlying_call
+
+        _name, _args, error = resolve_underlying_call(args if isinstance(args, dict) else {})
+    except Exception:
+        return None
+    return str(error) if error else None
+
+
 def _member_may_call(name: str, args: Any) -> bool:
     if name in _PUBLIC_TOOL_NAMES or name in _TOOL_SEARCH_READS:
         return True
@@ -3482,9 +3530,17 @@ def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Opti
         if name == "tool_call" and owner_dm:
             return None
         logger.warning("[zalo] generic core action denied")
+        # Vẫn chặn, nhưng một tool_call hỏng hình dạng (gộp nhiều lệnh, `calls`
+        # là chuỗi) phải nói được vì sao. "Không khả dụng" trơn khiến model tưởng
+        # tool bị cấm: lượt 23/09 nó tạo trùng ba lời nhắc rồi không xoá được vì
+        # cứ gộp ba lệnh xoá vào một tool_call.
+        problem = _tool_call_problem(args) if name == "tool_call" else None
         return {
             "action": "block",
-            "message": "Hành động này không khả dụng qua Zalo.",
+            "message": (
+                f"tool_call không chạy: {problem} Gọi mỗi công cụ bằng một tool_call riêng."
+                if problem else "Hành động này không khả dụng qua Zalo."
+            ),
         }
     if resolved in ZALO_DENIED_CORE_TOOLS:
         logger.warning("[zalo] generic core action denied")
@@ -3512,9 +3568,14 @@ def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Opti
     if _member_may_call(name, args):
         return None
     logger.warning("[zalo] chặn %s — lượt không phải của riêng chủ nhân", name)
-    reason = ("lượt của chủ nhân nhưng có tin người khác chen vào"
-              if turn.get("is_owner") or turn.get("core_tools")
-              else "lượt này do người trong nhóm gửi")
+    # Lý do phải đúng sự thật: lượt 23/09 của chủ nhân trong nhóm nhận "có tin người
+    # khác chen vào" dù không ai chen, và model đi đoán nguyên nhân sai.
+    if not (turn.get("is_owner") or turn.get("core_tools")):
+        reason = "lượt này do người trong nhóm gửi"
+    elif turn.get("is_group"):
+        reason = "lượt này ở trong nhóm, không phải tin nhắn riêng"
+    else:
+        reason = "lượt của chủ nhân nhưng có tin người khác chen vào"
     return {
         "action": "block",
         "message": (f"Công cụ {name} chỉ dùng được trong lượt của riêng chủ nhân ({reason}). "

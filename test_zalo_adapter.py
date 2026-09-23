@@ -3480,5 +3480,79 @@ class SessionExpiryTests(unittest.TestCase):
         asyncio.run(adapter._expire_stale_session(SimpleNamespace(user_id="u", user_name="n")))
 
 
+class ReminderAndBatchFixTests(unittest.TestCase):
+    """Lượt 23/09 "lên lịch cafe": model tự tính epoch ra 01:30 sáng rồi báo 15:13,
+    tạo trùng ba lời nhắc, và không xoá được vì cứ gộp lệnh vào một tool_call."""
+
+    GROUP = "9133000000000000001"
+    MEMBER = "3900000000000000001"
+
+    def setUp(self):
+        self.token = zalo_tools._TURN.set({"sender_uid": self.MEMBER, "thread_id": self.GROUP,
+                                           "is_group": True, "is_owner": False, "text": ""})
+        self.sent = []
+
+        async def fake_invoke(method, args):
+            self.sent.append((method, args))
+            return json.dumps({"success": True, "result": {"id": "r1"}})
+
+        self._patch = patch.object(zalo_tools, "_invoke", fake_invoke)
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        zalo_tools._TURN.reset(self.token)
+
+    def _create(self, **args):
+        args.setdefault("title", "Cafe")
+        return json.loads(asyncio.run(zalo_tools.zalo_create_reminder(args)))
+
+    def test_human_time_is_converted_by_the_tool_not_the_model(self):
+        from datetime import datetime, timedelta
+        when = (datetime.now() + timedelta(days=1)).replace(hour=15, minute=0, second=0, microsecond=0)
+        out = self._create(time=when.strftime("%Y-%m-%d %H:%M"))
+        self.assertTrue(out["success"])
+        self.assertEqual(out["nhac_luc"], when.strftime("%H:%M %d/%m/%Y"))
+        method, args = self.sent[0]
+        self.assertEqual(method, "createReminder")
+        self.assertEqual(args[0]["startTime"], int(when.astimezone().timestamp() * 1000))
+
+    def test_a_time_in_the_past_is_refused_before_sending(self):
+        out = self._create(time="2020-01-01 09:00")
+        self.assertFalse(out["success"])
+        self.assertIn("đã qua", out["error"])
+        self.assertEqual(self.sent, [])
+
+    def test_unparseable_time_is_refused(self):
+        self.assertFalse(self._create(time="chiều mai")["success"])
+        self.assertFalse(self._create()["success"])
+        self.assertEqual(self.sent, [])
+
+    def test_legacy_epoch_still_works_and_reports_the_real_time(self):
+        from datetime import datetime, timedelta
+        when = datetime.now().astimezone() + timedelta(hours=3)
+        out = self._create(start_time=int(when.timestamp() * 1000))
+        self.assertTrue(out["success"])
+        self.assertEqual(out["nhac_luc"], when.strftime("%H:%M %d/%m/%Y"))
+
+    def test_a_batched_tool_call_is_blocked_with_the_reason(self):
+        verdict = zalo_tools.guard_member_tool_call(
+            tool_name="tool_call", args={"calls": [
+                {"name": "zalo_remove_reminder", "arguments": {"reminder_id": "1"}},
+                {"name": "zalo_remove_reminder", "arguments": {"reminder_id": "2"}},
+            ]}, task_id="t", session_id="s", tool_call_id="c")
+        self.assertEqual(verdict["action"], "block")
+        self.assertIn("một tool_call riêng", verdict["message"])
+        self.assertNotEqual(verdict["message"], "Hành động này không khả dụng qua Zalo.")
+
+    def test_owner_group_refusal_names_the_real_reason(self):
+        zalo_tools._TURN.set({"sender_uid": "owner", "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": True, "text": ""})
+        verdict = zalo_tools.guard_member_tool_call(
+            tool_name="zalo_read_history", args={}, task_id="t", session_id="s", tool_call_id="c")
+        self.assertIn("ở trong nhóm", verdict["message"])
+        self.assertNotIn("chen vào", verdict["message"])
+
+
 if __name__ == "__main__":
     unittest.main()
