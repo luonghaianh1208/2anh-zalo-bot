@@ -1,4 +1,5 @@
 import asyncio
+import importlib.util
 import json
 import os
 import sys
@@ -27,10 +28,82 @@ from plugins.platforms.zalo import adapter as zalo_adapter
 from plugins.zalo_tools import tools as zalo_tools
 from cron import jobs as real_cron_jobs
 
+# Bốn thư viện sinh tệp cố tình KHÔNG có trong image hermes — xem
+# docker/hermes-zalo.Dockerfile: "document capabilities were deferred". Đo trong
+# container ngày 18/09/2026: thiếu cả bốn. Chúng được import muộn bên trong công
+# cụ sinh tệp, nên chat vẫn chạy; nhưng bài kiểm thử nào dựng .docx thật sẽ đỏ ở
+# đúng nơi duy nhất chạy được nó. Đỏ vì môi trường thiếu dép không phải đỏ vì mã
+# sai, nên bỏ qua có nêu lý do — và khi nào cài dép, chúng tự chạy lại.
+_FILE_MAKER_DEPS = ("docx", "fpdf", "openpyxl", "pptx")
+_MISSING_FILE_MAKER_DEPS = [
+    name for name in _FILE_MAKER_DEPS if importlib.util.find_spec(name) is None
+]
+requires_file_maker_deps = unittest.skipIf(
+    bool(_MISSING_FILE_MAKER_DEPS),
+    f"thiếu thư viện sinh tệp: {', '.join(_MISSING_FILE_MAKER_DEPS)}",
+)
+
 
 class DummyZaloTools:
     def set_turn_context(self, **kwargs):
         self.context = kwargs
+    def bind_turn(self, turn):
+        self.turn = turn
+
+
+
+class ZaloResolvedAllowlistTest(unittest.TestCase):
+    def test_reads_guests_from_roster_without_returning_owners(self):
+        owner_uid = "9000000000000000001"
+        guest_uid = "9000000000000000002"
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = os.path.join(directory, "roster.json")
+            with open(roster_path, "w", encoding="utf-8") as roster_file:
+                json.dump({
+                    "version": 1,
+                    "owners": [owner_uid],
+                    "guests": [guest_uid],
+                }, roster_file)
+            with patch.dict(os.environ, {"ZALO_ROSTER_FILE": roster_path}):
+                adapter = zalo_adapter.ZaloAdapter(PlatformConfig(enabled=True, extra={}))
+                self.assertEqual(adapter.resolved_allowlist_user_ids(), {guest_uid})
+
+            os.unlink(roster_path)
+            with patch.dict(os.environ, {"ZALO_ROSTER_FILE": roster_path}):
+                self.assertEqual(adapter.resolved_allowlist_user_ids(), set())
+
+
+class ZaloGuestTierSourcesTest(unittest.TestCase):
+    """_is_guest phải nhìn cả hai nguồn khách, không chỉ env.
+
+    Lỗi đo được trên VM 18/09/2026: một khách cấp bằng lệnh chat qua được cửa 1
+    và qua được admission của gateway, rồi bị toolsets_for_source xếp là "không
+    phải chủ nhân cũng không phải khách" và nhận TOOLSET_DENIED — không còn công
+    cụ nào. Nhìn từ phía người dùng là bot không làm được gì, không phải một câu
+    từ chối.
+    """
+
+    def test_guest_only_in_roster_is_still_a_guest(self):
+        owner_uid = "9000000000000000001"
+        chat_granted_guest = "9000000000000000002"
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = os.path.join(directory, "roster.json")
+            with open(roster_path, "w", encoding="utf-8") as roster_file:
+                json.dump({
+                    "version": 1,
+                    "owners": [owner_uid],
+                    "guests": [chat_granted_guest],
+                }, roster_file)
+            # GATEWAY_ALLOWED_USERS rỗng: khách này CHỈ có trong roster, đúng
+            # trạng thái sau một lần cấp bằng chat.
+            with patch.dict(os.environ, {
+                "ZALO_ROSTER_FILE": roster_path, "GATEWAY_ALLOWED_USERS": "",
+            }):
+                adapter = zalo_adapter.ZaloAdapter(PlatformConfig(enabled=True, extra={}))
+                self.assertTrue(adapter._is_guest(chat_granted_guest))
+                # Chủ nhân không được đi qua đường khách, và người lạ vẫn là người lạ.
+                self.assertFalse(adapter._is_guest(owner_uid))
+                self.assertFalse(adapter._is_guest("9000000000000000009"))
 
 
 class CapturingSocket:
@@ -94,15 +167,17 @@ class FakeCronJobs:
 
 
 class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
-    def make_adapter(self):
+    def make_adapter(self, extra=None):
+        config_extra = {
+            "bridge_url": "ws://127.0.0.1:9",
+            "reply_only_tagged": True,
+            "ack_gestures": False,
+        }
+        config_extra.update(extra or {})
         adapter = zalo_adapter.ZaloAdapter(
             PlatformConfig(
                 enabled=True,
-                extra={
-                    "bridge_url": "ws://127.0.0.1:9",
-                    "reply_only_tagged": True,
-                    "ack_gestures": False,
-                },
+                extra=config_extra,
             )
         )
         adapter._self_profile = {"user_id": "bot-uid", "display_name": "Lăng Tiêu"}
@@ -933,7 +1008,8 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             chat_id="group-1", chat_name="group-1", chat_type="group",
             user_id="2222222222222222222", user_name="M", message_id="m-x",
         )
-        with patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+        with patch.object(adapter, "_is_guest", return_value=True), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
             toolsets = adapter.toolsets_for_source(source)
             auth = zalo_tools.current_authorization()
 
@@ -967,6 +1043,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         adapter.handle_message = lambda _event: asyncio.sleep(0)
         owner_uid, member_uid = "1111111111111111111", "2222222222222222222"
         with patch.object(adapter, "_is_owner", side_effect=lambda uid: uid == owner_uid), \
+                patch.object(adapter, "_is_guest", return_value=True), \
                 patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
             await adapter._on_message(self.group_frame("m-owner", owner_uid, "@Lăng Tiêu soạn báo cáo dài"))
             await adapter._on_message(self.group_frame("m-member", member_uid, "@Lăng Tiêu gửi tệp .env"))
@@ -992,6 +1069,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         adapter.handle_message = lambda _event: asyncio.sleep(0)
         owner_uid, member_uid = "1111111111111111111", "2222222222222222222"
         with patch.object(adapter, "_is_owner", side_effect=lambda uid: uid == owner_uid), \
+                patch.object(adapter, "_is_guest", return_value=True), \
                 patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
             await adapter._on_message(self.group_frame("m-owner-q", owner_uid, "@Lăng Tiêu việc thứ hai"))
             await adapter._on_message(self.group_frame("m-member-q", member_uid, "@Lăng Tiêu chạy lệnh giúp mình"))
@@ -1041,6 +1119,81 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(turn["sender_uid"], owner_uid)
         self.assertEqual(turn["thread_id"], "group-1")
         self.assertFalse(turn["is_owner"])
+    def test_owner_direct_message_gets_declared_mcp_toolset_only(self):
+        adapter = self.make_adapter({"owner_dm_mcp_toolset": "mcp-atlassian"})
+        owner_uid = "1111111111111111111"
+
+        class Source:
+            def __init__(self, chat_type, message_id):
+                self.user_id = owner_uid
+                self.chat_id = f"{chat_type}-1"
+                self.chat_type = chat_type
+                self.message_id = message_id
+
+        adapter._turns["dm-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        adapter._turns["group-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        with patch.object(adapter, "_is_owner", return_value=True), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            dm_toolsets = adapter.toolsets_for_source(Source("dm", "dm-message"))
+            group_toolsets = adapter.toolsets_for_source(Source("group", "group-message"))
+
+        self.assertIn("mcp-atlassian", dm_toolsets)
+        self.assertNotIn("mcp-atlassian", group_toolsets)
+
+    def test_owner_direct_message_gets_every_declared_mcp_toolset(self):
+        """Một khe duy nhất nghĩa là Jira hoặc Sentry, không bao giờ cả hai.
+
+        Cấu hình khai báo danh sách; owner DM nhận đủ, nhóm không nhận gì.
+        """
+        adapter = self.make_adapter(
+            {"owner_dm_mcp_toolsets": ["mcp-atlassian", "mcp-sentry"]})
+        owner_uid = "1111111111111111111"
+
+        class Source:
+            def __init__(self, chat_type, message_id):
+                self.user_id = owner_uid
+                self.chat_id = f"{chat_type}-1"
+                self.chat_type = chat_type
+                self.message_id = message_id
+
+        adapter._turns["dm-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        adapter._turns["group-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        with patch.object(adapter, "_is_owner", return_value=True), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            dm_toolsets = adapter.toolsets_for_source(Source("dm", "dm-message"))
+            group_toolsets = adapter.toolsets_for_source(Source("group", "group-message"))
+
+        self.assertIn("mcp-atlassian", dm_toolsets)
+        self.assertIn("mcp-sentry", dm_toolsets)
+        self.assertNotIn("mcp-atlassian", group_toolsets)
+        self.assertNotIn("mcp-sentry", group_toolsets)
+
+    def test_owner_dm_mcp_toolsets_keeps_the_mcp_prefix_boundary(self):
+        """`mcp-` là ranh giới guard dùng để cấm MCP ngoài owner DM.
+
+        Một tên không mang tiền tố ấy sẽ được guard xếp là công cụ thường và
+        thoát khỏi quy tắc đó, nên danh sách phải loại nó ngay từ cấu hình.
+        Trùng lặp cũng bị gộp để schema không nhận hai bản cùng một toolset.
+        """
+        adapter = self.make_adapter(
+            {"owner_dm_mcp_toolsets": ["sentry", "mcp-sentry", "mcp-sentry", "  mcp-atlassian  "]})
+        owner_uid = "1111111111111111111"
+
+        class Source:
+            def __init__(self):
+                self.user_id = owner_uid
+                self.chat_id = "dm-1"
+                self.chat_type = "dm"
+                self.message_id = "dm-message"
+
+        adapter._turns["dm-message"] = {"sender_uid": owner_uid, "is_owner": True}
+        with patch.object(adapter, "_is_owner", return_value=True), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=zalo_tools):
+            dm_toolsets = adapter.toolsets_for_source(Source())
+
+        self.assertNotIn("sentry", dm_toolsets)
+        self.assertEqual(dm_toolsets.count("mcp-sentry"), 1)
+        self.assertIn("mcp-atlassian", dm_toolsets)
 
     async def test_group_turn_text_drops_bot_mention_so_confirmation_can_match(self):
         adapter = self.make_adapter()
@@ -1400,6 +1553,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observed[0][1]["actorUid"], "member-current")
         self.assertEqual(observed[0][1]["sourceThreadId"], "group-ack")
 
+    @requires_file_maker_deps
     def test_file_maker_builds_all_four_formats_with_vietnamese_text(self):
         def file_maker_black():
             from docx.shared import RGBColor
@@ -1466,6 +1620,7 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(file_maker.FileSpecError, msg=fmt):
                     file_maker.make_file(fmt, "T", directory=tmp, **kwargs)
 
+    @requires_file_maker_deps
     async def test_make_file_tool_sends_to_current_group_limits_members_and_cleans_up(self):
         class FakeAdapter:
             def __init__(self):
@@ -1620,6 +1775,83 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(result["seconds"], 1.0)
 
 
+    async def test_platform_tools_enforce_owner_file_guest_and_stranger_tiers(self):
+        from hermes_cli.tools_config import (_get_platform_tools,
+                                             _get_plugin_toolset_keys)
+        from toolsets import resolve_toolset
+
+        # Bài này đo tầng quyền qua registry thật, nên nó cần plugin Zalo đã
+        # được khám phá. Đo ngày 18/09/2026: _get_plugin_toolset_keys() đọc bộ
+        # khoá mà lần chạy trước đã lưu trong HOME của Hermes
+        # (tools_config.py:158, get_plugin_toolset_keys_nowait). Trong một
+        # container trống với HOME sạch, bộ đó rỗng → ``zalo_public`` giải ra 0
+        # công cụ và bài kiểm thử đỏ vì thiếu môi trường, chứ không vì quyền sai.
+        # Chạy trong container hermes đang phục vụ (env thật) thì nó giải đúng
+        # 16. Bỏ qua kèm lý do thay vì hạ con số 16 xuống cho xanh.
+        if zalo_tools.TOOLSET_PUBLIC not in _get_plugin_toolset_keys():
+            self.skipTest(
+                "plugin Zalo chưa được khám phá trong môi trường này — "
+                "chạy bài này trong container hermes có HOME thật"
+            )
+
+        zalo_tools.define_platform_composite()
+        zalo_tools.define_denied_toolset()
+        adapter = self.make_adapter()
+        owner_uid = "9000000000000000001"
+        guest_uid = "9000000000000000002"
+        stranger_uid = "9000000000000000003"
+
+        def effective_tools(uid):
+            source = adapter.build_source(
+                chat_id="9000000000000000004", chat_name="group-1", chat_type="group",
+                user_id=uid, user_name=uid, message_id=f"message-{uid}",
+            )
+            override = adapter.toolsets_for_source(source)
+            # ``known_plugin_toolsets`` phải có. Thiếu khoá này thì
+            # _get_platform_tools trả về cả ``zalo_owner`` cho lượt khách,
+            # biến fixture thành một thế giới lỏng hơn runtime. Config đã triển
+            # khai có khoá này; với nó, khách đo đúng 16 công cụ và không có
+            # ``terminal``. Đừng tăng count để che mất ranh giới đó.
+            probe = {
+                "platform_toolsets": {"zalo": override},
+                "known_plugin_toolsets": {
+                    "zalo": [zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_PUBLIC,
+                             zalo_tools.TOOLSET_CRON],
+                },
+            }
+            return {tool for toolset in _get_platform_tools(probe, "zalo")
+                    for tool in resolve_toolset(toolset)}
+
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = os.path.join(directory, "roster.json")
+            with open(roster_path, "w", encoding="utf-8") as roster_file:
+                json.dump({
+                    "version": 1,
+                    "owners": [owner_uid],
+                    "guests": [guest_uid],
+                }, roster_file)
+            with open(os.path.join(directory, "guest-groups.json"), "w", encoding="utf-8") as groups_file:
+                json.dump({"version": 1, "guestGroups": ["9000000000000000004"]}, groups_file)
+
+            with patch.dict(os.environ, {
+                "ZALO_ALLOWED_USERS": owner_uid,
+                "GATEWAY_ALLOWED_USERS": "",
+                "ZALO_ROSTER_FILE": roster_path,
+                "ZALO_ALLOW_ALL_USERS": "true",
+            }), patch.object(adapter, "_bind_turn_for_source", side_effect=lambda _source, uid: uid == owner_uid):
+                owner_tools = effective_tools(owner_uid)
+                guest_tools = effective_tools(guest_uid)
+                stranger_tools = effective_tools(stranger_uid)
+                self.assertFalse(set(zalo_tools.ZALO_DENIED_CORE_TOOLS) & owner_tools)
+                self.assertEqual(len(guest_tools), 16)
+                self.assertFalse(set(zalo_tools.ZALO_DENIED_CORE_TOOLS) & guest_tools)
+                self.assertEqual(stranger_tools, set())
+                self.assertTrue(adapter._may_greet(guest_uid))
+                self.assertFalse(adapter._may_greet(stranger_uid))
+
+
+
+
 class ZaloToolSchemaTest(unittest.TestCase):
     def test_every_zalo_tool_has_one_unique_public_or_owner_assignment(self):
         names = [name for name, _emoji, _schema, _handler, _toolset in zalo_tools.TOOLS]
@@ -1628,7 +1860,11 @@ class ZaloToolSchemaTest(unittest.TestCase):
         self.assertEqual(set(assignments), {
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 16)
+        # 17 kể từ khi thêm zalo_laya_route: Laya là bộ phân loại nội bộ mà
+        # thành viên nhóm cũng được dùng, nên nó thuộc public chứ không phải owner.
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 17)
+        # Owner tool count excludes guest-user lifecycle tools. Any new owner
+        # tool must update this explicit boundary assertion.
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 34)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 
@@ -2636,24 +2872,27 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
     def tearDown(self):
         zalo_tools._TURN.reset(self.turn_token)
 
-    def guard(self, tool_name):
+    def guard(self, tool_name, args=None):
         return zalo_tools.guard_member_tool_call(
-            tool_name=tool_name, args={}, task_id="t", session_id="s", tool_call_id="c",
+            tool_name=tool_name, args=args if args is not None else {}, task_id="t", session_id="s", tool_call_id="c",
         )
 
     def bind_member(self):
         zalo_tools.bind_turn({"sender_uid": self.MEMBER, "thread_id": self.GROUP,
                               "is_group": True, "is_owner": False, "text": ""})
 
-    def test_member_turn_cannot_run_pinned_core_tools(self):
-        self.bind_member()
-        for name in ("terminal", "search_files", "read_file", "write_file",
-                     "vision_analyze", "execute_code", "delegate_task"):
-            verdict = self.guard(name)
-            self.assertEqual(verdict["action"], "block", name)
-            self.assertIn(name, verdict["message"])
+    def test_every_zalo_role_denies_generic_mutation_tools(self):
+        for turn in (
+            {"sender_uid": self.MEMBER, "thread_id": self.GROUP, "is_group": True, "is_owner": False, "text": ""},
+            {"sender_uid": "9200000000000000001", "thread_id": self.GROUP, "is_group": True, "is_owner": True, "text": ""},
+        ):
+            zalo_tools.bind_turn(turn)
+            for name in zalo_tools.ZALO_DENIED_CORE_TOOLS:
+                verdict = self.guard(name)
+                self.assertEqual(verdict["action"], "block", name)
+                self.assertEqual(verdict["message"], "Hành động này không khả dụng qua Zalo.")
 
-    def test_member_turn_keeps_public_zalo_mcp_and_tool_search_bridge(self):
+    def test_member_turn_keeps_public_zalo_and_tool_search_bridge(self):
         self.bind_member()
         public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
         owner_only = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_OWNER)
@@ -2661,17 +2900,51 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
         self.assertIsNone(self.guard("tool_search"))
         self.assertEqual(self.guard(owner_only)["action"], "block")
 
+    def test_mcp_requires_owner_direct_message_even_through_tool_call(self):
         from tools.registry import registry
-        with patch.object(registry, "get_toolset_for_tool", return_value="mcp-rag"):
-            self.assertIsNone(self.guard("rag_search"))
 
-    def test_owner_turn_and_non_zalo_contexts_are_untouched(self):
+        with patch("tools.tool_search.resolve_underlying_call", return_value=("jira_search", {}, None)), \
+                patch.object(registry, "get_toolset_for_tool", return_value="mcp-atlassian"):
+            self.bind_member()
+            self.assertEqual(self.guard("tool_call", {"name": "jira_search"})["action"], "block")
+
+            zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                                  "is_group": True, "is_owner": True, "text": ""})
+            self.assertEqual(self.guard("tool_call", {"name": "jira_search"})["action"], "block")
+
+            zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": "dm-owner",
+                                  "is_group": False, "is_owner": True, "text": ""})
+            self.assertIsNone(self.guard("tool_call", {"name": "jira_search"}))
+    def test_owner_dm_delegates_unresolved_tool_call_to_safe_bridge(self):
+        with patch("tools.tool_search.resolve_underlying_call", return_value=(None, {}, "invalid bridge payload")):
+            self.bind_member()
+            self.assertEqual(self.guard("tool_call", {})["action"], "block")
+
+            zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                                  "is_group": True, "is_owner": True, "text": ""})
+            self.assertEqual(self.guard("tool_call", {})["action"], "block")
+
+            zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": "dm-owner",
+                                  "is_group": False, "is_owner": True, "text": ""})
+            self.assertIsNone(self.guard("tool_call", {}))
+    def test_mcp_registry_failure_fails_closed(self):
+        from tools.registry import registry
+
+        zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": True, "text": ""})
+        with patch.object(registry, "get_toolset_for_tool", side_effect=RuntimeError("registry failed")), \
+                patch("tools.tool_search.resolve_underlying_call", return_value=("jira_search", {}, None)):
+            self.assertEqual(self.guard("jira_search")["action"], "block")
+            self.assertEqual(self.guard("tool_call", {"name": "jira_search"})["action"], "block")
+
+    def test_non_zalo_context_is_untouched_and_owner_keeps_narrow_group_lifecycle(self):
         self.assertIsNone(self.guard("terminal"))
         zalo_tools.bind_turn(None)
         self.assertIsNone(self.guard("terminal"))
         zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
                               "is_group": True, "is_owner": True, "text": ""})
-        self.assertIsNone(self.guard("terminal"))
+        self.assertIsNone(self.guard("zalo_grant_guest_group"))
+        self.assertIsNone(self.guard("zalo_revoke_guest_group"))
 
     def test_plugin_entry_registers_the_guard_as_pre_tool_call_hook(self):
         import plugins.zalo_tools as plugin
@@ -2682,51 +2955,35 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             plugin.register(ctx)
         self.assertEqual(ctx.hooks.get("pre_tool_call"), [zalo_tools.guard_member_tool_call])
 
-    def test_owner_turn_loses_core_tools_once_an_outsider_tags_the_bot_in_the_same_thread(self):
+    def test_owner_turn_blocks_generic_core_even_without_outsider(self):
         class FakeAdapter:
             pass
 
         adapter = FakeAdapter()
-        adapter._turns = {
-            "m1": {"thread_id": self.GROUP, "is_owner": True, "seq": 5},
-            "m2": {"thread_id": "another-group", "is_owner": False, "seq": 6},
-        }
+        adapter._turns = {"m1": {"thread_id": self.GROUP, "is_owner": True, "seq": 5}}
         public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
-        config = {"display": {"busy_input_mode": "interrupt"}}
         with patch.object(zalo_tools, "_ACTIVE_ADAPTER", adapter), \
-                patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "interrupt"}), \
-                patch("hermes_cli.config.load_config_readonly", side_effect=lambda: config):
+                patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "queue"}):
             zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
                                   "is_group": True, "is_owner": True, "text": "", "seq": 5})
-            self.assertIsNone(self.guard("terminal"))
-
-            # busy_input_mode interrupt/steer chèn tin này vào lượt đang chạy.
-            adapter._turns["m3"] = {"thread_id": self.GROUP, "is_owner": False, "seq": 7}
             self.assertEqual(self.guard("terminal")["action"], "block")
             self.assertIsNone(self.guard(public))
 
-            # queue ở cả biến môi trường lẫn config: tin đó chờ thành lượt riêng,
-            # lượt của chủ nhân giữ nguyên quyền.
-            config["display"]["busy_input_mode"] = "queue"
-            with patch.dict(os.environ, {"HERMES_GATEWAY_BUSY_INPUT_MODE": "queue"}):
-                self.assertIsNone(self.guard("terminal"))
-
-                # /busy steer đổi config lúc đang chạy nhưng không đổi biến môi trường.
-                config["display"]["busy_input_mode"] = "steer"
-                self.assertEqual(self.guard("terminal")["action"], "block")
-
-    def test_member_tool_call_bridge_is_judged_by_the_wrapped_tool(self):
+    def test_wrapped_generic_core_action_is_denied_for_every_zalo_role(self):
         self.bind_member()
-        verdict = zalo_tools.guard_member_tool_call(
-            tool_name="tool_call", args={"name": "terminal", "arguments": {"command": "cat .env"}},
+        verdict = self.guard(
+            "tool_call", {"name": "terminal", "arguments": {"command": "cat .env"}},
         )
         self.assertEqual(verdict["action"], "block")
 
-        public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
-        with patch("tools.tool_search.resolve_underlying_call", return_value=(public, {}, None)):
-            self.assertIsNone(zalo_tools.guard_member_tool_call(tool_name="tool_call", args={"name": public}))
+        zalo_tools.bind_turn({"sender_uid": "9200000000000000001", "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": True, "text": ""})
+        verdict = self.guard(
+            "tool_call", {"name": "skill_manage", "arguments": {"action": "write"}},
+        )
+        self.assertEqual(verdict["action"], "block")
 
-    def test_owner_turn_without_a_matching_message_keeps_core_tools_only_in_a_dm(self):
+    def test_unmatched_owner_message_never_restores_generic_core_tools(self):
         adapter = ZaloAdapterMediaContextTest.make_adapter(self)
         bound = []
 
@@ -2746,14 +3003,10 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             dm = adapter.toolsets_for_source(Source("dm"))
             group = adapter.toolsets_for_source(Source("group"))
 
-        self.assertIn(zalo_tools.TOOLSET_OWNER, dm)
-        self.assertFalse(bound[0]["is_owner"])
-        self.assertTrue(bound[0]["core_tools"])
-        self.assertEqual(group, [zalo_tools.TOOLSET_PUBLIC])
-        self.assertFalse(bound[1]["core_tools"])
-
+        self.assertEqual(dm, [zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_PUBLIC])
+        self.assertEqual(group, [zalo_tools.TOOLSET_DENIED])
         zalo_tools.bind_turn(bound[0])
-        self.assertIsNone(self.guard("terminal"))
+        self.assertEqual(self.guard("terminal")["action"], "block")
         zalo_tools.bind_turn(bound[1])
         self.assertEqual(self.guard("terminal")["action"], "block")
 
@@ -2892,6 +3145,511 @@ class ZaloKbScopeTest(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"ZALO_KB_PUBLIC_DIRS": ""}):
             self.assertEqual(len(self.paths(await zalo_tools.zalo_kb_list({}))), 3)
 
+
+class BridgeKeepaliveBoundsTest(unittest.TestCase):
+    """Keepalive phải sống lâu hơn MỌI cửa sổ chờ, không chỉ cửa sổ ack.
+
+    Lỗi 18/09/2026: ping timeout 180s < approval timeout 300s, nên một công cụ
+    chờ người bấm approve/deny sẽ tự giết đường gửi của chính nó — prompt không
+    tới Zalo, người dùng không thể trả lời, rồi retry gửi mỗi 2 giây vô hạn.
+    Đây là một quan hệ số học giữa hai tệp, thứ không lộ ra trong test hành vi.
+    """
+
+    def test_keepalive_outlives_every_wait_window(self):
+        for name in ("SLOW_ACK_TIMEOUT_SECONDS", "APPROVAL_WAIT_CEILING_SECONDS"):
+            with self.subTest(window=name):
+                self.assertGreater(
+                    zalo_adapter.BRIDGE_PING_TIMEOUT_SECONDS,
+                    getattr(zalo_adapter, name),
+                    f"BRIDGE_PING_TIMEOUT_SECONDS phải lớn hơn {name}: "
+                    "một kết nối đóng trước khi hết cửa sổ chờ thì ack không bao giờ về",
+                )
+
+    def test_approval_ceiling_still_matches_the_gateway(self):
+        # Nếu upstream đổi _APPROVAL_TIMEOUT_SECONDS, test này phải đỏ chứ không
+        # được để adapter âm thầm dùng số cũ.
+        from gateway import run as gateway_run
+
+        self.assertEqual(
+            zalo_adapter.APPROVAL_WAIT_CEILING_SECONDS,
+            gateway_run.GatewayRunner._APPROVAL_TIMEOUT_SECONDS,
+        )
+
+
+class PublicUrlGateTests(unittest.TestCase):
+    """`_is_public_url` gác `zalo_web_read`, công cụ mà khách gọi được.
+
+    Trước đây một *tên* luôn được cho qua với lý do "để tầng mạng lo tiếp".
+    Tầng mạng là firewall bridge, và firewall mở đúng một địa chỉ nội bộ cho
+    runtime gọi model với MCP -- nên một cái tên trỏ vào chính địa chỉ đó đi
+    lọt, và chỉ cần một entry `extra_hosts` là cái tên ấy phân giải được ngay
+    trong container của khách.
+    """
+
+    @staticmethod
+    def _resolver(mapping):
+        def fake_getaddrinfo(host, *_a, **_kw):
+            try:
+                return [(2, 1, 6, "", (mapping[host], 0))]
+            except KeyError:
+                raise OSError("name does not resolve")
+        return fake_getaddrinfo
+
+    def test_name_resolving_to_a_private_address_is_refused(self):
+        with patch("socket.getaddrinfo", self._resolver({"gateway.corp.example": "10.30.36.254"})):
+            self.assertFalse(zalo_tools._is_public_url("https://gateway.corp.example/v1/models"))
+
+    def test_ordinary_public_name_still_passes(self):
+        with patch("socket.getaddrinfo", self._resolver({"example.com": "93.184.216.34"})):
+            self.assertTrue(zalo_tools._is_public_url("https://example.com/page"))
+
+    def test_a_name_that_does_not_resolve_is_refused(self):
+        # Fail closed: không phân giải được thì không biết nó trỏ vào đâu.
+        with patch("socket.getaddrinfo", self._resolver({})):
+            self.assertFalse(zalo_tools._is_public_url("https://nowhere.example/"))
+
+    def test_private_ip_literal_is_still_refused_without_resolving(self):
+        def explode(*_a, **_kw):
+            raise AssertionError("IP literal không được phép đi qua DNS")
+
+        with patch("socket.getaddrinfo", explode):
+            self.assertFalse(zalo_tools._is_public_url("http://10.30.36.254/"))
+            self.assertTrue(zalo_tools._is_public_url("https://93.184.216.34/"))
+
+
+class LayaRouteToolTests(unittest.TestCase):
+    """`zalo_laya_route` là tool public — thành viên nhóm và khách đều gọi được.
+
+    Laya không có xác thực, nên điều giữ nó an toàn không phải là quyền của
+    người gọi mà là: đích đến không do người gọi chọn, và kích thước bị chặn.
+
+    Hình dạng payload ở đây là hình dạng ĐO ĐƯỢC từ service thật (câu hỏi có
+    `instructions` + `criteria`, `state` là object). Sáu biến thể khác đều trả
+    500, nên đừng nới nó ra vì thấy "hợp lý hơn".
+    """
+
+    QUESTION = {
+        "department": {
+            "type": "choice",
+            "instructions": "Which department should handle this request?",
+            "criteria": {"billing": "invoices, payments, refunds",
+                         "technical": "bugs and outages"},
+        }
+    }
+
+    def setUp(self):
+        self._env = patch.dict(os.environ, {"LAYA_BASE_URL": "https://laya.example/laya"})
+        self._env.start()
+        self.addCleanup(self._env.stop)
+
+    @staticmethod
+    def _run(args):
+        return json.loads(asyncio.run(zalo_tools.zalo_laya_route(args)))
+
+    def _ok_args(self, **overrides):
+        args = {"state": "I was charged twice.", "questions": self.QUESTION}
+        args.update(overrides)
+        return args
+
+    def test_it_is_a_public_tool(self):
+        toolset = next(t for name, _e, _s, _h, t in zalo_tools.TOOLS
+                       if name == "zalo_laya_route")
+        self.assertEqual(toolset, zalo_tools.TOOLSET_PUBLIC)
+
+    def test_the_endpoint_cannot_be_chosen_by_the_caller(self):
+        # Đích đến đến từ môi trường. Nếu schema từng nhận url/base_url thì đúng
+        # tool này thành lỗ SSRF mà _is_public_url đang bịt cho zalo_web_read.
+        schema = next(s for name, _e, s, _h, _t in zalo_tools.TOOLS
+                      if name == "zalo_laya_route")
+        properties = schema["parameters"]["properties"]
+        for forbidden in ("url", "urls", "base_url", "endpoint", "host"):
+            self.assertNotIn(forbidden, properties)
+
+        seen = {}
+
+        def fake_call(base, payload):
+            seen["base"] = base
+            return 200, {"answers": {}, "routing": {}}
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            self._run(self._ok_args(url="http://10.30.36.254/", base_url="http://evil"))
+        self.assertEqual(seen["base"], "https://laya.example/laya")
+
+    def test_missing_configuration_does_not_name_the_endpoint(self):
+        with patch.dict(os.environ, {"LAYA_BASE_URL": ""}):
+            out = self._run(self._ok_args())
+        self.assertFalse(out["success"])
+        self.assertNotIn("LAYA_BASE_URL", out["error"])
+        self.assertNotIn("http", out["error"])
+
+    def test_the_wire_payload_matches_what_laya_answers(self):
+        seen = {}
+
+        def fake_call(base, payload):
+            seen.update(payload)
+            return 200, {
+                "answers": {"department": {"choice": "billing", "confidence": 0.85}},
+                "routing": {"model": "english", "reason": "English Latin text",
+                            "repo": "/models/laya"},
+                "usage": {"input_tokens": 52},
+            }
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            out = self._run(self._ok_args(lang="en", model="english"))
+
+        # `state` là object; một chuỗi trần trả 500 trên service thật.
+        self.assertEqual(seen["state"], {"body": "I was charged twice."})
+        self.assertEqual(seen["questions"]["department"]["criteria"],
+                         self.QUESTION["department"]["criteria"])
+        self.assertEqual(seen["questions"]["department"]["type"], "choice")
+        self.assertEqual(out["result"]["router"], "english")
+        self.assertEqual(out["result"]["tra_loi"]["department"]["choice"], "billing")
+        # Đường dẫn kho model trên host của Laya không phải việc của nhóm Zalo.
+        self.assertNotIn("/models/laya", json.dumps(out, ensure_ascii=False))
+
+    def test_type_defaults_to_choice_when_omitted(self):
+        seen = {}
+
+        def fake_call(base, payload):
+            seen.update(payload)
+            return 200, {"answers": {}, "routing": {}}
+
+        question = {"department": {k: v for k, v in self.QUESTION["department"].items()
+                                   if k != "type"}}
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            self.assertTrue(self._run(self._ok_args(questions=question))["success"])
+        self.assertEqual(seen["questions"]["department"]["type"], "choice")
+
+    def test_malformed_input_is_refused_before_any_request(self):
+        def explode(*_a, **_kw):
+            raise AssertionError("không được gửi request khi đầu vào sai")
+
+        one_option = {"department": {**self.QUESTION["department"],
+                                     "criteria": {"billing": "only one"}}}
+        long_instructions = {"department": {
+            **self.QUESTION["department"],
+            "instructions": "x" * (zalo_tools.LAYA_INSTRUCTIONS_MAX + 1)}}
+
+        with patch.object(zalo_tools, "_laya_call", explode):
+            for label, args in (
+                ("state rỗng", self._ok_args(state="")),
+                ("state quá dài", self._ok_args(state="x" * (zalo_tools.LAYA_STATE_MAX + 1))),
+                ("questions rỗng", self._ok_args(questions={})),
+                ("câu hỏi là chuỗi", self._ok_args(questions={"a": "nhóm nào?"})),
+                ("thiếu criteria", self._ok_args(questions={"a": {"instructions": "x"}})),
+                ("chỉ một lựa chọn", self._ok_args(questions=one_option)),
+                ("instructions quá dài", self._ok_args(questions=long_instructions)),
+                ("router lạ", self._ok_args(model="khong-co")),
+                ("quá nhiều câu hỏi", self._ok_args(questions={
+                    f"q{i}": self.QUESTION["department"]
+                    for i in range(zalo_tools.LAYA_QUESTIONS_MAX + 1)})),
+            ):
+                with self.subTest(label=label):
+                    self.assertFalse(self._run(args)["success"])
+
+    def test_low_confidence_answers_are_flagged(self):
+        # Đo trên service thật: "xin chào" ra `hoi_gia` 74% với confidence 0.016.
+        # Xác suất luôn có người thắng; chỉ confidence nói Laya có đoán mò không.
+        def fake_call(base, payload):
+            return 200, {"answers": {
+                "sure": {"choice": "billing", "confidence": 0.93},
+                "guess": {"choice": "technical", "confidence": 0.016},
+            }, "routing": {}}
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            out = self._run(self._ok_args())
+        answers = out["result"]["tra_loi"]
+        self.assertFalse(answers["sure"]["tin_cay_thap"])
+        self.assertTrue(answers["guess"]["tin_cay_thap"])
+        self.assertIn("guess", out["result"]["canh_bao"])
+        self.assertNotIn("sure", out["result"]["canh_bao"])
+
+    def test_no_warning_when_every_answer_is_confident(self):
+        def fake_call(base, payload):
+            return 200, {"answers": {"department": {"choice": "billing",
+                                                    "confidence": 0.9}},
+                         "routing": {}}
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            out = self._run(self._ok_args())
+        self.assertNotIn("canh_bao", out["result"])
+
+    def test_vietnamese_text_is_sent_with_lang_vi(self):
+        # Router tự chọn đẩy "xin chào" sang `english` — đo được.
+        seen = {}
+
+        def fake_call(base, payload):
+            seen.clear()
+            seen.update(payload)
+            return 200, {"answers": {}, "routing": {}}
+
+        with patch.object(zalo_tools, "_laya_call", fake_call):
+            self._run(self._ok_args(state="xin chào"))
+            self.assertEqual(seen.get("lang"), "vi")
+            self._run(self._ok_args(state="xin chào", lang="en"))
+            self.assertEqual(seen.get("lang"), "en")
+            self._run(self._ok_args(state="Please cancel my subscription"))
+            self.assertNotIn("lang", seen)
+
+    def test_a_failing_call_reports_without_leaking_the_address(self):
+        def boom(*_a, **_kw):
+            raise OSError("connection to https://laya.example/laya/predict refused")
+
+        with patch.object(zalo_tools, "_laya_call", boom):
+            out = self._run(self._ok_args())
+        self.assertFalse(out["success"])
+        self.assertNotIn("laya.example", out["error"])
+
+
+class SessionExpiryTests(unittest.TestCase):
+    """Hermes không đóng phiên theo thời gian; adapter tự đặt ranh giới.
+
+    Đo được ngày 23/09: phiên nhóm mở 18:45 ngày 22/09 vẫn sống, system prompt
+    ghi "Conversation started: Tuesday, September 22", và bot trả lời "chiều nay
+    22/9" cho một câu hỏi ngày 23/9.
+    """
+
+    from datetime import datetime as _dt
+
+    def test_a_session_from_before_todays_boundary_expires(self):
+        now = self._dt(2026, 9, 23, 14, 50)
+        self.assertEqual(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 22, 18, 45), self._dt(2026, 9, 23, 14, 0), now), "daily")
+
+    def test_before_four_the_boundary_is_yesterday(self):
+        now = self._dt(2026, 9, 23, 2, 0)
+        self.assertIsNone(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 22, 23, 0), self._dt(2026, 9, 23, 1, 30), now))
+        self.assertEqual(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 22, 3, 0), self._dt(2026, 9, 23, 1, 30), now), "daily")
+
+    def test_idle_for_more_than_two_hours_expires(self):
+        now = self._dt(2026, 9, 23, 14, 50)
+        self.assertEqual(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 23, 9, 0), self._dt(2026, 9, 23, 12, 30), now), "idle")
+        self.assertIsNone(zalo_adapter._session_expiry_reason(
+            self._dt(2026, 9, 23, 9, 0), self._dt(2026, 9, 23, 13, 0), now))
+
+    def test_clock_line_names_the_real_day(self):
+        self.assertEqual(zalo_adapter._clock_line(self._dt(2026, 9, 23, 14, 50)),
+                         "[Bây giờ: 14:50 thứ Tư 23/09/2026]")
+
+    def _adapter_with(self, entry):
+        calls = []
+
+        async def reset(event):
+            calls.append(event)
+            return "banner"
+
+        store = SimpleNamespace(lookup_by_session_key=lambda key: entry)
+        runner = SimpleNamespace(session_store=store, _handle_reset_command=reset,
+                                 _session_key_for_source=lambda source: "k")
+        adapter = object.__new__(zalo_adapter.ZaloAdapter)
+        adapter.gateway_runner = runner
+        return adapter, calls
+
+    def test_an_expired_session_is_reset_through_the_new_command(self):
+        stale = SimpleNamespace(session_id="s", created_at=self._dt(2020, 1, 1),
+                                updated_at=self._dt(2020, 1, 1))
+        adapter, calls = self._adapter_with(stale)
+        source = SimpleNamespace(user_id="u", user_name="n")
+        asyncio.run(adapter._expire_stale_session(source))
+        self.assertEqual(len(calls), 1)
+        # Chính xác "/new": với tin thường, /new lấy cả nội dung làm tiêu đề phiên.
+        self.assertEqual(calls[0].text, "/new")
+        self.assertEqual(calls[0].get_command_args(), "")
+        self.assertIs(calls[0].source, source)
+
+    def test_a_fresh_or_missing_session_is_left_alone(self):
+        from datetime import datetime
+        fresh = SimpleNamespace(session_id="s", created_at=datetime.now(), updated_at=datetime.now())
+        for entry in (fresh, None):
+            adapter, calls = self._adapter_with(entry)
+            asyncio.run(adapter._expire_stale_session(SimpleNamespace(user_id="u", user_name="n")))
+            self.assertEqual(calls, [])
+
+    def test_a_failing_reset_does_not_swallow_the_message(self):
+        stale = SimpleNamespace(session_id="s", created_at=self._dt(2020, 1, 1),
+                                updated_at=self._dt(2020, 1, 1))
+        adapter, _ = self._adapter_with(stale)
+
+        async def boom(event):
+            raise RuntimeError("store locked")
+
+        adapter.gateway_runner._handle_reset_command = boom
+        asyncio.run(adapter._expire_stale_session(SimpleNamespace(user_id="u", user_name="n")))
+
+
+class ReminderAndBatchFixTests(unittest.TestCase):
+    """Lượt 23/09 "lên lịch cafe": model tự tính epoch ra 01:30 sáng rồi báo 15:13,
+    tạo trùng ba lời nhắc, và không xoá được vì cứ gộp lệnh vào một tool_call."""
+
+    GROUP = "9133000000000000001"
+    MEMBER = "3900000000000000001"
+
+    def setUp(self):
+        self.token = zalo_tools._TURN.set({"sender_uid": self.MEMBER, "thread_id": self.GROUP,
+                                           "is_group": True, "is_owner": False, "text": ""})
+        self.sent = []
+
+        async def fake_invoke(method, args):
+            self.sent.append((method, args))
+            return json.dumps({"success": True, "result": {"id": "r1"}})
+
+        self._patch = patch.object(zalo_tools, "_invoke", fake_invoke)
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        zalo_tools._TURN.reset(self.token)
+
+    def _create(self, **args):
+        args.setdefault("title", "Cafe")
+        return json.loads(asyncio.run(zalo_tools.zalo_create_reminder(args)))
+
+    def test_human_time_is_converted_by_the_tool_not_the_model(self):
+        from datetime import datetime, timedelta
+        when = (datetime.now() + timedelta(days=1)).replace(hour=15, minute=0, second=0, microsecond=0)
+        out = self._create(time=when.strftime("%Y-%m-%d %H:%M"))
+        self.assertTrue(out["success"])
+        self.assertEqual(out["nhac_luc"], when.strftime("%H:%M %d/%m/%Y"))
+        method, args = self.sent[0]
+        self.assertEqual(method, "createReminder")
+        self.assertEqual(args[0]["startTime"], int(when.astimezone().timestamp() * 1000))
+
+    def test_a_time_in_the_past_is_refused_before_sending(self):
+        out = self._create(time="2020-01-01 09:00")
+        self.assertFalse(out["success"])
+        self.assertIn("đã qua", out["error"])
+        self.assertEqual(self.sent, [])
+
+    def test_unparseable_time_is_refused(self):
+        self.assertFalse(self._create(time="chiều mai")["success"])
+        self.assertFalse(self._create()["success"])
+        self.assertEqual(self.sent, [])
+
+    def test_legacy_epoch_still_works_and_reports_the_real_time(self):
+        from datetime import datetime, timedelta
+        when = datetime.now().astimezone() + timedelta(hours=3)
+        out = self._create(start_time=int(when.timestamp() * 1000))
+        self.assertTrue(out["success"])
+        self.assertEqual(out["nhac_luc"], when.strftime("%H:%M %d/%m/%Y"))
+
+    def test_a_batched_tool_call_is_blocked_with_the_reason(self):
+        verdict = zalo_tools.guard_member_tool_call(
+            tool_name="tool_call", args={"calls": [
+                {"name": "zalo_remove_reminder", "arguments": {"reminder_id": "1"}},
+                {"name": "zalo_remove_reminder", "arguments": {"reminder_id": "2"}},
+            ]}, task_id="t", session_id="s", tool_call_id="c")
+        self.assertEqual(verdict["action"], "block")
+        self.assertIn("một tool_call riêng", verdict["message"])
+        self.assertNotEqual(verdict["message"], "Hành động này không khả dụng qua Zalo.")
+
+    def test_owner_group_refusal_names_the_real_reason(self):
+        zalo_tools._TURN.set({"sender_uid": "owner", "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": True, "text": ""})
+        verdict = zalo_tools.guard_member_tool_call(
+            tool_name="zalo_list_groups", args={}, task_id="t", session_id="s", tool_call_id="c")
+        self.assertIn("ở trong nhóm", verdict["message"])
+        self.assertNotIn("chen vào", verdict["message"])
+
+    def _owner_in_group(self, **extra):
+        turn = {"sender_uid": "owner", "thread_id": self.GROUP, "is_group": True,
+                "is_owner": True, "text": ""}
+        turn.update(extra)
+        zalo_tools._TURN.set(turn)
+
+    def _guard(self, name, args):
+        return zalo_tools.guard_member_tool_call(
+            tool_name=name, args=args, task_id="t", session_id="s", tool_call_id="c")
+
+    def test_owner_in_group_may_read_history_of_this_group(self):
+        # Nhóm alert: chủ nhân tag bot để tổng hợp alert, phải đọc được lịch sử nhóm ấy.
+        self._owner_in_group()
+        self.assertIsNone(self._guard("zalo_read_history", {}))
+        self.assertIsNone(self._guard("zalo_read_history", {"thread_id": self.GROUP, "since_hours": 24}))
+
+    def test_owner_in_group_may_not_read_another_thread(self):
+        self._owner_in_group()
+        verdict = self._guard("zalo_read_history", {"thread_id": "9133000000000000999"})
+        self.assertEqual(verdict["action"], "block")
+
+    def test_owner_group_read_exception_needs_owner_and_no_cron(self):
+        zalo_tools._TURN.set({"sender_uid": self.MEMBER, "thread_id": self.GROUP,
+                              "is_group": True, "is_owner": False, "text": ""})
+        self.assertEqual(self._guard("zalo_read_history", {})["action"], "block")
+        self._owner_in_group(cron_job_id="job1")
+        self.assertEqual(self._guard("zalo_read_history", {})["action"], "block")
+
+    def test_owner_group_read_through_tool_call_checks_the_inner_thread(self):
+        self._owner_in_group()
+        with patch("tools.tool_search.resolve_underlying_call",
+                   return_value=("zalo_read_history", {"thread_id": self.GROUP}, None)):
+            self.assertIsNone(self._guard("tool_call", {"name": "zalo_read_history"}))
+        with patch("tools.tool_search.resolve_underlying_call",
+                   return_value=("zalo_read_history", {"thread_id": "other"}, None)):
+            self.assertEqual(self._guard("tool_call", {"name": "zalo_read_history"})["action"], "block")
+
+
+class MemoryGateTests(unittest.TestCase):
+    """Đo ngày 23/09: lượt của chủ nhân trong nhóm alert nhận <memory-context> với ghi
+    chú phiên dev, rồi đem chúng khuyên cả nhóm — dù toolset memory đã tắt."""
+
+    def setUp(self):
+        self.calls = []
+        calls = self.calls
+
+        class FakeManager:
+            def prefetch_all(self, query, *, session_id=""):
+                calls.append("prefetch")
+                return "<memory-context>secret</memory-context>"
+
+            def queue_prefetch_all(self, query, *, session_id=""):
+                calls.append("queue")
+
+            def sync_all(self, user, assistant, *, session_id="", **kw):
+                calls.append("sync")
+
+            def on_turn_start(self, n, message, **kw):
+                calls.append("turn")
+
+        self.cls = FakeManager
+        self.assertTrue(zalo_tools.install_memory_gate(FakeManager))
+        self.token = zalo_tools._TURN.set(None)
+
+    def tearDown(self):
+        zalo_tools._TURN.reset(self.token)
+
+    def _exercise(self):
+        m = self.cls()
+        out = m.prefetch_all("q", session_id="s")
+        m.queue_prefetch_all("q")
+        m.sync_all("u", "a", session_id="s")
+        m.on_turn_start(1, "q")
+        return out
+
+    def test_group_turns_neither_read_nor_write_owner_memory(self):
+        for turn in ({"sender_uid": "o", "thread_id": "g", "is_group": True, "is_owner": True},
+                     {"sender_uid": "m", "thread_id": "g", "is_group": True, "is_owner": False},
+                     {"sender_uid": "m", "thread_id": "d", "is_group": False, "is_owner": False}):
+            self.calls.clear()
+            zalo_tools._TURN.set(turn)
+            with self.subTest(turn=turn):
+                self.assertEqual(self._exercise(), "")
+                self.assertEqual(self.calls, [])
+
+    def test_owner_dm_and_non_zalo_callers_keep_memory(self):
+        for turn in ({"sender_uid": "o", "thread_id": "o", "is_group": False, "is_owner": True}, None):
+            self.calls.clear()
+            zalo_tools._TURN.set(turn)
+            with self.subTest(turn=turn):
+                self.assertIn("secret", self._exercise())
+                self.assertEqual(self.calls, ["prefetch", "queue", "sync", "turn"])
+
+    def test_installing_twice_does_not_double_wrap(self):
+        first = self.cls.prefetch_all
+        zalo_tools.install_memory_gate(self.cls)
+        self.assertIs(self.cls.prefetch_all, first)
 
 if __name__ == "__main__":
     unittest.main()

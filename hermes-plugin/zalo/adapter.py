@@ -50,8 +50,8 @@ earlier iteration of this integration.
 """
 
 import asyncio
-import json
 import logging
+import json
 import os
 import re
 import shutil
@@ -61,7 +61,8 @@ import tempfile
 import time
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -90,11 +91,47 @@ from agent.secret_scope import get_secret as _scoped_get_secret
 # Công cụ nằm ở plugin standalone `zalo_tools`, không phải ở đây — xem
 # ghi chú trong plugins/zalo_tools/__init__.py về việc Hermes nạp platform
 # plugin theo kiểu lười.
-from plugins.zalo_tools.tools import TOOLSET_OWNER, TOOLSET_PUBLIC
+from plugins.zalo_tools.tools import TOOLSET_DENIED, TOOLSET_OWNER, TOOLSET_PUBLIC
 
 from .flood import JUST_MUTED as FLOOD_JUST_MUTED
 from .flood import MUTED as FLOOD_MUTED
 from .flood import FloodGuard
+
+
+# Hermes không bao giờ tự đóng phiên theo thời gian ("Only explicit suspension
+# replaces a routed conversation; time never does"). Một nhóm Zalo vì thế giữ
+# nguyên một phiên nhiều ngày: ngữ cảnh cũ của người này lọt sang câu trả lời
+# cho người khác, và system prompt đóng băng "Conversation started: <ngày đầu>"
+# khiến bot coi hôm qua là hôm nay. Adapter tự đặt ranh giới.
+SESSION_RESET_HOUR = 4  # giờ địa phương của container (TZ)
+SESSION_IDLE_SECONDS = 2 * 3600
+_WEEKDAYS_VI = ("thứ Hai", "thứ Ba", "thứ Tư", "thứ Năm", "thứ Sáu", "thứ Bảy", "Chủ nhật")
+
+
+def _local_naive(value: Optional[datetime]) -> Optional[datetime]:
+    """SessionStore ghi giờ địa phương không kèm múi; đưa mọi thứ về đúng dạng đó."""
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone().replace(tzinfo=None)
+
+
+def _session_expiry_reason(created_at: Optional[datetime], updated_at: Optional[datetime],
+                           now: datetime) -> Optional[str]:
+    """Lý do phiên phải bỏ, hoặc None nếu còn dùng được."""
+    created_at, updated_at, now = _local_naive(created_at), _local_naive(updated_at), _local_naive(now)
+    boundary = now.replace(hour=SESSION_RESET_HOUR, minute=0, second=0, microsecond=0)
+    if now < boundary:
+        boundary -= timedelta(days=1)
+    if created_at is not None and created_at < boundary:
+        return "daily"
+    if updated_at is not None and (now - updated_at).total_seconds() > SESSION_IDLE_SECONDS:
+        return "idle"
+    return None
+
+
+def _clock_line(now: datetime) -> str:
+    """Giờ hiện tại cho mỗi tin: system prompt chỉ biết ngày phiên bắt đầu."""
+    return f"[Bây giờ: {now:%H:%M} {_WEEKDAYS_VI[now.weekday()]} {now:%d/%m/%Y}]"
 
 
 def _transcode_to_m4a(audio_path: str) -> Optional[str]:
@@ -254,6 +291,41 @@ ACK_TIMEOUT_SECONDS = 30
 # ngưỡng chờ đến mức chỉ cần chậm thêm chút là hỏng. Nới riêng cho nhóm lệnh
 # này thay vì nới tất cả: một lệnh gửi chữ mà treo 2 phút thì nên báo hỏng sớm.
 SLOW_ACK_TIMEOUT_SECONDS = 150
+
+# Keepalive phải sống lâu hơn ack chậm nhất mình chịu chờ.
+#
+# Trước đây là 20s, trong khi SLOW_ACK_TIMEOUT_SECONDS là 150s — nên với một
+# lượt agent chạy lâu (research, nhiều lời gọi công cụ), vòng lặp sự kiện của
+# Hermes không kịp phục vụ ping, thư viện websockets tự đóng kết nối bằng 1011,
+# và ack "đã gửi xong" mất đường về. Hermes kết luận gửi hỏng rồi gửi lại —
+# người dùng nhận đúng hai bản, cách nhau đúng 150 giây. Đo được ngày
+# 2026-09-17: ba tin trùng, span=150s, trong lúc log Hermes im lặng 6 phút rưỡi.
+#
+# Nghịch lý là agent càng làm việc lâu thì càng chắc chắn tự giết đường gửi kết
+# quả của chính nó — đúng lúc kết quả đáng giá nhất.
+#
+# Vẫn giữ ping: một sidecar chết thật phải bị phát hiện. Chỉ nới ngưỡng để nó
+# lớn hơn cửa sổ ack, vì một kết nối đóng trước khi ack kịp về thì không bao giờ
+# ack được.
+# Lần sửa 17/09 chặn đúng cơ chế nhưng chặn theo số sai: nó lấy mốc
+# SLOW_ACK_TIMEOUT_SECONDS (150s), trong khi thứ chờ lâu nhất trong hệ thống
+# không phải ack gửi tin mà là **chờ người bấm approve/deny**:
+# gateway/run.py:3918 đặt _APPROVAL_TIMEOUT_SECONDS = 300.
+#
+# Nên một công cụ cần phê duyệt mà người dùng không trả lời sẽ chờ 300 giây,
+# sống lâu hơn keepalive 180 giây — websockets tự đóng bằng 1011 đúng trong lúc
+# chờ, prompt approve không tới được Zalo, và người dùng không thể trả lời một
+# câu hỏi chưa bao giờ đến. Đo được ngày 18/09/2026 trên VM: approval request
+# lỗi lúc 08:45:44, execute_code chờ 318.53s rồi tự huỷ, terminal chờ 121.26s,
+# link chết bằng ping timeout lúc 08:59:46, sau đó retry gửi mỗi 2 giây vô hạn.
+#
+# Ngưỡng keepalive vì thế phải lớn hơn **mọi** cửa sổ chờ, không chỉ cửa sổ ack.
+# Giữ hằng số của gateway ở đây dưới tên riêng thay vì cộng thẳng vào công thức:
+# nếu upstream đổi 300 thành số khác, chỗ cần sửa có tên và có nguồn.
+APPROVAL_WAIT_CEILING_SECONDS = 300  # nguồn: gateway/run.py:3918
+
+BRIDGE_PING_INTERVAL_SECONDS = 20
+BRIDGE_PING_TIMEOUT_SECONDS = max(SLOW_ACK_TIMEOUT_SECONDS, APPROVAL_WAIT_CEILING_SECONDS) + 30
 SLOW_METHODS = frozenset({"uploadAttachment", "sendMessage", "sendVoice", "sendVideo"})
 DEDUP_WINDOW_SECONDS = 300
 DEDUP_MAX_SIZE = 1000
@@ -392,14 +464,40 @@ def _truthy(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _authenticated_bridge_url(url: str, token: str) -> str:
-    """Attach the shared bridge token without logging or altering other query keys."""
+def _bridge_token_from_file() -> str:
+    """Đọc bí mật cầu nối từ tệp, nếu có chỉ định tệp.
+
+    Vì sao tệp thay vì env: trong container, biến môi trường hiện ra ở
+    ``docker inspect`` và trong bất kỳ log nào in môi trường ra. Một tệp mode
+    0600 mount vào cả hai bên thì chỉ tiến trình đọc được mới thấy giá trị.
+
+    Thiếu tệp, không đọc được, hoặc rỗng đều là lỗi. Không rơi về env: rơi về
+    env lặng lẽ là cách một lần mount sai biến thành "vẫn chạy, bằng bí mật cũ".
+    """
+    path = (_get_scoped_secret("ZALO_BRIDGE_TOKEN_FILE", "") or "").strip()
+    if not path:
+        return ""
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        # Nêu lý do và đường dẫn, không bao giờ nêu nội dung.
+        raise ValueError(
+            f"Không đọc được ZALO_BRIDGE_TOKEN_FILE ({exc.strerror}): {path}"
+        ) from exc
+    token = raw.strip()
+    if not token:
+        raise ValueError(f"ZALO_BRIDGE_TOKEN_FILE rỗng: {path}")
+    return token
+
+
+def _authenticated_bridge_url(url: str, token: str, audience: str = "owner") -> str:
+    """Attach bridge authentication and immutable runtime audience."""
     if not str(token or "").strip():
         raise ValueError("Thiếu ZALO_BRIDGE_TOKEN trong cấu hình Zalo")
     parts = urlsplit(str(url))
     query = parse_qsl(parts.query, keep_blank_values=True)
-    query = [(key, value) for key, value in query if key != "token"]
-    query.append(("token", str(token)))
+    query = [(key, value) for key, value in query if key not in {"token", "audience"}]
+    query.extend((("token", str(token)), ("audience", audience)))
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
@@ -450,6 +548,28 @@ class ZaloAdapter(BasePlatformAdapter):
 
     MAX_MESSAGE_LENGTH = MAX_MESSAGE_LENGTH
 
+    def resolved_allowlist_user_ids(self) -> set[str]:
+        """Đọc khách từ roster mỗi lượt, không bao giờ mở rộng quyền chủ."""
+        roster_path = str(os.getenv("ZALO_ROSTER_FILE") or "").strip()
+        if not roster_path:
+            return set()
+        try:
+            roster = json.loads(Path(roster_path).read_text(encoding="utf-8"))
+            if (
+                not isinstance(roster, dict)
+                or set(roster) != {"version", "owners", "guests"}
+                or roster.get("version") != 1
+                or not isinstance(roster.get("owners"), list)
+                or not isinstance(roster.get("guests"), list)
+                or not all(isinstance(item, str) and item == item.strip() and item for item in roster["owners"])
+                or not all(isinstance(item, str) and item == item.strip() and item for item in roster["guests"])
+            ):
+                return set()
+            owners = set(roster["owners"])
+            return set(roster["guests"]) - owners
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return set()
+
     def __init__(self, config: PlatformConfig):
         super().__init__(config=config, platform=Platform("zalo"))
 
@@ -461,10 +581,18 @@ class ZaloAdapter(BasePlatformAdapter):
             or extra.get("bridge_url")
             or DEFAULT_BRIDGE_URL
         )
+        # Tệp thắng cả config.yaml và env, tường minh: đã chỉ định tệp thì tệp
+        # là nguồn duy nhất.
         self._bridge_token: str = str(
-            extra.get("bridge_token")
+            _bridge_token_from_file()
+            or extra.get("bridge_token")
             or _get_scoped_secret("ZALO_BRIDGE_TOKEN", "")
         ).strip()
+        self._bridge_audience = str(
+            _get_scoped_secret("ZALO_BRIDGE_AUDIENCE", "") or extra.get("bridge_audience") or "owner"
+        ).strip().lower()
+        if self._bridge_audience not in {"owner", "guest"}:
+            raise ValueError("ZALO_BRIDGE_AUDIENCE must be owner or guest")
         self._reply_only_tagged: bool = _truthy(
             extra.get("reply_only_tagged",
                       _get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "true")),
@@ -502,6 +630,27 @@ class ZaloAdapter(BasePlatformAdapter):
         if isinstance(owner_only, (list, tuple, set)):
             owner_only = ",".join(str(gid) for gid in owner_only)
         self._owner_only_groups = set(_split_ids(str(owner_only or "")))
+        # Trước đây đây là một khe duy nhất, nên chủ nhân chỉ chọn được Jira
+        # HOẶC Sentry chứ không bao giờ cả hai. Nhận danh sách; khoá cũ ở dạng
+        # chuỗi vẫn đọc được để cấu hình sinh ra từ bản trước không im lặng mất
+        # công cụ.
+        #
+        # Tiền tố ``mcp-`` không phải quy ước đặt tên: ``_is_mcp_tool`` trong
+        # zalo_tools dùng đúng nó để cấm MCP ngoài tin nhắn riêng của chủ nhân.
+        # Một toolset không mang tiền tố ấy sẽ bị xếp nhầm là công cụ thường và
+        # thoát khỏi luật đó, nên nó bị loại ngay tại cấu hình.
+        declared = extra.get("owner_dm_mcp_toolsets", extra.get("owner_dm_mcp_toolset"))
+        if isinstance(declared, str) or declared is None:
+            declared = [declared or ""]
+        elif not isinstance(declared, (list, tuple, set)):
+            declared = []
+        toolsets: List[str] = []
+        for name in (str(item or "").strip() for item in declared):
+            if name.startswith("mcp-") and name not in toolsets:
+                toolsets.append(name)
+        self._owner_dm_mcp_toolsets = toolsets
+        # Giữ tên cũ cho mọi thứ còn đọc một giá trị đơn.
+        self._owner_dm_mcp_toolset = toolsets[0] if toolsets else ""
         # (chat, tệp, cỡ, giờ sửa) -> (lúc gửi, kết quả), chặn một đoạn thoại đi hai lần.
         self._sent_voices: Dict[tuple, tuple] = {}
 
@@ -550,9 +699,15 @@ class ZaloAdapter(BasePlatformAdapter):
 
         self._closing = False
         try:
-            authenticated_url = _authenticated_bridge_url(self._bridge_url, self._bridge_token)
+            authenticated_url = _authenticated_bridge_url(
+                self._bridge_url, self._bridge_token, self._bridge_audience
+            )
             self._ws = await asyncio.wait_for(
-                websockets.connect(authenticated_url, ping_interval=20, ping_timeout=20),
+                websockets.connect(
+                    authenticated_url,
+                    ping_interval=BRIDGE_PING_INTERVAL_SECONDS,
+                    ping_timeout=BRIDGE_PING_TIMEOUT_SECONDS,
+                ),
                 timeout=10,
             )
         except Exception as exc:
@@ -652,8 +807,11 @@ class ZaloAdapter(BasePlatformAdapter):
                 try:
                     self._ws = await asyncio.wait_for(
                         websockets.connect(
-                            _authenticated_bridge_url(self._bridge_url, self._bridge_token),
-                            ping_interval=20, ping_timeout=20,
+                            _authenticated_bridge_url(
+                                self._bridge_url, self._bridge_token, self._bridge_audience
+                            ),
+                            ping_interval=BRIDGE_PING_INTERVAL_SECONDS,
+                            ping_timeout=BRIDGE_PING_TIMEOUT_SECONDS,
                         ),
                         timeout=10,
                     )
@@ -694,7 +852,11 @@ class ZaloAdapter(BasePlatformAdapter):
 
         logger.debug("[zalo] unhandled frame type: %s", kind)
 
+
     async def _on_message(self, frame: Dict[str, Any]) -> None:
+        if frame.get("audience", "owner") != self._bridge_audience:
+            logger.warning("[zalo] dropping frame for a different runtime audience")
+            return
         text = (frame.get("text") or "").strip()
         # Chỉ nhặt URL khi tin thật sự có tệp đính kèm: thẻ chia sẻ link cũng có
         # href và ảnh thu nhỏ, nhặt luôn thì link bị tải về như ảnh.
@@ -791,6 +953,8 @@ class ZaloAdapter(BasePlatformAdapter):
             "reply_cli_msg_id": str(quote.get("cliMsgId") or "") if quote else "",
             "reply_is_own": quote_is_own,
             "msg_id": msg_id,
+            "audience": self._bridge_audience,
+            "bridge_verified": True,
         }
         self._remember_turn(turn)
         _zalo_tools().set_turn_context(**turn)
@@ -884,6 +1048,9 @@ class ZaloAdapter(BasePlatformAdapter):
             known = ""
         if known:
             prompt_text = f"[Người nhắn — {sender_name}: {known}]\n{prompt_text}"
+        # Lệnh gateway (/new, /stop...) phải giữ nguyên ký tự đầu là "/".
+        if not prompt_text.lstrip().startswith("/"):
+            prompt_text = f"{_clock_line(datetime.now())}\n{prompt_text}"
 
         event = MessageEvent(
             text=prompt_text,
@@ -946,7 +1113,39 @@ class ZaloAdapter(BasePlatformAdapter):
                 expect_ack=False,
             )
 
+        await self._expire_stale_session(source)
         await self.handle_message(event)
+
+    async def _expire_stale_session(self, source: Any) -> None:
+        """Mở phiên mới trước khi tin này tới, nếu phiên cũ đã qua mốc ngày hoặc im quá lâu.
+
+        Đi đúng đường của ``/new`` để runner dọn agent đang cache, scope hội thoại
+        và delegation còn treo — tự gọi ``reset_session`` trên store sẽ để lại agent
+        cũ giữ nguyên lịch sử. Dòng thông báo phiên mới của ``/new`` bị bỏ đi: nhóm
+        không cần biết.
+        """
+        runner = getattr(self, "gateway_runner", None)
+        store = getattr(runner, "session_store", None) or getattr(self, "_session_store", None)
+        key_for = getattr(runner, "_session_key_for_source", None)
+        reset = getattr(runner, "_handle_reset_command", None)
+        lookup = getattr(store, "lookup_by_session_key", None)
+        if not (callable(key_for) and callable(reset) and callable(lookup)):
+            return
+        try:
+            entry = lookup(key_for(source))
+            reason = entry and _session_expiry_reason(
+                getattr(entry, "created_at", None), getattr(entry, "updated_at", None), datetime.now())
+            if not reason:
+                return
+            logger.info("[zalo] phiên %s hết hạn (%s) — mở phiên mới",
+                        getattr(entry, "session_id", "?"), reason)
+            await reset(MessageEvent(
+                text="/new", message_type=MessageType.TEXT, source=source,
+                user_id=getattr(source, "user_id", None), user_name=getattr(source, "user_name", None),
+            ))
+        except Exception as exc:
+            # Không mở được phiên mới thì vẫn trả lời trên phiên cũ, không nuốt tin.
+            logger.warning("[zalo] không reset được phiên hết hạn: %s", type(exc).__name__)
 
     def _remember_turn(self, turn: Dict[str, Any]) -> None:
         """Nhớ danh tính theo mã tin để mỗi lượt agent gắn lại đúng người."""
@@ -1369,8 +1568,7 @@ class ZaloAdapter(BasePlatformAdapter):
 
             platform_key = str(self.platform.value)
             for label, override in (
-                ("chủ nhân", [f"hermes-{platform_key}", "kanban",
-                              TOOLSET_OWNER, TOOLSET_PUBLIC]),
+                ("chủ nhân", [f"hermes-{platform_key}", "kanban", TOOLSET_OWNER, TOOLSET_PUBLIC]),
                 ("người trong nhóm", [TOOLSET_PUBLIC]),
             ):
                 probe = dict(cfg)
@@ -1379,13 +1577,10 @@ class ZaloAdapter(BasePlatformAdapter):
                 probe["platform_toolsets"] = pts
                 toolsets = sorted(_get_platform_tools(probe, platform_key))
                 tools = {t for ts in toolsets for t in resolve_toolset(ts)}
-                leaks = sorted(t for t in ("terminal", "read_file", "write_file",
-                                           "kanban_create", "zalo_forward")
-                               if t in tools)
+                leaks = sorted(t for t in ("terminal", "read_file", "write_file", "browser_open") if t in tools)
                 logger.info(
-                    "[zalo] tự kiểm quyền — %s: %d công cụ (%d Zalo)%s",
-                    label, len(tools),
-                    len([t for t in tools if t.startswith("zalo_")]),
+                    "[zalo] %s: %d toolsets, %d Zalo tools%s",
+                    label, len(toolsets), len([t for t in tools if t.startswith("zalo_")]),
                     f", nhạy cảm: {leaks}" if leaks else ", không có công cụ nhạy cảm",
                 )
         except Exception as exc:
@@ -1397,32 +1592,30 @@ class ZaloAdapter(BasePlatformAdapter):
         Gateway hỏi hàm này trước mỗi lượt agent chạy. Trả về ``None`` nghĩa là
         dùng cấu hình mặc định của nền tảng.
 
-        Điểm cốt lõi: ``hermes-zalo`` kéo theo cả bộ công cụ lõi của Hermes —
-        ``terminal``, ``read_file``, ``write_file``, ``browser_*``. Ai được
-        dùng nó là chạy được lệnh shell và đọc được mọi tệp trên máy chủ, kể cả
-        tệp chứa khoá API. Nên người ngoài chỉ nhận ``zalo_public``: mười công
-        cụ tác động trong đúng cuộc trò chuyện của họ, không hơn.
+        Owner and guest Zalo turns receive only native Zalo toolsets. Generic
+        Hermes core capabilities stay on the SSH/terminal control plane; a
+        pre-tool execution guard also denies them if a resolver regresses.
         """
+
         uid = str(getattr(source, "user_id", "") or "")
         owner = self._bind_turn_for_source(source, uid)
+        if not owner and not self._is_guest(uid):
+            logger.warning("[zalo] %s không phải chủ nhân cũng không phải khách", uid)
+            return [TOOLSET_DENIED]
 
-        # Dùng khoá nền tảng, KHÔNG dùng ``self.name``: thuộc tính đó trả về
-        # ``platform.value.title()`` — "Zalo" chứ không phải "zalo" — nên
-        # ``hermes-Zalo`` không khớp toolset nào và agent lặng lẽ mất sạch
-        # công cụ. Đúng loại lỗi chỉ lộ ra khi đo ở nơi người dùng thật chạm
-        # tới, chứ không lộ khi tự gọi resolve_toolset trong bài kiểm thử.
-        platform_key = str(self.platform.value)
-        # ``kanban`` được liệt kê thẳng cho chủ nhân, không nằm trong
-        # ``hermes-zalo``: bảng công việc đã bị loại khỏi composite ở
-        # define_platform_composite() để người trong nhóm không với tới. Liệt
-        # kê tường minh là đường duy nhất còn lại để chủ nhân vẫn dùng được.
-        chosen = ([f"hermes-{platform_key}", "kanban", TOOLSET_OWNER, TOOLSET_PUBLIC]
-                  if owner else [TOOLSET_PUBLIC])
+        chosen = [TOOLSET_OWNER, TOOLSET_PUBLIC] if owner else [TOOLSET_PUBLIC]
+        is_group = str(getattr(source, "chat_type", "") or "") == "group"
+        turn = self._turns.get(str(getattr(source, "message_id", "") or ""))
+        if (owner and not is_group and self._owner_dm_mcp_toolsets
+                and turn and turn.get("is_owner")):
+            chosen.extend(self._owner_dm_mcp_toolsets)
 
         logger.debug("[zalo] %s (%s) → %s",
                      "chủ nhân" if owner else "người trong nhóm",
                      uid, chosen)
         return chosen
+
+
 
     def _bind_turn_for_source(self, source, uid: str) -> bool:
         """Gắn danh tính đúng của lượt này trước khi agent chạy.
@@ -1504,20 +1697,30 @@ class ZaloAdapter(BasePlatformAdapter):
         allowed = _split_ids(_get_scoped_secret("ZALO_ALLOWED_USERS", "") or "")
         return bool(allowed) and str(sender_uid) in allowed
 
+    def _is_guest(self, sender_uid: str) -> bool:
+        """Khách theo cả hai nguồn: env và roster.
+
+        Chỉ đọc env là lỗi đã gặp trên VM ngày 18/09/2026: một khách được cấp
+        bằng lệnh chat qua được cửa 1 (sidecar nạp lại roster) và qua được
+        admission của gateway (móc resolved_allowlist_user_ids), rồi tới đây bị
+        xếp là "không phải chủ nhân cũng không phải khách" và nhận
+        TOOLSET_DENIED — tức không còn công cụ nào. Người dùng thấy bot im hoặc
+        báo không đọc được gì, chứ không thấy một câu từ chối.
+
+        Hai nơi phân hạng khách thì phải nhìn cùng một tập nguồn.
+        """
+        uid = str(sender_uid)
+        if uid in _split_ids(_get_scoped_secret("GATEWAY_ALLOWED_USERS", "") or ""):
+            return True
+        return uid in self.resolved_allowlist_user_ids()
+
     def _may_greet(self, sender_uid: str) -> bool:
         """Có nên báo đã xem và thả cảm xúc cho tin nhắn này không.
 
-        Điều kiện là "người này sẽ được bot trả lời", không phải "người này là
-        chủ". Khi ``ZALO_ALLOW_ALL_USERS`` bật, cả nhóm dùng được bot — mà thả
-        cảm xúc cho người này rồi im lặng với người kia thì bot trông thiên vị
-        một cách khó hiểu.
-
-        Vẫn giữ nguyên mục đích ban đầu: người bị gateway chặn thì không được
-        chào hỏi, để bot không thả tim xong im bặt.
+        Người bị gateway chặn thì không được chào hỏi, để bot không thả tim xong
+        im bặt.
         """
-        if _truthy(_get_scoped_secret("ZALO_ALLOW_ALL_USERS", "false")):
-            return True
-        return self._is_owner(sender_uid)
+        return self._is_owner(sender_uid) or self._is_guest(sender_uid)
 
     def _is_duplicate(self, msg_id: str) -> bool:
         now = time.time()
@@ -1886,7 +2089,10 @@ def _env_enablement() -> Optional[dict]:
     bridge_url = (_get_scoped_secret("ZALO_BRIDGE_URL", "") or "").strip()
     if bridge_url:
         extra["bridge_url"] = bridge_url
-    bridge_token = (_get_scoped_secret("ZALO_BRIDGE_TOKEN", "") or "").strip()
+    bridge_token = (
+        _bridge_token_from_file()
+        or (_get_scoped_secret("ZALO_BRIDGE_TOKEN", "") or "")
+    ).strip()
     if bridge_token:
         extra["bridge_token"] = bridge_token
     reply_only_tagged = (_get_scoped_secret("ZALO_GROUP_REPLY_ONLY_TAGGED", "") or "").strip()

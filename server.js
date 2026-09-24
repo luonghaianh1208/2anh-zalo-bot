@@ -9,6 +9,7 @@ import { loadRepoEnv, loadHermesEnv } from './scripts/setup-env.js';
 import { Zalo, LoginQRCallbackEventType } from 'zca-js';
 import { tryReconnect, saveSession, clearSession, fetchProfile } from './auth.js';
 import { setupBotListener } from './bot-handler.js';
+import { loadGuestGroups, loadRoster } from './zalo-roster.js';
 import { startAutomaticBackfill, startHermesBridge, stopHermesBridge, isHermesAttached } from './hermes-bridge.js';
 import { openZaloStore } from './zalo-store.js';
 import { createRuntimeHealth } from './runtime-health.js';
@@ -90,9 +91,12 @@ function activateZaloRuntime() {
       console.error('[history] legacy import failed:', error?.message || error);
     }
   }
-  startHermesBridge({ api, profile: loginInfo, store: zaloStore, health: runtimeHealth });
+  // Authorization files must both be valid before listener starts.
+  const roster = loadRoster(process.env.ZALO_ROSTER_FILE);
+  const guestGroups = loadGuestGroups(process.env.ZALO_GUEST_GROUPS_FILE);
+  startHermesBridge({ api, profile: loginInfo, store: zaloStore, health: runtimeHealth, roster });
   stopBotListener();
-  stopBotListener = setupBotListener(api, loginInfo, { health: runtimeHealth });
+  stopBotListener = setupBotListener(api, loginInfo, { health: runtimeHealth, roster, guestGroups });
   startAutomaticBackfill().catch((error) => {
     runtimeHealth.recordError('automatic_backfill_failed', error?.message || error);
     console.error('[history] automatic backfill failed:', error?.message || error);
@@ -259,6 +263,11 @@ app.post('/api/logout', async (req, res) => {
 });
 
 const PORT = Number(process.env.ZCA_PORT) || 3872;
+// Dashboard phải nghe trên interface của container để Docker NAT chuyển được
+// cổng đã publish vào; mặc định vẫn là loopback nên bản chạy trên máy không
+// đổi. Publish ra ngoài là việc của Compose, và chỉ được publish lên loopback
+// của host.
+const DASHBOARD_HOST = process.env.ZCA_HOST || '127.0.0.1';
 
 // Ghi PID ra file để Hermes-Offline.vbs tắt đúng tiến trình này. Không thể
 // nhận diện qua dòng lệnh vì nó chỉ là "node server.js" — trùng với vô số
@@ -290,7 +299,7 @@ process.on('exit', removePidFile);
 
 server.on('error', (error) => {
   runtimeHealth.recordError('dashboard_server_error', error?.code || 'listen_failed');
-  console.error(`[boot] không mở được dashboard 127.0.0.1:${PORT}: ${error?.code || 'listen_failed'}`);
+  console.error(`[boot] không mở được dashboard ${DASHBOARD_HOST}:${PORT}: ${error?.code || 'listen_failed'}`);
   stopBotListener();
   stopHermesBridge();
   removePidFile();
@@ -299,7 +308,7 @@ server.on('error', (error) => {
   process.exitCode = 1;
 });
 
-server.listen(PORT, '127.0.0.1', () => {
+server.listen(PORT, DASHBOARD_HOST, () => {
   writePidFile();
-  console.log(`ZCA UI running at http://127.0.0.1:${PORT}`);
+  console.log(`ZCA UI running at http://${DASHBOARD_HOST}:${PORT}`);
 });

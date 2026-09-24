@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket as RawWebSocket } from 'ws';
 import { openZaloStore } from './zalo-store.js';
+import { loadRoster } from './zalo-roster.js';
 import { createRuntimeHealth } from './runtime-health.js';
 
 process.env.ZALO_RATE_BURST = '1';
@@ -33,8 +34,22 @@ function testStore(t) {
   return store;
 }
 
-function auth(threadId, threadType, { actorUid = 'owner', confirmed = false } = {}) {
-  return { actorUid, actorRole: actorUid === 'owner' ? 'owner' : 'public', sourceThreadId: threadId, sourceThreadType: threadType, confirmed };
+// Ghi ra tệp rồi nạp lại qua loadRoster, thay vì dựng thẳng một object: như vậy
+// phép kiểm đi qua đúng đường mà server.js đi, kể cả phần phân tích tệp.
+function useRoster(t, roster) {
+  const dir = mkdtempSync(join(tmpdir(), 'zalo-bridge-roster-'));
+  const path = join(dir, 'roster.json');
+  writeFileSync(path, JSON.stringify(roster));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return loadRoster(path);
+}
+
+function auth(threadId, threadType, { actorUid = 'owner', confirmed = false, audience = 'owner' } = {}) {
+  return {
+    actorUid, actorRole: actorUid === 'owner' ? 'owner' : 'public',
+    sourceThreadId: threadId, sourceThreadType: threadType, confirmed,
+    audience, bridgeVerified: true,
+  };
 }
 
 function onceMessage(ws, predicate = () => true) {
@@ -156,6 +171,48 @@ test('forwardToHermes chuẩn hóa đúng cấu trúc quote thực tế của zc
     assert.equal(payload.quote.text, 'Quá hay và quá chuẩn luôn anh Hải Anh ơi!');
   } finally {
     ws.close();
+    stopHermesBridge();
+  }
+});
+
+test('guest frames route only to the guest runtime and guest egress requires guest provenance', async (t) => {
+  const server = startHermesBridge({
+    api: {}, profile: { user_id: 'bot-uid' }, port: 0, store: testStore(t),
+    bridgeToken: 'owner-token', guestBridgeToken: 'guest-token',
+  });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const { port } = server.address();
+  const connect = (audience, token) => new Promise((resolve, reject) => {
+    const ws = new RawWebSocket(`ws://127.0.0.1:${port}?token=${token}&audience=${audience}`);
+    ws.once('open', () => resolve(ws));
+    ws.once('error', reject);
+  });
+  const owner = await connect('owner', 'owner-token');
+  const guest = await connect('guest', 'guest-token');
+  const ownerFrames = [];
+  owner.on('message', (raw) => ownerFrames.push(JSON.parse(raw.toString())));
+
+  try {
+    const guestMessage = onceMessage(guest, (frame) => frame.type === 'message');
+    const { forwardToHermes } = await import('./hermes-bridge.js');
+    assert.equal(forwardToHermes({
+      threadId: 'guest-group', type: 1,
+      data: { msgId: 'guest-message', uidFrom: 'guest', dName: 'Guest', content: 'public question' },
+    }, 'guest'), true);
+    const frame = await guestMessage;
+    assert.equal(frame.audience, 'guest');
+    assert.equal(ownerFrames.some((item) => item.type === 'message'), false);
+
+    guest.send(JSON.stringify({
+      type: 'send', reqId: 'forged-audience', threadId: 'guest-group', threadType: 1, text: 'x',
+      auth: { ...auth('guest-group', 1, { actorUid: 'guest' }), audience: 'owner' },
+    }));
+    const denied = await onceMessage(guest, (item) => item.type === 'ack' && item.reqId === 'forged-audience');
+    assert.equal(denied.ok, false);
+    assert.equal(denied.errorCode, 'audience_denied');
+  } finally {
+    owner.close();
+    guest.close();
     stopHermesBridge();
   }
 });
@@ -449,7 +506,7 @@ test('group_members hỏi getGroupInfo lấy ID thành viên rồi mới tra h�
   try {
     ws.send(JSON.stringify({
       type: 'group_members', reqId: 'gm1', threadId: 'g1', threadType: 1,
-      auth: { actorUid: 'member-1', actorRole: 'public', sourceThreadId: 'g1', sourceThreadType: 1, confirmed: false },
+      auth: auth('g1', 1, { actorUid: 'member-1' }),
     }));
     const ack = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'gm1');
 
@@ -956,6 +1013,60 @@ test('bridge audits successful and failed owner administration without payload s
   }
 });
 
+// Mã lỗi số của Zalo đi tới agent; văn bản lỗi của máy chủ thì không. Hai
+// khẳng định ngược chiều nhau trong cùng một ca, vì bỏ mất một trong hai đều là
+// lỗi: thiếu mã thì agent thử lại y nguyên, thêm văn bản thì rò rỉ.
+test('bridge chuyển tiếp mã lỗi Zalo nhưng không chuyển văn bản lỗi của máy chủ', async (t) => {
+  const errorLog = [];
+  t.mock.method(console, 'error', (...args) => errorLog.push(args.join(' ')));
+  const store = testStore(t);
+  const serverText = 'user 9000000000000000001 is not a friend of session.json';
+  const api = {
+    changeGroupName: () => {
+      const err = new Error(serverText);
+      err.name = 'ZcaApiError';
+      err.code = 216;
+      return Promise.reject(err);
+    },
+    // Lỗi không phải của Zalo (không có code) phải giữ nguyên câu chung như trước.
+    removeUserFromGroup: () => Promise.reject(new Error(serverText)),
+  };
+  const server = startHermesBridge({ api, profile: { user_id: 'bot' }, port: 0, store, ownerUids: ['owner'] });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await hello;
+
+    ws.send(JSON.stringify({
+      type: 'invoke', reqId: 'zca-coded', method: 'changeGroupName',
+      args: ['Tên nhóm', 'group-1'], auth: auth('owner', 0, { confirmed: true }),
+    }));
+    const coded = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'zca-coded');
+    assert.equal(coded.ok, false);
+    assert.equal(coded.errorCode, 'operation_failed');
+    assert.equal(coded.error.includes('mã Zalo 216'), true);
+    assert.equal(coded.error.includes(serverText), false);
+    assert.equal(coded.error.includes('session.json'), false);
+
+    ws.send(JSON.stringify({
+      type: 'invoke', reqId: 'plain-fail', method: 'removeUserFromGroup',
+      args: [['victim'], 'group-1'], auth: auth('owner', 0, { confirmed: true }),
+    }));
+    const plain = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'plain-fail');
+    assert.equal(plain.ok, false);
+    assert.equal(plain.error, 'Thao tác Zalo thất bại; xem health/audit để tra mã lỗi');
+
+    assert.equal(errorLog.join('\n').includes(serverText), false);
+    assert.equal(errorLog.join('\n').includes('216'), true);
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 test('tin system (kết quả cron) gửi được vào nhóm không phải kênh nhà', async (t) => {
   const store = testStore(t);
   const sent = [];
@@ -975,7 +1086,7 @@ test('tin system (kết quả cron) gửi được vào nhóm không phải kên
     await hello;
     ws.send(JSON.stringify({
       type: 'send', reqId: 'cron-send', threadId: 'group-9', threadType: 1, text: 'Nhắc họp',
-      auth: { actorUid: '', actorRole: 'system', sourceThreadId: '', sourceThreadType: 0, confirmed: false },
+      auth: { actorUid: '', actorRole: 'system', sourceThreadId: '', sourceThreadType: 0, confirmed: false, audience: 'owner', bridgeVerified: false },
     }));
     const ack = await onceMessage(ws, (msg) => msg.type === 'ack' && msg.reqId === 'cron-send');
     assert.equal(ack.ok, true);
@@ -1223,4 +1334,50 @@ test('history_range đọc cả khoảng thời gian từ kho, lật trang khôn
     ws.close();
     stopHermesBridge();
   }
+});
+
+test('bridge reads owner authorization from roster', async (t) => {
+  const ownerUid = '9000000000000000001';
+  const roster = useRoster(t, { version: 1, owners: [ownerUid], guests: ['9000000000000000002'] });
+  const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store: testStore(t), roster });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  t.after(() => { stopHermesBridge(); ws.close(); });
+  const hello = onceMessage(ws, (message) => message.type === 'hello');
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  await hello;
+
+  const reply = onceMessage(ws, (message) => message.reqId === 'roster-owner');
+  ws.send(JSON.stringify({
+    type: 'history_range', reqId: 'roster-owner', threadId: 'group-1', threadType: 1, sinceMs: 0,
+    // Vai owner cần CẢ HAI: adapter khai actorRole 'owner' và uid nằm trong
+    // roster (zalo-policy.js). Ca này giữ vế đầu cố định để đo đúng vế sau.
+    auth: { ...auth('group-1', 1, { actorUid: ownerUid }), actorRole: 'owner' },
+  }));
+  assert.equal((await reply).ok, true);
+});
+
+test('bridge denies owner-only commands when roster is empty', async (t) => {
+  const roster = useRoster(t, { version: 1, owners: [], guests: [] });
+  const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store: testStore(t), roster });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  t.after(() => { stopHermesBridge(); ws.close(); });
+  const hello = onceMessage(ws, (message) => message.type === 'hello');
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  await hello;
+
+  const reply = onceMessage(ws, (message) => message.reqId === 'roster-empty');
+  ws.send(JSON.stringify({
+    type: 'history_range', reqId: 'roster-empty', threadId: 'group-1', threadType: 1, sinceMs: 0,
+    // Adapter vẫn khai owner; roster rỗng là điều kiện duy nhất thay đổi. Đó
+    // đúng là khiếm khuyết H2 đã gặp thật hôm 2026-09-17.
+    auth: { ...auth('group-1', 1, { actorUid: '9000000000000000001' }), actorRole: 'owner' },
+  }));
+  const result = await reply;
+  assert.equal(result.ok, false);
+  // Bridge trả câu chữ cho người đọc, không trả mã. Khẳng định trên đúng chuỗi
+  // mà policyErrorMessage('owner_required') sinh ra -- chính chuỗi đã thấy
+  // trong log sản xuất hôm 2026-09-17 và là thứ chẩn đoán được H2.
+  assert.equal(result.error, 'Chỉ chủ nhân được phép thực hiện thao tác này');
 });

@@ -37,9 +37,26 @@ const PUBLIC_COMMANDS = new Set(['send', 'typing', 'reaction', 'seen', 'ack_mess
 
 const TARGET_ARG_INDEX = new Map([
   ['sendMessage', 1], ['sendVoice', 1], ['sendSticker', 1], ['sendLink', 1],
-  ['uploadAttachment', 1], ['createReminder', 1], ['getListReminder', 0],
+  ['uploadAttachment', 1], ['createReminder', 1],
+  // zca-js: getListReminder(options, threadId, type) — thread ở vị trí 1, không phải 0.
+  // Đọc nhầm vị trí 0 thì so object options với nhóm, và khách luôn bị từ chối.
+  ['getListReminder', 1],
   ['removeReminder', 1],
+  // Method của chủ nhân: sameThread không xét tới, chỉ để audit ghi đúng đích.
+  // Trước đây audit giữ một bảng riêng trong hermes-bridge.js; hai bảng lệch
+  // nhau là đúng loại lỗi đã làm getListReminder đọc nhầm vị trí.
+  ['changeGroupName', 1], ['addUserToGroup', 1], ['removeUserFromGroup', 1],
+  ['addGroupDeputy', 1], ['removeGroupDeputy', 1],
 ]);
+
+// Method công khai không nhắm hội thoại nào. Method không có chỉ số thread mà
+// cũng không nằm ở đây thì vai public bị từ chối: thêm method mới mà quên khai
+// chỉ số thì hỏng theo hướng chặn, không phải theo hướng mở sang nhóm khác.
+const THREADLESS_METHODS = new Set(['searchSticker', 'getStickersDetail']);
+
+export function threadArgIndex(method) {
+  return TARGET_ARG_INDEX.get(String(method || ''));
+}
 
 function denied(role, code, category) {
   return { allowed: false, role, code, category };
@@ -53,11 +70,11 @@ function sameThread(command, auth) {
   let targetId = command.threadId;
   let targetType = command.threadType;
   if (command.type === 'invoke') {
-    const index = TARGET_ARG_INDEX.get(String(command.method || ''));
-    if (index == null) return true;
+    const method = String(command.method || '');
+    const index = TARGET_ARG_INDEX.get(method);
+    if (index == null) return THREADLESS_METHODS.has(method);
     targetId = Array.isArray(command.args) ? command.args[index] : null;
-    if (['getListReminder'].includes(command.method)) targetType = command.args?.[1];
-    else targetType = command.args?.[index + 1];
+    targetType = command.args?.[index + 1];
   }
   return String(targetId ?? '') === String(auth.sourceThreadId ?? '')
     && Number(targetType) === Number(auth.sourceThreadType);
@@ -126,4 +143,5 @@ export const ZALO_POLICY_METHODS = Object.freeze({
   publicSideEffects: PUBLIC_SIDE_EFFECT_METHODS,
   ownerSideEffects: OWNER_SIDE_EFFECT_METHODS,
   dangerous: DANGEROUS_METHODS,
+  threadless: THREADLESS_METHODS,
 });

@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 import { ThreadType, Reactions } from 'zca-js';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
+import { resolveBridgeToken } from './bridge-token.js';
 import { formatAndChunkZaloMarkdown } from './markdown-formatter.js';
 import { createMemberDirectory, findMentions } from './zalo-mentions.js';
 import { latexToUnicode } from './zalo-math.js';
@@ -9,7 +10,7 @@ import { classifyAttachments } from './zalo-attachments.js';
 import { pickSmartReaction } from './smart-reaction.js';
 import { RateLimiter, RateLimitedError, THROTTLED_METHODS } from './rate-limiter.js';
 import { openZaloStore } from './zalo-store.js';
-import { authorizeBridgeCommand } from './zalo-policy.js';
+import { authorizeBridgeCommand, threadArgIndex } from './zalo-policy.js';
 
 /**
  * Cầu nối Zalo ↔ Hermes Agent.
@@ -166,6 +167,25 @@ let activeHealth = null;
 let staleTimer = null;
 let clientSequence = 0;
 const clientIds = new Map();
+const clientAudiences = new Map();
+let activeBridgeToken = '';
+let activeGuestBridgeToken = '';
+
+function bridgeAudience(url) {
+  const audience = new URL(url || '/', 'ws://127.0.0.1').searchParams.get('audience') || 'owner';
+  return audience === 'owner' || audience === 'guest' ? audience : '';
+}
+
+function bridgeTokenFor(audience) {
+  return audience === 'guest' ? activeGuestBridgeToken : activeBridgeToken;
+}
+
+function tokenMatches(supplied, expected) {
+  const suppliedBytes = Buffer.from(supplied);
+  const expectedBytes = Buffer.from(expected);
+  return Boolean(expected) && suppliedBytes.length === expectedBytes.length
+    && timingSafeEqual(suppliedBytes, expectedBytes);
+}
 let maxBackfillPages = Number(process.env.ZALO_BACKFILL_MAX_PAGES) || 10;
 const oldMessageWaiters = new Map();
 const backfillJobs = new Map();
@@ -365,10 +385,10 @@ export async function startAutomaticBackfill() {
   return Promise.all([0, 1].map((threadType) => runBackfill('', threadType, 100)));
 }
 
-/** Có Hermes đang nối không — bot nội bộ đọc cờ này để nhường quyền. */
-export function isHermesAttached() {
+/** Whether a runtime for an audience is connected. */
+export function isHermesAttached(audience = null) {
   for (const ws of clients) {
-    if (ws.readyState === 1) return true;
+    if (ws.readyState === 1 && (!audience || clientAudiences.get(ws) === audience)) return true;
   }
   return false;
 }
@@ -378,10 +398,20 @@ let memberDirectory = null;
 
 export function startHermesBridge({
   api, profile, port = defaultBridgePort(), store = null, maxBackfillPages: pageLimit = null,
-  ownerUids = null, health = null, staleCheckIntervalMs = 15_000,
-  bridgeToken = process.env.ZALO_BRIDGE_TOKEN,
+  ownerUids = null, roster = null, health = null, staleCheckIntervalMs = 15_000,
+  bridgeToken = resolveBridgeToken({
+    file: process.env.ZALO_BRIDGE_TOKEN_FILE,
+    envToken: process.env.ZALO_BRIDGE_TOKEN,
+  }),
+  guestBridgeToken = resolveBridgeToken({
+    file: process.env.ZALO_GUEST_BRIDGE_TOKEN_FILE,
+    envToken: process.env.ZALO_GUEST_BRIDGE_TOKEN,
+  }),
+  host = process.env.ZALO_BRIDGE_HOST || '127.0.0.1',
 }) {
   if (!bridgeToken) throw new Error('Thiếu ZALO_BRIDGE_TOKEN; hãy chạy npm run install:hermes');
+  activeBridgeToken = String(bridgeToken);
+  activeGuestBridgeToken = String(guestBridgeToken);
   zaloApi = api;
   memberDirectory = createMemberDirectory({
     fetchMembers: (groupId) => mentionCandidates(api, groupId),
@@ -391,8 +421,11 @@ export function startHermesBridge({
   activeAccountId = String(profile?.user_id ?? profile?.userId ?? 'unknown');
   activeStore = store || defaultStore();
   ownsActiveStore = !store;
-  activeOwnerUids = new Set(ownerUids || String(process.env.ZALO_ALLOWED_USERS || '')
-    .split(',').map((value) => value.trim()).filter(Boolean));
+  // Chủ nhân đến từ roster do server.js nạp, hoặc từ ownerUids khi caller tự
+  // biết. Không tự đọc tệp ở đây: fail-fast thuộc về điểm khởi động tiến trình,
+  // một chỗ duy nhất, chứ không rải vào từng hàm thư viện.
+  activeOwnerUids = new Set(ownerUids || roster?.owners || []);
+  console.log(`[bridge] roster: ${activeOwnerUids.size} chủ nhân`);
   activeHealth = health;
   maxBackfillPages = Math.max(1, Number(pageLimit) || Number(process.env.ZALO_BACKFILL_MAX_PAGES) || 10);
   limiter = new RateLimiter({
@@ -417,28 +450,27 @@ export function startHermesBridge({
   if (historyListener?.ws?.readyState === 1) historyListenerReady = true;
 
   wss = new WebSocketServer({
-    host: '127.0.0.1',
+    host,
     port,
     verifyClient(info, done) {
       if (info.origin || info.req.headers.origin) return done(false, 403, 'Browser origin is not allowed');
+      const audience = bridgeAudience(info.req.url);
       const supplied = new URL(info.req.url || '/', 'ws://127.0.0.1').searchParams.get('token') || '';
-      const expected = String(bridgeToken);
-      const suppliedBytes = Buffer.from(supplied);
-      const expectedBytes = Buffer.from(expected);
-      const valid = suppliedBytes.length === expectedBytes.length
-        && timingSafeEqual(suppliedBytes, expectedBytes);
+      const valid = Boolean(audience) && tokenMatches(supplied, bridgeTokenFor(audience));
       return done(valid, valid ? 101 : 401, valid ? undefined : 'Unauthorized');
     },
   });
 
   wss.on('connection', (ws, req) => {
+    const audience = bridgeAudience(req.url);
     clients.add(ws);
-    const clientId = `hermes-${++clientSequence}`;
+    clientAudiences.set(ws, audience);
+    const clientId = `${audience}-hermes-${++clientSequence}`;
     clientIds.set(ws, clientId);
     activeHealth?.bridgeConnected(clientId);
-    console.log(`[bridge] 🔗 Hermes đã nối (${clients.size} client)`);
+    console.log(`[bridge] Hermes ${audience} runtime connected (${clients.size} client)`);
 
-    send(ws, { type: 'hello', self: selfProfile });
+    send(ws, { type: 'hello', self: selfProfile, audience });
 
     ws.on('message', (raw) => {
       let cmd;
@@ -450,10 +482,19 @@ export function startHermesBridge({
       if (cmd?.type === 'ping') activeHealth?.bridgeHeartbeat(clientId);
       handleCommand(ws, cmd).catch((err) => {
         activeHealth?.recordError('bridge_command_failed', 'operation_failed');
-        console.error('[bridge] lỗi khi chạy lệnh:', err?.name || 'operation_failed');
+        // err.message của ZcaApiError là văn bản do máy chủ Zalo tự đặt
+        // (`error_message`), nên nó KHÔNG được chuyển tiếp — đó là chủ ý của
+        // 764d772. Nhưng err.code (`error_code`) là một số thuộc tập đóng: nêu
+        // nó ra không rò rỉ gì mà lại giúp agent phân biệt hai lần thất bại
+        // khác nhau, thay vì thử lại y nguyên lệnh vừa lỗi.
+        const zaloCode = Number.isInteger(err?.code) ? err.code : null;
+        console.error('[bridge] lỗi khi chạy lệnh:', err?.name || 'operation_failed', zaloCode ?? '');
         if (cmd?.reqId) send(ws, {
           type: 'ack', reqId: cmd.reqId, ok: false,
-          errorCode: 'operation_failed', error: 'Thao tác Zalo thất bại; xem health/audit để tra mã lỗi',
+          errorCode: 'operation_failed',
+          error: zaloCode === null
+            ? 'Thao tác Zalo thất bại; xem health/audit để tra mã lỗi'
+            : `Thao tác Zalo thất bại (mã Zalo ${zaloCode}); xem health/audit để tra chi tiết`,
         });
       });
     });
@@ -462,6 +503,7 @@ export function startHermesBridge({
       clients.delete(ws);
       activeHealth?.bridgeDisconnected(clientId);
       clientIds.delete(ws);
+      clientAudiences.delete(ws);
       console.log(`[bridge] 🔌 Hermes ngắt kết nối (còn ${clients.size})`);
     });
 
@@ -484,7 +526,7 @@ export function startHermesBridge({
   }, Math.max(10, Number(staleCheckIntervalMs) || 15_000));
   staleTimer.unref?.();
 
-  console.log(`[bridge] 🌉 đang chờ Hermes tại ws://127.0.0.1:${port}`);
+  console.log(`[bridge] 🌉 đang chờ Hermes tại ws://${host}:${port}`);
   return wss;
 }
 
@@ -494,7 +536,10 @@ export function stopHermesBridge() {
   }
   clients.clear();
   clientIds.clear();
-  if (staleTimer) clearInterval(staleTimer);
+  clientAudiences.clear();
+  activeBridgeToken = '';
+  activeGuestBridgeToken = '';
+  clearInterval(staleTimer);
   staleTimer = null;
   if (wss) {
     wss.close();
@@ -622,19 +667,18 @@ function extractQuote(msg) {
   };
 }
 
-/** Đẩy một tin nhắn Zalo sang Hermes. Trả về true nếu có ai đó nhận. */
-export function forwardToHermes(msg) {
-  if (!isHermesAttached()) return false;
+/** Route one admitted frame only to its audience's isolated Hermes runtime. */
+export function forwardToHermes(msg, audience = 'owner') {
+  if (!isHermesAttached(audience)) return false;
   activeHealth?.markInbound();
 
   const mediaUrls = extractMediaUrls(msg);
-  // Tin sticker không mang URL nào trong nội dung; ảnh của nó là do tra nhãn
-  // mà có, nên lấy thẳng từ đó thay vì đoán từ khung tin.
   const sticker = msg?.data?.__sticker;
   const attachments = sticker?.attachment ? [sticker.attachment] : classifyAttachments(msg, mediaUrls);
   const quote = extractQuote(msg);
   const payload = {
     type: 'message',
+    audience,
     id: msg.data?.msgId ? String(msg.data.msgId) : null,
     cliMsgId: msg.data?.cliMsgId ? String(msg.data.cliMsgId) : null,
     threadId: String(msg.threadId ?? ''),
@@ -642,23 +686,17 @@ export function forwardToHermes(msg) {
     senderUid: String(msg.data?.uidFrom ?? ''),
     senderName: msg.data?.dName || '',
     text: extractText(msg),
-    // Kiểu tin của Zalo (webchat, chat.photo, chat.recommended…) — adapter cần
-    // để biết đây là tin chữ hay tin đính kèm.
     msgType: msg.data?.msgType || '',
     mentions: Array.isArray(msg.data?.mentions) ? msg.data.mentions : [],
-    // Phân loại từng tệp đính kèm. Gắn cứng image/jpeg như trước khiến một tệp
-    // PDF bị tải về như ảnh rồi báo "không đọc được ảnh" — xem zalo-attachments.js.
     attachments,
     mediaUrls: attachments.map((item) => item.url),
     mediaTypes: attachments.map((item) => item.mime),
     mediaNames: attachments.map((item) => item.name),
     quote,
     ts: msg.data?.ts ?? Date.now(),
-    // Giữ nguyên gói gốc để adapter trích thêm khi cần (quote, đính kèm…)
     raw: msg.data ?? null,
   };
-
-  broadcast(payload);
+  sendAudience(audience, payload);
   return true;
 }
 
@@ -722,13 +760,7 @@ function policyErrorMessage(code) {
 
 function auditTargetSummary(cmd) {
   const args = Array.isArray(cmd.args) ? cmd.args : [];
-  const targetIndexes = {
-    sendMessage: 1, sendVoice: 1, sendSticker: 1, sendLink: 1,
-    uploadAttachment: 1, createReminder: 1, removeReminder: 1,
-    changeGroupName: 1, addUserToGroup: 1,
-    removeUserFromGroup: 1, addGroupDeputy: 1, removeGroupDeputy: 1,
-  };
-  const invokeIndex = targetIndexes[String(cmd.method || '')];
+  const invokeIndex = threadArgIndex(cmd.method);
   const invokeThreadId = invokeIndex == null ? undefined : args[invokeIndex];
   const summary = {
     commandType: String(cmd.type || ''),
@@ -752,6 +784,13 @@ async function handleCommand(ws, cmd) {
     return send(ws, { type: 'pong', ts: Date.now() });
   }
 
+  const audience = clientAudiences.get(ws);
+  if (!audience || cmd.auth?.audience !== audience || (
+    audience === 'guest' && (cmd.auth?.actorRole === 'system' || !cmd.auth?.bridgeVerified)
+  )) {
+    if (cmd.reqId) send(ws, { type: 'ack', reqId: cmd.reqId, ok: false, errorCode: 'audience_denied', error: 'Request was denied' });
+    return;
+  }
   const authorization = authorizeBridgeCommand(cmd, { ownerUids: activeOwnerUids });
   const shouldAudit = ['send', 'admin', 'undo'].includes(authorization.category);
   const auditRequestId = String(cmd.reqId || `bridge-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -1079,6 +1118,18 @@ function send(ws, obj) {
     ws.send(JSON.stringify(obj));
   } catch (err) {
     console.warn('[bridge] không gửi được frame:', err?.message || err);
+  }
+}
+
+function sendAudience(audience, obj) {
+  const text = JSON.stringify(obj);
+  for (const ws of clients) {
+    if (ws.readyState !== 1 || clientAudiences.get(ws) !== audience) continue;
+    try {
+      ws.send(text);
+    } catch (err) {
+      console.warn('[bridge] routed send failed:', err?.message || err);
+    }
   }
 }
 
