@@ -1755,7 +1755,10 @@ async def zalo_video_info(args: Dict[str, Any], **_kw) -> str:
         if denied:
             return denied
     try:
-        info = await media.video_info(url, with_transcript=args.get("transcript") is not False)
+        info = await media.video_info(
+            url, with_transcript=args.get("transcript") is not False,
+            stt_max_minutes=(media.STT_MAX_MINUTES_OWNER if turn and _acting_as_owner(turn)
+                             else media.STT_MAX_MINUTES_MEMBER))
     except media.MediaError as exc:
         return _err(str(exc))
     return _ok(info)

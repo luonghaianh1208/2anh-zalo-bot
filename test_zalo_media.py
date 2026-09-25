@@ -320,9 +320,99 @@ class MediaHelpersTest(unittest.TestCase):
             Path(workdir, "v.info.json").write_text(json.dumps({"title": "t"}), encoding="utf-8")
             return 0, "", ""
         with mock.patch.object(media, "_run_ytdlp", fake_run):
-            info = run(media.video_info("https://www.tiktok.com/@a/video/1"))
+            info = run(media.video_info("https://www.tiktok.com/@a/video/1", stt_max_minutes=None))
         self.assertEqual(info["transcript"], "")
         self.assertIn("đừng đoán", info["transcript_note"])
+
+    def _info_only(self, extra=None):
+        async def fake_run(args, timeout):
+            workdir = os.path.dirname(args[args.index("-o") + 1])
+            Path(workdir, "v.info.json").write_text(json.dumps({"title": "t", **(extra or {})}), encoding="utf-8")
+            return 0, "", ""
+        return fake_run
+
+    def test_no_subtitles_falls_back_to_speech_to_text(self):
+        async def release_and_return(url, *, max_minutes):
+            media.STT_LOCK.release()          # speech_transcript tự nhả khoá
+            return "xin chào các bạn"
+        stt = mock.AsyncMock(side_effect=release_and_return)
+        with mock.patch.object(media, "_run_ytdlp", self._info_only()), \
+                mock.patch.object(media, "speech_transcript", stt):
+            info = run(media.video_info("https://www.tiktok.com/@a/video/1", stt_max_minutes=20))
+        stt.assert_awaited_once_with("https://www.tiktok.com/@a/video/1", max_minutes=20)
+        self.assertEqual(info["transcript"], "xin chào các bạn")
+        self.assertEqual(info["transcript_source"], "speech-to-text")
+        self.assertIn("chép tự động", info["transcript_note"])
+        self.assertFalse(media.STT_LOCK.locked())
+
+    def test_speech_to_text_failure_or_busy_keeps_do_not_guess_note(self):
+        async def release_and_fail(url, *, max_minutes):
+            media.STT_LOCK.release()
+            raise media.MediaError("video dài quá 20 phút")
+        failing = mock.AsyncMock(side_effect=release_and_fail)
+        with mock.patch.object(media, "_run_ytdlp", self._info_only()), \
+                mock.patch.object(media, "speech_transcript", failing):
+            info = run(media.video_info("https://www.tiktok.com/@a/video/1"))
+        self.assertIn("20 phút", info["transcript_note"])
+        self.assertIn("đừng đoán", info["transcript_note"])
+        self.assertTrue(media.STT_LOCK.acquire(blocking=False))
+        try:
+            with mock.patch.object(media, "_run_ytdlp", self._info_only()), \
+                    mock.patch.object(media, "speech_transcript") as stt:
+                info = run(media.video_info("https://www.tiktok.com/@a/video/1"))
+            stt.assert_not_called()
+            self.assertIn("đang chép lời", info["transcript_note"])
+        finally:
+            media.STT_LOCK.release()
+
+    def test_speech_transcript_downloads_audio_and_uses_hermes_stt(self):
+        calls = []
+
+        async def fake_run(args, timeout):
+            calls.append(args)
+            if "-J" in args:
+                return 0, json.dumps({"_type": "video", "duration": 90, "url": SAFE_SRC}), ""
+            workdir = os.path.dirname(args[args.index("-o") + 1])
+            p = Path(workdir, "audio.mp3")
+            p.write_bytes(b"ID3")
+            return 0, str(p) + "\n", ""
+        fake_stt = mock.Mock(return_value={"success": True, "transcript": " lời thoại "})
+        self.assertTrue(media.STT_LOCK.acquire(blocking=False))
+        with mock.patch.object(media, "_run_ytdlp", fake_run), \
+                mock.patch("tools.transcription_tools.transcribe_audio", fake_stt):
+            text = run(media.speech_transcript(YT, max_minutes=20))
+        self.assertEqual(text, "lời thoại")
+        self.assertIn("-x", calls[1])
+        self.assertIn("--load-info-json", calls[1])
+        self.assertIn("--max-filesize", calls[1])
+        self.assertTrue(fake_stt.call_args.args[0].endswith("audio.mp3"))
+        self.assertFalse(media.STT_LOCK.locked())    # nhả khi luồng chép lời xong
+
+    def test_speech_transcript_respects_duration_cap(self):
+        async def fake_run(args, timeout):
+            return 0, json.dumps({"_type": "video", "duration": 3600, "url": SAFE_SRC}), ""
+        self.assertTrue(media.STT_LOCK.acquire(blocking=False))
+        with mock.patch.object(media, "_run_ytdlp", fake_run):
+            with self.assertRaises(media.MediaError) as ctx:
+                run(media.speech_transcript(YT, max_minutes=20))
+        self.assertIn("20 phút", str(ctx.exception))
+        self.assertFalse(media.STT_LOCK.locked())    # hỏng trước khi chép lời vẫn nhả khoá
+
+    def test_stt_error_details_are_not_shown_to_users(self):
+        async def fake_run(args, timeout):
+            if "-J" in args:
+                return 0, json.dumps({"_type": "video", "duration": 60, "url": SAFE_SRC}), ""
+            p = Path(os.path.dirname(args[args.index("-o") + 1]), "audio.mp3")
+            p.write_bytes(b"ID3")
+            return 0, str(p) + "\n", ""
+        leak = mock.Mock(return_value={"success": False, "error": "connect 127.0.0.1:20128 C:/Users/x/tmp"})
+        self.assertTrue(media.STT_LOCK.acquire(blocking=False))
+        with mock.patch.object(media, "_run_ytdlp", fake_run), \
+                mock.patch("tools.transcription_tools.transcribe_audio", leak):
+            with self.assertRaises(media.MediaError) as ctx:
+                run(media.speech_transcript(YT, max_minutes=20))
+        self.assertNotIn("127.0.0.1", str(ctx.exception))
+        self.assertFalse(media.STT_LOCK.locked())
 
     def test_youtube_skips_ytdlp_subtitles(self):
         seen = {}

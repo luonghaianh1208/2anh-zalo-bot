@@ -131,6 +131,26 @@ class PdfToolsTest(unittest.TestCase):
         self.assertEqual(pdf_tools._stem({"name": "nul.tar.pdf"}), "_nul.tar")
         self.assertEqual(pdf_tools._stem({"name": '../a:b*?.pdf'}), "a b")
 
+    def test_render_pages_for_scanned_pdf(self):
+        scan = self.pdf("scan.pdf", pages=7, scanned=True)
+        got = run(pdf_tools.render_pages(scan, self.out))
+        self.assertEqual(got["total_pages"], 7)
+        self.assertEqual(len(got["paths"]), pdf_tools.RENDER_MAX_PAGES)
+        for p in got["paths"]:
+            self.assertTrue(p.endswith(".jpg"))
+            self.assertTrue(Path(p).resolve().is_relative_to(Path(self.out).resolve()))
+
+    def test_render_caps_giant_pages(self):
+        path = Path(self.dir, "khong-lo.pdf")
+        doc = fitz.open()
+        doc.new_page(width=14000, height=14000)      # ~5 m mỗi cạnh
+        doc.save(str(path))
+        doc.close()
+        got = pdf_tools.render({"name": "khong-lo.pdf", "path": str(path)}, self.out)
+        with fitz.open(got["paths"][0]) as img:
+            rect = img[0].rect
+        self.assertLessEqual(max(rect.width, rect.height), pdf_tools.RENDER_MAX_SIDE_PX + 1)
+
     def test_merge_and_split(self):
         merged = pdf_tools.merge([self.pdf("a.pdf", pages=2), self.pdf("b.pdf", pages=3)], self.out)
         with fitz.open(merged) as d:

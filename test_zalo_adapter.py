@@ -740,6 +740,88 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         }])
         self.assertIn("(PDF số 1)", event.text)
 
+    async def test_scanned_pdf_pages_are_sent_as_images(self):
+        adapter = self.make_adapter()
+        handled = []
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+
+        async def fake_download(url):
+            return b"%PDF-1.7 scan"
+
+        async def no_text(_path):
+            return ""
+
+        def fake_cache(data, *, filename="", mime_type="", default_kind=None):
+            return SimpleNamespace(path=f"C:/cache/documents/doc_{filename}", media_type="application/pdf",
+                                   kind="document", display_name=filename)
+
+        async def fake_pages(doc):
+            return ["C:/cache/images/p1.jpg", "C:/cache/images/p2.jpg"], 9
+
+        with patch.object(zalo_adapter.ZaloAdapter, "_download_attachment", staticmethod(fake_download)), \
+                patch.object(zalo_adapter.ZaloAdapter, "_document_text", staticmethod(no_text)), \
+                patch.object(zalo_adapter.ZaloAdapter, "_scanned_pdf_pages", staticmethod(fake_pages)), \
+                patch.object(zalo_adapter, "cache_media_bytes", fake_cache), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=DummyZaloTools()):
+            await adapter._on_message({
+                "type": "message", "id": "s1", "threadId": "g1",
+                "threadType": zalo_adapter.THREAD_TYPE_GROUP, "senderUid": "u1", "senderName": "Liên",
+                "text": "@Lăng Tiêu đọc giúp file này", "mentions": [{"uid": "bot-uid"}],
+                "msgType": "share.file", "mediaUrls": ["https://file-stal-19.dlfl.vn/gr/scan"],
+                "attachments": [{"url": "https://file-stal-19.dlfl.vn/gr/scan", "name": "quyet-dinh.pdf",
+                                 "mime": "application/pdf", "kind": "document"}],
+            })
+
+        event = handled[0]
+        self.assertEqual(event.media_urls, ["C:/cache/documents/doc_quyet-dinh.pdf",
+                                            "C:/cache/images/p1.jpg", "C:/cache/images/p2.jpg"])
+        self.assertEqual(event.media_types, ["application/pdf", "image/jpeg", "image/jpeg"])
+        self.assertIn("2/9 trang đầu", event.text)
+        self.assertIn("bản quét", event.text)
+
+    async def test_scanned_pdf_render_is_cached_and_slot_limited(self):
+        import tempfile as _tf
+        from pathlib import Path as _P
+
+        pdf = _P(_tf.mkdtemp(), "scan.pdf")
+        pdf.write_bytes(b"%PDF-1.7 unique-scan-" + str(time.time()).encode())
+        img = _P(_tf.mkdtemp(), "p1.jpg")
+        img.write_bytes(b"\xff\xd8jpg")
+        calls = []
+
+        class FakePdfTools:
+            @staticmethod
+            async def render_pages(item, out_dir):
+                calls.append(item["path"])
+                out = _P(out_dir, "trang-1.jpg")
+                out.write_bytes(b"\xff\xd8jpg")
+                return {"paths": [str(out)], "total_pages": 3}
+
+        doc = {"name": "scan.pdf", "path": str(pdf)}
+        with patch("importlib.import_module", return_value=FakePdfTools), \
+                patch.object(zalo_adapter, "cache_image_from_bytes", return_value=str(img)), \
+                patch.object(zalo_adapter, "_zalo_tools", return_value=SimpleNamespace(__package__="x")):
+            first = await zalo_adapter.ZaloAdapter._scanned_pdf_pages(doc)
+            second = await zalo_adapter.ZaloAdapter._scanned_pdf_pages(doc)
+            self.assertEqual(first, ([str(img)], 3))
+            self.assertEqual(second, first)
+            self.assertEqual(len(calls), 1)          # tệp giống hệt → không dựng lại
+
+            other = _P(pdf.parent, "other.pdf")
+            other.write_bytes(b"%PDF-1.7 other-" + str(time.time()).encode())
+            for _ in range(2):
+                zalo_adapter._RENDER_SLOTS.acquire()
+            try:
+                busy = await zalo_adapter.ZaloAdapter._scanned_pdf_pages({"name": "o.pdf", "path": str(other)})
+            finally:
+                for _ in range(2):
+                    zalo_adapter._RENDER_SLOTS.release()
+            self.assertEqual(busy, ([], 0))
+
     def test_followup_attachments_come_only_from_same_sender(self):
         adapter = self.make_adapter()
         a = {"name": "a.pdf", "path": "C:/c/a.pdf", "mime": "application/pdf"}

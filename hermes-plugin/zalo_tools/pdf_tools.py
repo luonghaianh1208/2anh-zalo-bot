@@ -194,22 +194,46 @@ def split(item: Dict[str, str], pages_spec: str, out_dir: str) -> str:
     return str(out)
 
 
-def _do(job: Dict) -> str:
+RENDER_MAX_PAGES = 5
+RENDER_MAX_SIDE_PX = 1800       # trang khổ khổng lồ không được bung thành ảnh hàng GB
+RENDER_TIMEOUT_S = 60
+
+
+def render(item: Dict[str, str], out_dir: str, max_pages: int = RENDER_MAX_PAGES) -> Dict:
+    """Chuyển vài trang đầu thành JPEG để mô hình đọc bằng thị giác (PDF bản quét)."""
+    import pymupdf as fitz
+
+    doc = _open(item)
+    try:
+        paths = []
+        for i in range(min(doc.page_count, max_pages)):
+            page = doc[i]
+            longest = max(page.rect.width, page.rect.height) or 1
+            zoom = min(130 / 72, RENDER_MAX_SIDE_PX / longest)
+            out = Path(out_dir, f"trang-{i + 1}.jpg")
+            page.get_pixmap(matrix=fitz.Matrix(zoom, zoom)).save(str(out), jpg_quality=80)
+            paths.append(str(out))
+        return {"paths": paths, "total_pages": doc.page_count}
+    finally:
+        doc.close()
+
+
+def _do(job: Dict):
     if job["action"] == "to_word":
         return to_word(job["items"][0], job["out_dir"])
     if job["action"] == "merge":
         return merge(job["items"], job["out_dir"])
+    if job["action"] == "render":
+        return render(job["items"][0], job["out_dir"])
     return split(job["items"][0], job.get("pages") or "", job["out_dir"])
 
 
-async def run(action: str, items: List[Dict[str, str]], out_dir: str, pages: str = "") -> str:
-    """Chạy việc PDF trong tiến trình con; trả đường dẫn tệp kết quả nằm trong ``out_dir``."""
+async def _run_worker(job: Dict, timeout: int):
     import asyncio
     import os
 
     from .media import _kill_tree
 
-    job = json.dumps({"action": action, "items": items, "out_dir": out_dir, "pages": pages}).encode()
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     proc = await asyncio.create_subprocess_exec(
         sys.executable, str(Path(__file__).resolve()),
@@ -217,7 +241,7 @@ async def run(action: str, items: List[Dict[str, str]], out_dir: str, pages: str
         stderr=asyncio.subprocess.PIPE, env=env,
     )
     try:
-        out, _err = await asyncio.wait_for(proc.communicate(job), timeout=TIMEOUT_S)
+        out, _err = await asyncio.wait_for(proc.communicate(json.dumps(job).encode()), timeout=timeout)
     except asyncio.TimeoutError:
         await _kill_tree(proc)
         raise PdfError("tệp PDF xử lý quá lâu nên đã dừng — thử tệp nhỏ hơn hoặc tách bớt trang")
@@ -230,17 +254,34 @@ async def run(action: str, items: List[Dict[str, str]], out_dir: str, pages: str
     result = json.loads(lines[-1][len(_RESULT_TAG):])
     if not result.get("ok"):
         raise PdfError(result.get("error") or "không xử lý được tệp PDF này")
-    path = Path(result["path"]).resolve()
-    if not path.is_file() or not path.is_relative_to(Path(out_dir).resolve()):
+    return result["result"]
+
+
+def _inside(path: str, out_dir: str) -> Path:
+    p = Path(path).resolve()
+    if not p.is_file() or not p.is_relative_to(Path(out_dir).resolve()):
         raise PdfError("không xử lý được tệp PDF này")
-    return str(path)
+    return p
+
+
+async def run(action: str, items: List[Dict[str, str]], out_dir: str, pages: str = "") -> str:
+    """Chạy việc PDF trong tiến trình con; trả đường dẫn tệp kết quả nằm trong ``out_dir``."""
+    result = await _run_worker({"action": action, "items": items, "out_dir": out_dir, "pages": pages}, TIMEOUT_S)
+    return str(_inside(result, out_dir))
+
+
+async def render_pages(item: Dict[str, str], out_dir: str) -> Dict:
+    """Ảnh JPEG của vài trang đầu (tiến trình con, có hạn giờ); ``{"paths", "total_pages"}``."""
+    result = await _run_worker({"action": "render", "items": [item], "out_dir": out_dir}, RENDER_TIMEOUT_S)
+    return {"paths": [str(_inside(p, out_dir)) for p in result.get("paths") or []],
+            "total_pages": int(result.get("total_pages") or 0)}
 
 
 def _worker() -> None:
     """Điểm vào của tiến trình con: đọc việc từ stdin, in kết quả có gắn thẻ."""
     job = json.loads(sys.stdin.buffer.read().decode("utf-8"))
     try:
-        result = {"ok": True, "path": _do(job)}
+        result = {"ok": True, "result": _do(job)}
     except PdfError as exc:
         result = {"ok": False, "error": str(exc)}
     except ImportError:

@@ -2,6 +2,25 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.14.0] — 2026-09-26
+
+### Thêm
+
+- **Video không có phụ đề vẫn tóm tắt được.** `zalo_video_info` không tìm thấy phụ đề thì tải
+  riêng phần âm thanh (mp3 mono 16 kHz, nhỏ) rồi chép lời bằng **chính STT Hermes đang cấu hình**
+  (`transcribe_audio`) — Whisper cục bộ, Groq, OpenAI hay một router đều chạy như nhau, plugin
+  không gắn cứng nhà cung cấp nào. Người trong nhóm: video ≤ 20 phút; chủ nhân ≤ 40 phút; cả bot
+  mỗi lúc chép một video. Vẫn qua đủ các lớp chặn của tải video (dò `-J`, không livestream/danh
+  sách phát, nguồn tải không trỏ vào mạng nội bộ). Kết quả ghi rõ "chép tự động từ âm thanh".
+- **PDF bản quét đọc được.** PDF không rút được chữ thì adapter dựng 5 trang đầu thành ảnh JPEG
+  (cạnh dài ≤ 1800 px, trong tiến trình con có hạn giờ 60 giây) và gửi kèm tin như ảnh chụp, để
+  mô hình đọc bằng thị giác — không cần dịch vụ OCR hay khoá nào thêm. Prompt ghi rõ "bản quét,
+  N/M trang đầu gửi kèm dưới dạng ảnh". Tối đa 5 ảnh trang cho cả lượt; mỗi tệp chỉ dựng một lần
+  (nhớ theo sha256 — tệp trong ngữ cảnh nhóm không bị dựng lại mỗi lần có người tag bot); cả bot
+  tối đa 2 việc dựng cùng lúc, hết chỗ thì bỏ qua.
+- Chép lời: khoá chỉ nhả khi luồng chép lời thật sự xong (tối đa 10 phút), âm thanh tải về ≤
+  150 MB, lỗi chi tiết của STT chỉ ghi log — người dùng nhận thông báo chung.
+
 ## [1.13.0] — 2026-09-26
 
 ### Thêm
