@@ -101,6 +101,7 @@ Cầu nối chỉ chấp nhận các hàm zca-js nằm trong **danh sách trắn
 | Số công cụ Zalo | 47 | 15 |
 | `terminal`, `read_file`, `write_file` | ✅ | ❌ |
 | `browser_*`, `web_search` | ✅ | ❌ |
+| Công cụ MCP | ✅ | ❌ mặc định — chỉ server khai trong `ZALO_PUBLIC_MCP` |
 | Nhắm tới hội thoại khác | ✅ | ❌ — khoá trong cuộc trò chuyện hiện tại |
 | Nhắn riêng với bot | ✅ | ❌ mặc định (`ZALO_DM_POLICY`) |
 

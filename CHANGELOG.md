@@ -2,6 +2,21 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.11.1] — 2026-09-26
+
+### Bảo mật
+
+- **Người trong nhóm không còn gọi được công cụ MCP mặc định.** Hermes cấp mọi MCP server cho
+  mọi nền tảng, và từ 1.4.1 lớp chặn của plugin cho người ngoài gọi mọi công cụ MCP — cắm một
+  server dọn ổ đĩa, chạy Apify tốn tiền hay đọc Gmail là người lạ trong nhóm gọi được ngay.
+  Nay mặc định chặn; chủ nhân mở từng server/công cụ bằng `ZALO_PUBLIC_MCP` trong `.env` của
+  Hermes (tên server `rag`, toolset `mcp-rag`, tên công cụ, cho phép glob; `*` là mở hết như
+  cũ). Không đọc được hồ sơ bí mật (multiplex không có scope) thì coi như không mở gì. Chủ
+  nhân vẫn dùng mọi MCP như trước.
+- **Nâng cấp:** ai đang cho nhóm dùng một MCP server (vd. kho RAG) cần thêm
+  `ZALO_PUBLIC_MCP=<tên server>`. `npm run doctor` liệt kê server đang cấu hình và server nào
+  đã mở cho nhóm.
+
 ## [1.11.0] — 2026-09-26
 
 ### Thêm

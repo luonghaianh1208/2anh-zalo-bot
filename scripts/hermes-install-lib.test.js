@@ -285,6 +285,27 @@ test('install không đè lên platform_hints.zalo.append mà khách đã tự v
   assert.equal(config.platform_hints.zalo.append, customerText);
 });
 
+test('doctor nhắc MCP chỉ chủ nhân dùng được cho tới khi khai ZALO_PUBLIC_MCP', async (t) => {
+  const fx = fixture(t);
+  await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  let diagnosis = doctorHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  assert.equal(diagnosis.checks.find((c) => c.name === 'mcp-for-members'), undefined);
+
+  const configPath = join(fx.hermesHome, 'config.yaml');
+  const config = parse(readFileSync(configPath, 'utf8'));
+  config.mcp_servers = { rag: { url: 'https://rag.example/mcp' } };
+  writeFileSync(configPath, stringify(config));
+  diagnosis = doctorHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  let check = diagnosis.checks.find((c) => c.name === 'mcp-for-members');
+  assert.equal(check.ok, true);
+  assert.match(check.detail, /chỉ chủ nhân/);
+
+  writeFileSync(join(fx.hermesHome, '.env'), 'ZALO_PUBLIC_MCP=rag\n', { flag: 'a' });
+  diagnosis = doctorHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
+  check = diagnosis.checks.find((c) => c.name === 'mcp-for-members');
+  assert.match(check.detail, /gọi được MCP khớp: rag/);
+});
+
 test('doctor báo đúng mục style-guide: đã ghi bản mặc định rồi báo khách đang dùng bản riêng', async (t) => {
   const fx = fixture(t);
   await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });

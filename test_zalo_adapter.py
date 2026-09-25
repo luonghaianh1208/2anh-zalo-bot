@@ -2713,7 +2713,7 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
             self.assertEqual(verdict["action"], "block", name)
             self.assertIn(name, verdict["message"])
 
-    def test_member_turn_keeps_public_zalo_mcp_and_tool_search_bridge(self):
+    def test_member_turn_keeps_public_zalo_tools_and_tool_search_bridge(self):
         self.bind_member()
         public = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_PUBLIC)
         owner_only = next(name for name, _e, _s, _h, ts in zalo_tools.TOOLS if ts == zalo_tools.TOOLSET_OWNER)
@@ -2721,9 +2721,24 @@ class ZaloMemberToolGuardTest(unittest.TestCase):
         self.assertIsNone(self.guard("tool_search"))
         self.assertEqual(self.guard(owner_only)["action"], "block")
 
+    def test_member_mcp_is_blocked_unless_owner_opens_it(self):
+        self.bind_member()
         from tools.registry import registry
         with patch.object(registry, "get_toolset_for_tool", return_value="mcp-rag"):
-            self.assertIsNone(self.guard("rag_search"))
+            with patch.dict(os.environ, {"ZALO_PUBLIC_MCP": ""}):
+                self.assertEqual(self.guard("rag_search")["action"], "block")
+            for opened in ("rag", "mcp-rag", "rag_*", "rag_search", "gmail, rag", "*"):
+                with patch.dict(os.environ, {"ZALO_PUBLIC_MCP": opened}):
+                    self.assertIsNone(self.guard("rag_search"), opened)
+            for other in ("gmail", "ra", "rag_delete"):
+                with patch.dict(os.environ, {"ZALO_PUBLIC_MCP": other}):
+                    self.assertEqual(self.guard("rag_search")["action"], "block", other)
+
+    def test_owner_turn_uses_any_mcp_without_allowlist(self):
+        from tools.registry import registry
+        with patch.object(registry, "get_toolset_for_tool", return_value="mcp-apify"), \
+                patch.dict(os.environ, {"ZALO_PUBLIC_MCP": ""}):
+            self.assertIsNone(self.guard("apify_run_actor"))
 
     def test_owner_turn_and_non_zalo_contexts_are_untouched(self):
         self.assertIsNone(self.guard("terminal"))

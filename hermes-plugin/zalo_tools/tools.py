@@ -3147,9 +3147,44 @@ def _member_may_call(name: str, args: Any) -> bool:
     try:
         from tools.registry import registry
 
-        return str(registry.get_toolset_for_tool(name) or "").startswith("mcp-")
+        toolset = str(registry.get_toolset_for_tool(name) or "")
     except Exception:
         return False
+    return toolset.startswith("mcp-") and _mcp_open_to_members(name, toolset)
+
+
+def _public_mcp_patterns() -> List[str]:
+    """Các MCP chủ nhân mở cho người trong nhóm, khai trong ``ZALO_PUBLIC_MCP``."""
+    try:
+        from agent.secret_scope import UnscopedSecretError, get_secret
+        try:
+            raw = get_secret("ZALO_PUBLIC_MCP", "")
+        except UnscopedSecretError:
+            # Đang multiplex mà không có scope: không đoán sang hồ sơ khác —
+            # danh sách này MỞ quyền, đọc nhầm là mở nhầm.
+            return []
+    except Exception:
+        raw = os.getenv("ZALO_PUBLIC_MCP", "")
+    return [part.strip() for part in str(raw or "").split(",") if part.strip()]
+
+
+def _mcp_open_to_members(name: str, toolset: str) -> bool:
+    """Công cụ MCP này có được người trong nhóm gọi không — mặc định KHÔNG.
+
+    Hermes cấp mọi MCP server cho mọi nền tảng, kể cả lượt của người lạ trong
+    nhóm. Mở mặc định thì cắm một server dọn ổ đĩa, chạy Apify tốn tiền hay đọc
+    Gmail là người ngoài gọi được ngay. Mỗi mục trong ``ZALO_PUBLIC_MCP`` khớp
+    (kiểu glob) với tên server (``rag``), toolset (``mcp-rag``) hoặc tên công
+    cụ (``rag_search``); ``*`` mở hết như trước bản 1.11.1.
+    """
+    import fnmatch
+
+    server = toolset[len("mcp-"):]
+    return any(
+        fnmatch.fnmatchcase(server, pattern) or fnmatch.fnmatchcase(toolset, pattern)
+        or fnmatch.fnmatchcase(name, pattern)
+        for pattern in _public_mcp_patterns()
+    )
 
 
 def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Optional[Dict[str, str]]:

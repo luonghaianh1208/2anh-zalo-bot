@@ -425,6 +425,19 @@ export function doctorHermes({
   const hermesToken = config?.platforms?.zalo?.extra?.bridge_token;
   add('bridge-token', Boolean(sidecarToken && hermesToken && sidecarToken === String(hermesToken)));
   add('sidecar-server', existsSync(join(root, 'server.js')));
+  // Từ 1.11.1 người trong nhóm không gọi được MCP nào trừ khi khai ZALO_PUBLIC_MCP —
+  // báo ra để ai đang cho nhóm dùng một server (vd. kho RAG) biết mà mở lại.
+  const mcpServers = Object.keys(config?.mcp_servers || {});
+  if (mcpServers.length) {
+    const hermesEnv = join(layout.home, '.env');
+    const raw = existsSync(hermesEnv)
+      ? (readFileSync(hermesEnv, 'utf8').match(/^ZALO_PUBLIC_MCP=(.*)$/m)?.[1] || '')
+      : '';
+    const open = raw.split(',').map((part) => part.trim()).filter(Boolean);
+    add('mcp-for-members', true, open.length
+      ? `người trong nhóm gọi được MCP khớp: ${open.join(', ')} (đang cấu hình: ${mcpServers.join(', ')})`
+      : `MCP ${mcpServers.join(', ')} chỉ chủ nhân dùng được — muốn mở cho nhóm thì thêm ZALO_PUBLIC_MCP=<tên server> vào .env của Hermes`);
+  }
   const configuredVieneu = config?.tts?.providers?.[VIENEU_PROVIDER];
   const target = vieneuLayout(layout.home);
   const managedVieneu = config?.tts?.provider === VIENEU_PROVIDER
