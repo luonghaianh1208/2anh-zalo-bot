@@ -485,6 +485,83 @@ async def zalo_make_file(args: Dict[str, Any], **_kw) -> str:
         shutil.rmtree(directory, ignore_errors=True)
 
 
+# Mỗi người trong nhóm xử lý tối đa bấy nhiêu lần PDF một giờ (chủ nhân không giới hạn).
+PDF_QUOTA_PER_HOUR = 5
+_PDF_QUOTA: Dict[str, List[float]] = {}
+
+
+async def zalo_pdf(args: Dict[str, Any], **_kw) -> str:
+    """Chuyển PDF sang Word, gộp hoặc tách trang PDF người dùng gửi; gửi kết quả rồi xoá.
+
+    Chỉ chọn trong tệp đính kèm adapter ghi vào turn (xem pdf_tools) — không nhận
+    đường dẫn nào từ mô hình.
+    """
+    import shutil
+    import tempfile
+
+    from . import pdf_tools
+
+    turn = _turn() or {}
+    as_owner = _acting_as_owner(turn)
+    if not as_owner and not turn.get("is_group"):
+        return _err("chỉ xử lý PDF trong nhóm; nhắn riêng thì chưa hỗ trợ")
+    action = str(args.get("action") or "")
+    if action not in ("to_word", "merge", "split"):
+        return _err("action phải là to_word, merge hoặc split")
+    thread_id, kind, err = _scoped_thread({})
+    if err:
+        return err
+    try:
+        items = pdf_tools.pick_pdfs(list(turn.get("attachments") or []), list(args.get("files") or []))
+    except pdf_tools.PdfError as exc:
+        return _err(str(exc))
+    if action != "merge" and len(items) != 1:
+        names = "; ".join(f"{i}) {item.get('name')}" for i, item in enumerate(items, 1))
+        return _err(f"có {len(items)} tệp PDF: {names} — chọn một tệp bằng `files`")
+    pages = str(args.get("pages") or "")
+    if action == "split":
+        # Soát cú pháp trước khi trừ lượt: mô hình ghi sai không làm người dùng mất lượt.
+        try:
+            pdf_tools.parse_pages(pages, pdf_tools.MAX_PAGES_TOTAL)
+        except pdf_tools.PdfError as exc:
+            return _err(str(exc))
+
+    if not pdf_tools.LOCK.acquire(blocking=False):
+        return _err("bot đang xử lý một tệp PDF khác, thử lại sau ít phút")
+    directory = None
+    keep = False
+    try:
+        if not as_owner:
+            denied = _take_quota(_PDF_QUOTA, str(turn.get("sender_uid") or ""), PDF_QUOTA_PER_HOUR, "xử lý PDF")
+            if denied:
+                return denied
+        directory = tempfile.mkdtemp(prefix="zalo-pdf-")
+        try:
+            path = await pdf_tools.run(action, items, directory, pages)
+        except pdf_tools.PdfError as exc:
+            return _err(str(exc))
+        caption = str(args.get("caption") or "").strip()
+        sent = await _invoke("sendMessage", [
+            {"msg": caption, "attachments": [path]},
+            thread_id, _thread_type(kind),
+        ])
+        if str(json.loads(sent).get("error", "")).startswith("Sidecar không phản hồi"):
+            # Như zalo_video_download: sidecar có thể vẫn đang tải tệp lên Zalo.
+            keep = True
+            return _ok({"status": "unconfirmed",
+                        "note": "Zalo chưa xác nhận sau 150 giây — tệp có thể vẫn đang gửi. "
+                                "Báo người dùng chờ thêm, ĐỪNG làm lại."})
+        return sent
+    finally:
+        if directory:
+            if keep:
+                from . import media
+                media.schedule_cleanup(directory)
+            else:
+                shutil.rmtree(directory, ignore_errors=True)
+        pdf_tools.LOCK.release()
+
+
 async def zalo_send_voice(args: Dict[str, Any], **_kw) -> str:
     url = str(args.get("url") or "").strip()
     if not url:
@@ -2436,6 +2513,23 @@ TOOLS = [
         },
         ["thread_id", "format", "title"],
     ), zalo_make_file, TOOLSET_PUBLIC),
+
+    ("zalo_pdf", "📑", _schema(
+        "zalo_pdf",
+        "Xử lý tệp PDF người dùng gửi trong cuộc trò chuyện (tin vừa gửi, tin họ reply hoặc tin "
+        "gần đó): chuyển sang Word (to_word), gộp nhiều PDF thành một (merge), tách lấy một số "
+        "trang (split). Tệp kết quả gửi thẳng vào cuộc trò chuyện này. Chỉ gọi khi người dùng "
+        "nhờ đổi/gộp/tách PDF — muốn đọc nội dung thì không cần, chữ trong tệp đã kèm sẵn.",
+        {
+            "action": {"type": "string", "enum": ["to_word", "merge", "split"],
+                       "description": "to_word: PDF → .docx; merge: gộp các PDF theo thứ tự; split: lấy các trang chỉ định."},
+            "files": {"type": "array", "items": {"type": "integer"},
+                      "description": "Số thứ tự tệp PDF theo thứ tự xuất hiện (1 = tệp đầu). Bỏ trống = tất cả."},
+            "pages": {"type": "string", "description": "Chỉ cho split: khoảng trang, ví dụ '1-3, 5, 8-'."},
+            "caption": {"type": "string", "description": "Lời nhắn kèm tệp (tuỳ chọn)."},
+        },
+        ["action"],
+    ), zalo_pdf, TOOLSET_PUBLIC),
 
     ("zalo_send_voice", "🎙️", _schema(
         "zalo_send_voice",

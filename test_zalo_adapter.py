@@ -732,6 +732,36 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("22-KH.Tiếng nói xanh.pdf", event.text)
         self.assertIn("KẾ HOẠCH tổ chức cuộc thi", event.text)
         self.assertEqual(event.media_text_inlined, [True])
+        # zalo_pdf chỉ được chọn trong danh sách tệp adapter ghi vào turn của tin này.
+        self.assertEqual(adapter._turns["f1"]["attachments"], [{
+            "name": "22-KH.Tiếng nói xanh.pdf",
+            "path": "C:/cache/documents/doc_22-KH.Tiếng nói xanh.pdf",
+            "mime": "application/pdf",
+        }])
+        self.assertIn("(PDF số 1)", event.text)
+
+    def test_followup_attachments_come_only_from_same_sender(self):
+        adapter = self.make_adapter()
+        a = {"name": "a.pdf", "path": "C:/c/a.pdf", "mime": "application/pdf"}
+        b = {"name": "b.pdf", "path": "C:/c/b.pdf", "mime": "application/pdf"}
+        other = {"name": "x.pdf", "path": "C:/c/x.pdf", "mime": "application/pdf"}
+        adapter._turns = {
+            "m1": {"thread_id": "g1", "sender_uid": "u1", "seq": 1, "attachments": [a]},
+            "m2": {"thread_id": "g1", "sender_uid": "u1", "seq": 2, "attachments": [b, a]},
+            "m3": {"thread_id": "g1", "sender_uid": "u2", "seq": 3, "attachments": [other]},
+            "m0": {"thread_id": "g1", "sender_uid": "u1", "seq": 0, "attachments": [other]},
+        }
+        merged = adapter._with_followup_attachments(adapter._turns["m1"])
+        self.assertEqual(merged["attachments"], [a, b])
+        self.assertEqual(adapter._turns["m1"]["attachments"], [a])   # không sửa bản gốc
+
+    def test_file_words_pull_recent_group_files(self):
+        adapter = self.make_adapter()
+        adapter._recent_group_messages["g1"] = [
+            {"id": str(i), "text": f"tin {i}"} for i in range(1, 8)]
+        got = adapter._recent_context_for_question("g1", {"id": "9", "text": "@bot gộp 2 file pdf vừa gửi"})
+        self.assertEqual([m["id"] for m in got], ["3", "4", "5", "6", "7"])
+        self.assertEqual(adapter._recent_context_for_question("g1", {"id": "9", "text": "@bot thời tiết mai"}), [])
 
     async def test_owner_dm_with_undownloadable_image_still_reaches_the_agent_with_the_reason(self):
         adapter = self.make_adapter()
@@ -1688,7 +1718,7 @@ class ZaloToolSchemaTest(unittest.TestCase):
         self.assertEqual(set(assignments), {
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 18)
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 19)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 34)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 

@@ -165,7 +165,7 @@ The installer also ships a default message style guide (`hermes-plugin/zalo-styl
 | Group | Tools |
 |---|---|
 | Facebook Page | `zalo_fb_pages` `zalo_fb_posts` `zalo_fb_comments` `zalo_fb_draft` `zalo_fb_publish` `zalo_fb_check` |
-| Send content | `zalo_send_file` `zalo_send_voice` `zalo_send_sticker` `zalo_send_link` `zalo_forward` |
+| Send content | `zalo_send_file` `zalo_make_file` `zalo_pdf` (PDF → Word, merge, split) `zalo_send_voice` `zalo_send_sticker` `zalo_send_link` `zalo_forward` |
 | Read context | `zalo_read_history` `zalo_list_groups` `zalo_group_members` `zalo_find_user` `zalo_user_info` `zalo_list_friends` |
 | Zalo-specific | `zalo_create_poll` `zalo_poll_detail` `zalo_lock_poll` `zalo_create_note` `zalo_create_reminder` `zalo_list_reminders` `zalo_remove_reminder` `zalo_pin_conversation` `zalo_mute` |
 | Fix mistakes & administration | `zalo_undo` `zalo_rename_group` `zalo_group_member_change` `zalo_group_deputy` `zalo_pending_members` `zalo_review_member` |

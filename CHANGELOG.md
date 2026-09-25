@@ -2,6 +2,23 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.12.0] — 2026-09-26
+
+### Thêm
+
+- **Người trong nhóm nhờ bot chuyển PDF sang Word, gộp và tách PDF.** Công cụ công khai mới
+  `zalo_pdf` (`to_word`, `merge`, `split`): làm trên tệp PDF người dùng gửi — tin vừa gửi, tin
+  được reply, hoặc vài tin ngay trước đó khi câu hỏi nhắc "file/pdf/gộp/tách/vừa gửi" — rồi gửi
+  kết quả vào **đúng nhóm đang chat** và xoá tệp tạm. Công cụ không nhận đường dẫn từ mô hình:
+  adapter ghi danh sách tệp của lượt vào turn, công cụ chỉ chọn theo số thứ tự ("PDF số 1, 2…"
+  ghi sẵn trong prompt). Tin gửi tiếp của cùng người khi bot đang bận cũng được gom vào.
+- Giới hạn: chỉ trong nhóm (nhắn riêng chưa hỗ trợ), mỗi người 5 lần/giờ (chủ nhân không giới
+  hạn), cả bot mỗi lúc một việc PDF; tệp ≤ 30 MB, ≤ 500 trang, sang Word ≤ 60 trang, gộp ≤ 10
+  tệp. Chỉ nhận tệp có chữ ký `%PDF-`; tệp có mật khẩu hay bản quét ảnh được báo rõ.
+- **Chống PDF làm treo máy:** việc nặng chạy trong tiến trình con, quá 120 giây hoặc lượt bị huỷ
+  thì giết cả cây; số trang kiểm ngay lúc mở; pdf2docx báo lỗi thay vì âm thầm bỏ trang hỏng.
+- Cần `uv pip install --python <venv Hermes> pymupdf pdf2docx`; `npm run doctor` báo thiếu.
+
 ## [1.11.1] — 2026-09-26
 
 ### Bảo mật
