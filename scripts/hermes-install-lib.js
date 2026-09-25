@@ -456,6 +456,12 @@ export function doctorHermes({
     add('python-document-libs', true, docs?.status === 0
       ? 'có — bot tạo được tệp Word/PowerPoint/Excel/PDF'
       : 'thiếu — bot chưa tạo được tệp; cài bằng: uv pip install --python <venv Hermes> python-docx python-pptx openpyxl fpdf2');
+    // Đọc/tải video (zalo_video_info, zalo_video_download) cũng tuỳ chọn. ffmpeg để ghép hình với tiếng.
+    const video = python ? commandProbe(python, ['-c', 'import yt_dlp, curl_cffi, youtube_transcript_api'], { encoding: 'utf8' }) : null;
+    const ffmpeg = commandProbe('ffmpeg', ['-version'], { encoding: 'utf8' });
+    add('video-tools', true, video?.status === 0 && ffmpeg?.status === 0
+      ? 'có — bot đọc và tải được video YouTube/TikTok/Facebook'
+      : 'thiếu — bot chưa đọc/tải được video; cài: uv pip install --python <venv Hermes> "yt-dlp[default,curl-cffi]" youtube-transcript-api, và cài ffmpeg');
   }
   return { ok: checks.every((check) => check.ok), checks };
 }

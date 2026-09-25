@@ -2,6 +2,36 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.11.0] — 2026-09-26
+
+### Thêm
+
+- **Người trong nhóm nhờ bot đọc và tải video.** Hai công cụ công khai mới:
+  - `zalo_video_info` — đọc tiêu đề, kênh, thời lượng, mô tả và phụ đề/lời thoại của video
+    YouTube, TikTok, Facebook, Instagram, X, Vimeo, Dailymotion để bot tóm tắt. Không tải
+    video. Video không có phụ đề thì bot được dặn chỉ tóm tắt từ tiêu đề/mô tả, không đoán.
+  - `zalo_video_download` — tải video Full HD (cạnh ngắn ≤ 1080, TikTok không logo, ưu tiên
+    h264/AAC để Zalo phát được), gửi vào **đúng nhóm đang chat**, gửi xong xoá tệp.
+- **Chỉ tải khi người dùng thật sự yêu cầu:** tin nhắn chính tay họ gõ phải có cụm như
+  “tải video/về/giúp”, “download”, “gửi file video” (bỏ qua chữ trong link; “quá tải”, “tải
+  lên” không tính). Nội dung trang web hay mô tả video cài lệnh không kích hoạt được.
+- Giới hạn cho người trong nhóm (chủ nhân chỉ chịu giới hạn dung lượng): video ≤ 20 phút và
+  ≤ 300 MB, mỗi người 3 lượt tải/giờ (tải hỏng cũng tính) và 20 lượt đọc video/giờ, cả bot
+  mỗi lúc tải một video. Không tải livestream, danh sách phát hay cả kênh — với mọi người.
+- Cần `uv pip install --python <venv Hermes> "yt-dlp[default,curl-cffi]" youtube-transcript-api`
+  và ffmpeg; Node (đã có sẵn cho sidecar) để giải mã YouTube. `npm run doctor` báo thiếu.
+
+### Sửa
+
+- **Link Google Sheets/Docs/Slides công khai đọc được.** `zalo_web_read` trước chuyển link
+  sang đường `/export` rồi nhờ `web_extract` đọc, nhưng dịch vụ đọc trang trả “Content was
+  inaccessible” dù tài liệu công khai — nhóm gửi sheet mà bot báo không đọc được. Nay bot tải
+  thẳng bản xuất văn bản; tài liệu chưa bật chia sẻ thì báo rõ lý do. Tệp Drive (`/file/d/`)
+  giữ đường cũ.
+- **Trang web `web_extract` không đọc được thì bot tự tải và bóc chữ**, qua HTTP client chống
+  SSRF của Hermes (kiểm IP lúc mở kết nối và sau mỗi lần chuyển hướng, không theo proxy môi
+  trường, tối đa 3 MB / 30 giây).
+
 ## [1.10.11] — 2026-09-25
 
 ### Sửa

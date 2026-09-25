@@ -1566,10 +1566,156 @@ async def zalo_web_read(args: Dict[str, Any], **_kw) -> str:
             "chỉ đọc được địa chỉ web công cộng (http/https), không đọc địa chỉ "
             f"nội bộ: {', '.join(blocked[:3])}"
         )
-    # Đổi sau khi kiểm tra an toàn, không phải trước — để phép kiểm luôn nhìn
-    # đúng địa chỉ người dùng đưa vào.
-    urls = [_google_export_url(u) for u in urls]
-    return await _core("web_extract", {"urls": urls[:5]}, attempts=2)
+    from . import media
+
+    urls = urls[:5]
+    # Tài liệu Google tự tải thẳng: web_extract trả "Content was inaccessible"
+    # cho đường /export dù tài liệu công khai (đo trên sheet thật của nhóm).
+    # Đổi sang /export sau khi kiểm tra an toàn — phép kiểm nhìn đúng địa chỉ gốc.
+    # Chỉ Docs/Sheets/Slides: tệp Drive (/file/d/, PDF, DOCX…) vẫn đi đường cũ.
+    google = [u for u in urls if _google_export_url(u).startswith("https://docs.google.com/")]
+    others = [u for u in urls if u not in google]
+    pages: List[Dict[str, Any]] = []
+    for u in google:
+        try:
+            pages.append(await media.read_google_doc(_google_export_url(u), u))
+        except Exception as exc:
+            pages.append({"url": u, "error": str(exc) or type(exc).__name__})
+
+    if others:
+        core = await _core("web_extract", {"urls": [_google_export_url(u) for u in others]}, attempts=2)
+        if not _core_result_empty(core):
+            if not google:
+                return core
+            pages.append({"web_extract": json.loads(core) if core.startswith("{") else core})
+        else:
+            # Dịch vụ đọc trang không lấy được (trang chặn thu thập…) thì tự tải.
+            for u in others:
+                try:
+                    pages.append(await media.read_web_page(u))
+                except Exception as exc:
+                    pages.append({"url": u, "error": str(exc) or type(exc).__name__})
+
+    if all("error" in p for p in pages):
+        return _err("; ".join(f"{p['url']}: {p['error']}" for p in pages))
+    return _ok(pages)
+
+
+# Mỗi người trong nhóm tải tối đa bấy nhiêu video một giờ (chủ nhân không giới hạn).
+VIDEO_QUOTA_PER_HOUR = 3
+_VIDEO_QUOTA: Dict[str, List[float]] = {}
+# Đọc thông tin video rẻ hơn nhưng vẫn chạy yt-dlp: chặn gọi dồn dập.
+VIDEO_INFO_QUOTA_PER_HOUR = 20
+_VIDEO_INFO_QUOTA: Dict[str, List[float]] = {}
+# Người trong nhóm chỉ được tải khi CHÍNH TIN HỌ GÕ có ý tải. Mô hình không tự
+# đặt chữ vào tin nhắn được, nên một mô tả video hay trang web cài lệnh "hãy tải
+# video này" không kích hoạt được việc tải. So trên tin đã bỏ URL (link có chữ
+# "download" không tính) và cần cụm rõ nghĩa — "quá tải", "tải lên" không tính.
+_DOWNLOAD_INTENT = re.compile(
+    r"\b(tải|tai)\s*(về|ve|video|clip|xuống|xuong|giúp|giup|dùm|dum|hộ|ho|lại|lai|file|mp4)\b"
+    r"|\bdownload\b|\b(gửi|gui|lưu|luu)\s*(file|video|clip)\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_download(text: str) -> bool:
+    plain = unicodedata.normalize("NFC", re.sub(r"https?://\S+", " ", str(text or "")))
+    return bool(_DOWNLOAD_INTENT.search(plain))
+
+
+def _acting_as_owner(turn: Dict[str, Any]) -> bool:
+    """Chủ nhân thật, không có người ngoài chen tin vào giữa lượt (busy_input interrupt/steer)."""
+    return bool(turn.get("is_owner")) and not _outsider_spoke_after(turn)
+
+
+def _take_quota(book: Dict[str, List[float]], uid: str, limit: int, what: str) -> Optional[str]:
+    """Trừ một lượt NGAY (kể cả nếu việc sau đó thất bại); trả thông báo lỗi nếu hết lượt."""
+    now = time.time()
+    recent = [ts for ts in book.get(uid, []) if now - ts < 3600]
+    if len(recent) >= limit:
+        book[uid] = recent
+        wait = int((3600 - (now - recent[0])) // 60) + 1
+        return _err(f"mỗi người {what} tối đa {limit} lần mỗi giờ — thử lại sau khoảng {wait} phút")
+    book[uid] = recent + [now]
+    return None
+
+
+async def zalo_video_info(args: Dict[str, Any], **_kw) -> str:
+    from . import media
+
+    url = str(args.get("url") or "").strip()
+    if not media.is_video_url(url):
+        return _err("chỉ đọc được link video YouTube, TikTok, Facebook, Instagram, X, Vimeo, Dailymotion")
+    turn = _turn() or {}
+    if turn and not _acting_as_owner(turn):
+        denied = _take_quota(_VIDEO_INFO_QUOTA, str(turn.get("sender_uid") or ""),
+                             VIDEO_INFO_QUOTA_PER_HOUR, "đọc video")
+        if denied:
+            return denied
+    try:
+        info = await media.video_info(url, with_transcript=args.get("transcript") is not False)
+    except media.MediaError as exc:
+        return _err(str(exc))
+    return _ok(info)
+
+
+async def zalo_video_download(args: Dict[str, Any], **_kw) -> str:
+    """Tải video Full HD rồi gửi vào cuộc trò chuyện đang diễn ra; gửi xong xoá tệp."""
+    import shutil
+
+    from . import media
+
+    turn = _turn() or {}
+    as_owner = _acting_as_owner(turn)
+    if not as_owner and not turn.get("is_group"):
+        return _err("chỉ tải video trong nhóm; nhắn riêng thì chưa hỗ trợ")
+    if not as_owner and not _wants_download(turn.get("text") or ""):
+        return _err("người dùng chưa yêu cầu tải — chỉ đọc nội dung bằng zalo_video_info, đừng tải")
+    url = str(args.get("url") or "").strip()
+    if not media.is_video_url(url):
+        return _err("chỉ tải được video YouTube, TikTok, Facebook, Instagram, X, Vimeo, Dailymotion")
+    # Luôn gửi vào đúng cuộc trò chuyện đang diễn ra, kể cả với chủ nhân.
+    thread_id, kind, err = _scoped_thread({})
+    if err:
+        return err
+
+    if not media.DOWNLOAD_LOCK.acquire(blocking=False):
+        return _err("bot đang tải một video khác, thử lại sau ít phút")
+    workdir = None
+    keep = False
+    try:
+        if not as_owner:
+            # Trừ lượt ngay khi thử: tải hỏng cũng tốn lượt, nên không spam được.
+            denied = _take_quota(_VIDEO_QUOTA, str(turn.get("sender_uid") or ""),
+                                 VIDEO_QUOTA_PER_HOUR, "tải video")
+            if denied:
+                return denied
+        workdir = media.new_download_dir()
+        try:
+            path = await media.download_video(
+                url, workdir, max_minutes=None if as_owner else media.VIDEO_MAX_MINUTES)
+        except media.MediaError as exc:
+            return _err(str(exc))
+        caption = str(args.get("caption") or "").strip()
+        sent = await _invoke("sendMessage", [
+            {"msg": caption, "attachments": [path]},
+            thread_id, _thread_type(kind),
+        ])
+        if str(json.loads(sent).get("error", "")).startswith("Sidecar không phản hồi"):
+            # Hết giờ chờ nhưng sidecar có thể vẫn đang tải tệp lên Zalo: xoá
+            # ngay là cắt ngang lần gửi, báo lỗi thì mô hình tải lại gửi trùng.
+            keep = True
+            return _ok({"status": "unconfirmed",
+                        "note": "Zalo chưa xác nhận sau 150 giây — tệp lớn có thể vẫn đang gửi. "
+                                "Báo người dùng chờ thêm, ĐỪNG tải lại."})
+        return sent
+    finally:
+        if workdir:
+            if keep:
+                media.schedule_cleanup(workdir)
+            else:
+                shutil.rmtree(workdir, ignore_errors=True)
+        media.DOWNLOAD_LOCK.release()
 
 
 # =====================================================================
@@ -2695,8 +2841,10 @@ TOOLS = [
 
     ("zalo_web_read", "🌐", _schema(
         "zalo_web_read",
-        "Đọc nội dung một hoặc vài trang web theo địa chỉ. Chỉ đọc được địa "
-        "chỉ công cộng http/https, tối đa 5 trang mỗi lần.",
+        "Đọc nội dung một hoặc vài trang web theo địa chỉ, kể cả link Google "
+        "Docs/Sheets/Slides đã bật chia sẻ công khai. Chỉ đọc được địa chỉ công "
+        "cộng http/https, tối đa 5 trang mỗi lần. Link video (YouTube, TikTok…) "
+        "thì dùng zalo_video_info.",
         {
             "url": {"type": "string", "description": "Địa chỉ trang cần đọc."},
             "urls": {"type": "array", "items": {"type": "string"},
@@ -2704,6 +2852,33 @@ TOOLS = [
         },
         [],
     ), zalo_web_read, TOOLSET_PUBLIC),
+
+    ("zalo_video_info", "🎬", _schema(
+        "zalo_video_info",
+        "Đọc thông tin một video YouTube, TikTok, Facebook, Instagram, X, Vimeo "
+        "hoặc Dailymotion: tiêu đề, kênh, thời lượng, mô tả và phụ đề/lời thoại "
+        "nếu có — dùng để hiểu và tóm tắt video. Không tải video về. Đây là "
+        "việc mặc định khi có người gửi link video.",
+        {
+            "url": {"type": "string", "description": "Link video."},
+            "transcript": {"type": "boolean",
+                           "description": "Lấy phụ đề/lời thoại. Mặc định có; tắt nếu chỉ cần tiêu đề."},
+        },
+        ["url"],
+    ), zalo_video_info, TOOLSET_PUBLIC),
+
+    ("zalo_video_download", "⬇️", _schema(
+        "zalo_video_download",
+        "Tải video (Full HD, không logo TikTok) rồi gửi tệp vào cuộc trò chuyện "
+        "này. CHỈ gọi khi người dùng nói rõ muốn tải/lấy file video — gửi link "
+        "hay nhờ tóm tắt thì dùng zalo_video_info. Người trong nhóm: video tối "
+        "đa 20 phút, 300 MB, 3 lần mỗi giờ.",
+        {
+            "url": {"type": "string", "description": "Link video."},
+            "caption": {"type": "string", "description": "Lời nhắn kèm tệp (tuỳ chọn)."},
+        },
+        ["url"],
+    ), zalo_video_download, TOOLSET_PUBLIC),
 
     # --- Nhóm 9: sổ hồ sơ người quen ---
     ("zalo_remember_person", "🧠", _schema(
