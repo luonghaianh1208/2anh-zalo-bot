@@ -312,6 +312,36 @@ def _frame_carries_media(frame: Dict[str, Any]) -> bool:
     return _is_media_msg_type(frame.get("msgType"))
 
 
+# Tải tệp đính kèm nằm ngay trên đường nhận tin: treo ở đây là cả hàng đợi tin
+# nhắn phải chờ. Quá hạn thì bỏ tệp, tin vẫn đi tiếp.
+ATTACHMENT_TIMEOUT_S = 15.0
+
+# Tệp thật của Zalo nằm trên CDN của Zalo, hoặc có đuôi tệp rõ ràng. Link người
+# dùng dán (github.com/x.git, trang tin…) thì không phải tệp: tải về vừa vô ích
+# vừa treo hàng đợi. Đã gặp thật ngày 25/9: một link `.git` trong thẻ chia sẻ
+# làm mọi tin sau nó, kể cả tin nhắn riêng của chủ nhân, chờ gần 3 phút.
+_MEDIA_HOST_RE = re.compile(r"(^|\.)(zdn\.vn|zadn\.vn|dlfl\.vn|zaloapp\.com|zalo\.me)$", re.IGNORECASE)
+_MEDIA_EXT_RE = re.compile(
+    r"\.(jpg|jpeg|png|gif|webp|bmp|heic|heif|jxl|avif|tiff?|mp4|mov|mkv|webm|mp3|m4a|aac|ogg|wav"
+    r"|pdf|docx?|xlsx?|pptx?|csv|txt|md|json|zip|rar|7z)$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_attachment(url: str, mime: str = "", name: str = "") -> bool:
+    """URL này là tệp để tải, hay chỉ là link người dùng dán trong câu chữ?"""
+    parts = urlsplit(str(url or ""))
+    if not parts.scheme.startswith("http"):
+        return False
+    if _MEDIA_HOST_RE.search(parts.hostname or ""):
+        return True
+    if _MEDIA_EXT_RE.search(parts.path) or _MEDIA_EXT_RE.search(str(name or "")):
+        return True
+    # MIME do sidecar phân loại chỉ đáng tin khi nó nói rõ là media; "image/jpeg"
+    # là giá trị đoán mặc định cho URL không đuôi nên không tính.
+    return str(mime or "").startswith(("video/", "audio/"))
+
+
 _UNSUPPORTED_IMAGE_FORMATS = ("jxl", "heic", "heif", "avif", "tiff", "tif")
 
 _JXL_DECODER_MISSING = "thiếu bộ giải mã JPEG XL"
@@ -504,6 +534,10 @@ class ZaloAdapter(BasePlatformAdapter):
         self._owner_only_groups = set(_split_ids(str(owner_only or "")))
         # (chat, tệp, cỡ, giờ sửa) -> (lúc gửi, kết quả), chặn một đoạn thoại đi hai lần.
         self._sent_voices: Dict[tuple, tuple] = {}
+        # Mỗi hội thoại một khoá riêng: tin trong cùng một chat vẫn xử lý lần
+        # lượt, nhưng chat này kẹt thì chat khác không phải chờ.
+        self._thread_locks: Dict[str, asyncio.Lock] = {}
+        self._message_tasks: set = set()
 
         # Ngưỡng đặt rộng tay có chủ đích: sáu tin trong mười lăm giây nhanh
         # hơn nhịp hỏi của người thật khá nhiều, nên người dùng bình thường
@@ -614,6 +648,10 @@ class ZaloAdapter(BasePlatformAdapter):
             if not fut.done():
                 fut.cancel()
         self._pending.clear()
+        for task in list(self._message_tasks):
+            task.cancel()
+        self._message_tasks.clear()
+        self._thread_locks.clear()
 
         logger.info("[zalo] disconnected from sidecar")
 
@@ -689,10 +727,32 @@ class ZaloAdapter(BasePlatformAdapter):
             return
 
         if kind == "message":
-            await self._on_message(frame)
+            self._schedule_message(frame)
             return
 
         logger.debug("[zalo] unhandled frame type: %s", kind)
+
+    def _schedule_message(self, frame: Dict[str, Any]) -> None:
+        """Xử lý tin trong một tác vụ riêng, xếp lần lượt theo từng hội thoại.
+
+        Trước đây vòng đọc ``await`` thẳng từng tin, nên một tin chậm — tải tệp
+        treo, câu hỏi dài — chặn mọi tin đến sau, kể cả ở hội thoại khác.
+        """
+        thread_id = str(frame.get("threadId") or "")
+        lock = self._thread_locks.setdefault(thread_id, asyncio.Lock())
+
+        async def run() -> None:
+            async with lock:
+                try:
+                    await self._on_message(frame)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("[zalo] lỗi khi xử lý tin của %s", thread_id)
+
+        task = asyncio.create_task(run())
+        self._message_tasks.add(task)
+        task.add_done_callback(self._message_tasks.discard)
 
     async def _on_message(self, frame: Dict[str, Any]) -> None:
         text = (frame.get("text") or "").strip()
@@ -1271,14 +1331,19 @@ class ZaloAdapter(BasePlatformAdapter):
             url = str(item.get("url") or "")
             name = str(item.get("name") or "")
             mime = str(item.get("mime") or "")
+            if not _looks_like_attachment(url, mime, name):
+                logger.debug("[zalo] bỏ qua link không phải tệp: %s", url[:80])
+                continue
             try:
                 if mime.startswith("image/") or (not mime and not name):
-                    paths.append(await self._cache_jxl_as_jpeg(url) if _is_jxl(url, mime)
-                                 else await cache_image_from_url(url))
+                    paths.append(await asyncio.wait_for(
+                        self._cache_jxl_as_jpeg(url) if _is_jxl(url, mime) else cache_image_from_url(url),
+                        timeout=ATTACHMENT_TIMEOUT_S,
+                    ))
                     media_types.append("image/jpeg")
                     continue
                 cached = cache_media_bytes(
-                    await self._download_attachment(url),
+                    await asyncio.wait_for(self._download_attachment(url), timeout=ATTACHMENT_TIMEOUT_S),
                     filename=name or os.path.basename(urlsplit(url).path),
                     mime_type=mime,
                 )

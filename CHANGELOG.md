@@ -2,6 +2,20 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.10.11] — 2026-09-25
+
+### Sửa
+
+- **Một link hỏng không còn làm bot “im lặng”.** Ngày 25/9 một link `https://…/jev-ultrafast.git`
+  trong thẻ chia sẻ bị coi là tệp đính kèm; bot tải mãi không xong, mà vòng đọc tin lại xử lý
+  tuần tự nên mọi tin đến sau — kể cả tin nhắn riêng của chủ nhân — phải chờ gần 3 phút. Ba lớp
+  chặn:
+  - **Lọc link:** chỉ tải tệp nằm trên CDN của Zalo, hoặc URL/tên tệp có đuôi tệp rõ ràng. Link
+    người dùng dán (github.com, trang tin…) để nguyên trong chữ, bot đọc bằng `zalo_web_read`.
+  - **Hạn giờ tải:** mỗi tệp tối đa 15 giây, quá thì báo “chưa tải được tệp” thay vì treo.
+  - **Mỗi hội thoại một hàng đợi:** tin trong cùng một chat vẫn lần lượt, nhưng một chat kẹt
+    không chặn chat khác; tin nhắn riêng của chủ nhân luôn được trả lời ngay.
+
 ## [1.10.10] — 2026-09-15
 
 ### Sửa

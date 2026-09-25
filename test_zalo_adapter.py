@@ -502,6 +502,66 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handled[0].media_urls, ["C:/cache/4001.png"])
         self.assertIn("[Nhãn dán: cười lăn]", handled[0].text)
 
+    def test_only_real_files_count_as_attachments_not_pasted_links(self):
+        looks = zalo_adapter._looks_like_attachment
+        # CDN Zalo: ảnh không có đuôi trong URL vẫn là tệp thật.
+        self.assertTrue(looks("https://f41-zpg.zdn.vn/8f10ad0864f0c4ae9de1/7858987697100220300"))
+        self.assertTrue(looks("https://fg41.dlfl.vn/abc/123.m4a"))
+        self.assertTrue(looks("https://agentsea.vn/media/BaoTrang.m4a"))
+        self.assertTrue(looks("https://example.com/tai-lieu", mime="application/pdf", name="ke-hoach.pdf"))
+        # Link người dùng dán: để nguyên trong chữ, không tải về.
+        self.assertFalse(looks("https://github.com/browser-use/jev-ultrafast.git"))
+        self.assertFalse(looks("https://vnexpress.net/bai-viet-123", mime="image/jpeg"))
+        self.assertFalse(looks("ftp://host/file.jpg"))
+
+    async def test_pasted_link_is_skipped_and_slow_download_times_out(self):
+        adapter = self.make_adapter()
+        called = []
+
+        async def fake_cache(url):
+            called.append(url)
+            await asyncio.sleep(5)
+            return "C:/cache/anh.jpg"
+
+        with patch.object(zalo_adapter, "cache_image_from_url", fake_cache), \
+                patch.object(zalo_adapter, "ATTACHMENT_TIMEOUT_S", 0.05):
+            paths, _types, failures, _docs = await adapter._cache_attachments([
+                {"url": "https://github.com/browser-use/jev-ultrafast.git", "name": "", "mime": "image/jpeg"},
+                {"url": "https://f41-zpg.zdn.vn/abc/123", "name": "", "mime": "image/jpeg"},
+            ])
+
+        self.assertEqual(called, ["https://f41-zpg.zdn.vn/abc/123"], "link dán không được tải về")
+        self.assertEqual(paths, [])
+        self.assertEqual(len(failures), 1, "tải quá lâu thì báo lỗi chứ không treo")
+
+    async def test_a_stuck_chat_does_not_block_other_chats(self):
+        adapter = self.make_adapter()
+        started, release = asyncio.Event(), asyncio.Event()
+        order = []
+
+        async def fake_on_message(frame):
+            thread = frame["threadId"]
+            if thread == "g1" and not started.is_set():
+                started.set()
+                await release.wait()
+            order.append(thread)
+
+        adapter._on_message = fake_on_message
+        try:
+            await adapter._dispatch({"type": "message", "threadId": "g1"})
+            await asyncio.wait_for(started.wait(), 1)
+            await adapter._dispatch({"type": "message", "threadId": "g1"})
+            await adapter._dispatch({"type": "message", "threadId": "dm1"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(order, ["dm1"], "chat khác vẫn được trả lời khi một chat đang kẹt")
+            release.set()
+            await asyncio.sleep(0.05)
+            self.assertEqual(order, ["dm1", "g1", "g1"], "tin trong cùng một chat vẫn đi lần lượt")
+        finally:
+            for task in list(adapter._message_tasks):
+                task.cancel()
+
     def test_link_cards_stay_blocked_while_classified_attachments_pass(self):
         # Danh sách loại trừ vẫn chặn việc đoán URL từ thẻ chia sẻ link…
         self.assertFalse(zalo_adapter._frame_carries_media(
