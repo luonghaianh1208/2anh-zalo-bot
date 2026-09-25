@@ -1717,6 +1717,31 @@ def _take_quota(book: Dict[str, List[float]], uid: str, limit: int, what: str) -
     return None
 
 
+async def zalo_academic_search(args: Dict[str, Any], **_kw) -> str:
+    """Tìm bài báo khoa học (PubMed/Crossref) hoặc tạo trích dẫn theo DOI. Chỉ đọc."""
+    from . import academic
+
+    action = str(args.get("action") or "search")
+    try:
+        if action == "cite":
+            return _ok({"citation": await asyncio.to_thread(
+                academic.cite, args.get("doi") or "", args.get("style") or "apa")})
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return _err("cần `query` (từ khoá tiếng Anh cho kết quả tốt nhất)")
+        source = str(args.get("source") or "pubmed")
+        limit = args.get("limit") or 5
+        if source == "crossref":
+            results = await asyncio.to_thread(academic.crossref, query, limit)
+        else:
+            results = await asyncio.to_thread(academic.pubmed, query, limit, args.get("abstracts") is not False)
+    except academic.AcademicError as exc:
+        return _err(str(exc))
+    if not results:
+        return _ok({"results": [], "note": "không có bài nào — thử từ khoá tiếng Anh khác, ngắn hơn"})
+    return _ok({"source": source, "results": results})
+
+
 async def zalo_video_info(args: Dict[str, Any], **_kw) -> str:
     from . import media
 
@@ -2946,6 +2971,27 @@ TOOLS = [
         },
         [],
     ), zalo_web_read, TOOLSET_PUBLIC),
+
+    ("zalo_academic_search", "🔬", _schema(
+        "zalo_academic_search",
+        "Tra bài báo khoa học đã bình duyệt. Câu hỏi về y tế, sức khoẻ, thuốc, bệnh, dinh dưỡng, "
+        "sinh học → dùng công cụ này TRƯỚC web search (source=pubmed). Giáo dục, xã hội, kỹ thuật, "
+        "mọi ngành → source=crossref. Dịch câu hỏi sang 2–4 từ khoá tiếng Anh. Trả lời bằng tiếng "
+        "Việt, dẫn tác giả (năm) và link cho từng ý; chỉ dẫn bài công cụ trả về, không tự bịa. "
+        "action=cite để tạo trích dẫn chuẩn (APA, Vancouver…) từ DOI. Thông tin y tế chỉ để tham "
+        "khảo — nhắc người hỏi gặp bác sĩ khi cần.",
+        {
+            "action": {"type": "string", "enum": ["search", "cite"], "description": "Mặc định search."},
+            "query": {"type": "string", "description": "Từ khoá tiếng Anh, vd. 'e-cigarette adolescents lung'."},
+            "source": {"type": "string", "enum": ["pubmed", "crossref"], "description": "Mặc định pubmed."},
+            "limit": {"type": "integer", "description": "Số bài, 1–10. Mặc định 5."},
+            "abstracts": {"type": "boolean", "description": "PubMed: kèm tóm tắt. Mặc định có."},
+            "doi": {"type": "string", "description": "Cho action=cite, vd. 10.1038/s41586-020-2649-2."},
+            "style": {"type": "string", "enum": ["apa", "ieee", "vancouver", "harvard", "chicago", "mla"],
+                      "description": "Cho action=cite. Mặc định apa."},
+        },
+        [],
+    ), zalo_academic_search, TOOLSET_PUBLIC),
 
     ("zalo_video_info", "🎬", _schema(
         "zalo_video_info",

@@ -82,7 +82,7 @@ Trước đây *có* một bộ não Node dự phòng gọi thẳng LLM. Đã b�
 | Lập nhóm & lời mời | `zalo_create_group` `zalo_invite_to_groups` `zalo_group_link` `zalo_join_group_link` |
 | Hồ sơ bot | `zalo_set_bio` `zalo_set_active_status` |
 | Kho tài liệu | `zalo_kb_list` `zalo_kb_read` |
-| Tra cứu Internet | `zalo_web_search` `zalo_web_read` (cả Google Docs/Sheets/Slides công khai) |
+| Tra cứu Internet | `zalo_web_search` `zalo_web_read` (cả Google Docs/Sheets/Slides công khai) `zalo_academic_search` (PubMed, Crossref, trích dẫn) |
 | Video | `zalo_video_info` (tiêu đề, mô tả, lời thoại) `zalo_video_download` (Full HD, chỉ khi được yêu cầu tải) |
 | Sổ người quen | `zalo_remember_person` `zalo_recall_person` `zalo_list_people` `zalo_forget_person` |
 | Hẹn giờ cho nhóm | `zalo_group_cron` `zalo_group_history` |

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Chạy 5 test suite Python của repo (test_zalo_adapter.py, test_zalo_media.py, test_zalo_pdf.py, scripts/test_lay_token_facebook.py,
+// Chạy 6 test suite Python của repo (test_zalo_adapter.py, test_zalo_media.py, test_zalo_pdf.py, test_zalo_academic.py, scripts/test_lay_token_facebook.py,
 // tts/test_vieneu_provider.py) mà `node --test` không bao giờ đụng tới.
 //
 // Dò Python theo thứ tự: biến PYTHON (nếu đặt, dùng đúng nó, không âm thầm rơi xuống lựa chọn
@@ -53,8 +53,8 @@ function findPython() {
 const python = findPython();
 if (!python) {
   console.warn(
-    '[test:py] CẢNH BÁO: không tìm thấy Python khả dụng — BỎ QUA 5 test suite Python\n'
-    + '[test:py]   (test_zalo_adapter.py, test_zalo_media.py, test_zalo_pdf.py, scripts/test_lay_token_facebook.py, tts/test_vieneu_provider.py).\n'
+    '[test:py] CẢNH BÁO: không tìm thấy Python khả dụng — BỎ QUA 6 test suite Python\n'
+    + '[test:py]   (test_zalo_adapter.py, test_zalo_media.py, test_zalo_pdf.py, test_zalo_academic.py, scripts/test_lay_token_facebook.py, tts/test_vieneu_provider.py).\n'
     + '[test:py]   Lớp phân quyền/bảo mật của hermes-plugin/zalo/adapter.py CHƯA được kiểm chứng trong lần chạy này.\n'
     + '[test:py]   Cài Python (hoặc đặt biến PYTHON) rồi chạy lại `npm run test:py` để test thật sự chạy.',
   );
@@ -69,6 +69,7 @@ const suites = [
   { label: 'test_zalo_adapter.py', module: 'test_zalo_adapter', cwd: REPO_ROOT, requires: 'import gateway, jsonschema' },
   { label: 'test_zalo_media.py', module: 'test_zalo_media', cwd: REPO_ROOT, requires: 'import gateway, lxml, httpx' },
   { label: 'test_zalo_pdf.py', module: 'test_zalo_pdf', cwd: REPO_ROOT, requires: 'import gateway, pymupdf, pdf2docx' },
+  { label: 'test_zalo_academic.py', module: 'test_zalo_academic', cwd: REPO_ROOT, requires: 'import gateway' },
   { label: 'scripts/test_lay_token_facebook.py', module: 'scripts.test_lay_token_facebook', cwd: REPO_ROOT },
   { label: 'tts/test_vieneu_provider.py', module: 'test_vieneu_provider', cwd: join(REPO_ROOT, 'tts') },
 ];

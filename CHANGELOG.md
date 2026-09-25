@@ -2,6 +2,19 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.13.0] — 2026-09-26
+
+### Thêm
+
+- **Người trong nhóm hỏi y tế, khoa học là bot tra bài báo đã bình duyệt.** Công cụ công khai
+  mới `zalo_academic_search`: PubMed (y sinh, kèm tóm tắt), Crossref (mọi ngành) và tạo trích
+  dẫn chuẩn từ DOI (APA, IEEE, Vancouver, Harvard, Chicago, MLA). Mô tả công cụ dặn bot dùng nó
+  TRƯỚC web search cho câu hỏi sức khoẻ/thuốc/bệnh, trả lời kèm tác giả (năm) và link, chỉ dẫn
+  bài công cụ trả về, và nhắc gặp bác sĩ khi cần.
+- Chỉ đọc, không cần khoá, chỉ gọi ba địa chỉ cố định (NCBI, Crossref, doi.org). Không giới hạn
+  lượt theo người; mọi lời gọi NCBI đi qua một nhịp chung ~2,5 lần/giây để cả bot không bị NCBI
+  chặn (giới hạn của họ là 3 lần/giây mỗi IP khi không có khoá).
+
 ## [1.12.0] — 2026-09-26
 
 ### Thêm
