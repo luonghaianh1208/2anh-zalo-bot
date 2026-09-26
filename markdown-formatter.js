@@ -69,9 +69,16 @@ const MAX_CHARS = 2000;
 // quá 3437. Chữ có dấu tốn 2–3 byte, emoji 4 byte, nên một tin chưa tới 2000 ký
 // tự vẫn vượt được. Để 3000 chừa khoảng an toàn dưới ngưỡng đo được.
 const MAX_PAYLOAD_BYTES = 3000;
+// Tag "@Tên" được gắn SAU khi cắt (hermes-bridge tìm tag trên từng chunk) nhưng
+// vẫn đi chung gói tin: mỗi tag là một mục {pos, len, uid 19 chữ số} ~50 byte
+// JSON. Giữ chỗ cho mỗi "@" để một tin sát trần mà tag nhiều người không vượt
+// ngưỡng rồi bị gửi lại dạng chữ trơn (mất cả màu, in đậm lẫn tag).
+const MENTION_RESERVE_BYTES = 60;
 
 function payloadBytes(formatted) {
-  return Buffer.byteLength(formatted.msg, 'utf8') + JSON.stringify(formatted.styles).length;
+  const ats = (formatted.msg.match(/@/g) || []).length;
+  return Buffer.byteLength(formatted.msg, 'utf8') + JSON.stringify(formatted.styles).length
+    + ats * MENTION_RESERVE_BYTES;
 }
 
 export function formatZaloMarkdown(input) {

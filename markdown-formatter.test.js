@@ -20,6 +20,21 @@ function assertWithinBudget(chunks) {
   }
 }
 
+test('ngân sách byte giữ chỗ cho tag @Tên gắn sau khi cắt, kể cả khi có màu chữ', () => {
+  // Tin sát trần: chữ có dấu + màu đỏ/xanh/cam + in đậm, kèm 12 tag người.
+  const line = (n) => `@Thành viên ${n} ơi, [red]hạn chót 15/10[/red] nộp **bài dự thi** và [xanh]đã duyệt[/xanh], [cam]lưu ý đọc kỹ thể lệ[/cam].`;
+  const input = Array.from({ length: 12 }, (_, i) => line(i + 1)).join('\n');
+  const chunks = formatAndChunkZaloMarkdown(input);
+  for (const chunk of chunks) {
+    const ats = (chunk.msg.match(/@/g) || []).length;
+    const worst = payloadBytes(chunk) + ats * 50;          // mỗi tag thật ~50 byte JSON
+    assert.ok(worst <= MAX_PAYLOAD_BYTES, `chunk kể cả tag nặng ${worst} byte`);
+    assert.ok(chunk.styles.some((s) => s.st.startsWith('c_')), 'màu chữ phải còn nguyên trong chunk');
+  }
+  assert.equal(chunks.map((c) => c.msg).join('').replace(/\s/g, ''),
+    formatZaloMarkdown(input).msg.replace(/\s/g, ''), 'không được mất chữ khi cắt');
+});
+
 test('formatAndChunkZaloMarkdown tách tin tiếng Việt nhiều emoji + in đậm theo ngân sách byte', () => {
   // Tái hiện thông báo thật bị Zalo từ chối bằng "Lỗi không xác định": chưa tới
   // 2000 ký tự và 40 style, nhưng chữ có dấu + emoji + JSON style vượt 3000 byte.

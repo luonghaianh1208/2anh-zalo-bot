@@ -2,6 +2,22 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [1.14.1] — 2026-09-27
+
+### Sửa
+
+- **Tin sát trần có tag nhiều người không còn mất định dạng.** Ngân sách 3000 byte mỗi tin chỉ tính
+  chữ và định dạng, còn tag `@Tên` được gắn sau khi cắt (~50 byte mỗi tag). Tin gần đầy mà tag
+  nhiều người có thể vượt ngưỡng, bị Zalo từ chối rồi gửi lại dạng chữ trơn — mất cả màu, in đậm
+  lẫn tag. Nay mỗi "@" được giữ chỗ 60 byte khi cắt tin.
+
+### Đổi
+
+- **Hướng dẫn trình bày mặc định có quy ước màu chữ theo ngữ cảnh:** đỏ cho cảnh báo, hạn chót,
+  việc bắt buộc; xanh cho đã xong/đạt/đúng; cam cho lưu ý, đang chờ. Chỉ tô cụm ngắn, tối đa ~5
+  chỗ mỗi tin, không vừa in đậm vừa tô màu cùng một cụm. Mục độ dài ghi đúng trần ~3000 byte tính
+  cả định dạng. Khách đã tự viết hướng dẫn riêng thì trình cài giữ nguyên bản của khách.
+
 ## [1.14.0] — 2026-09-26
 
 ### Thêm

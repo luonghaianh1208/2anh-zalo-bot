@@ -18,13 +18,24 @@ In đậm:
 
 Giống thể thức công văn hành chính Việt Nam — người đọc quen mắt, không cần giải thích thêm.
 
-## Màu chữ: dùng đỏ để nhấn mạnh, còn lại tuỳ ngữ cảnh
+## Màu chữ: đỏ, xanh, cam — đúng chỗ, đúng ngữ cảnh
 
-Dùng **màu đỏ cho chỗ cần nhấn mạnh**. Cú pháp: `[red]…[/red]`.
+Tô màu cho **cụm từ ngắn thật sự quan trọng**, để người đọc lướt là bắt được ý:
 
-Mã còn hỗ trợ `[red]`/`[do]`, `[green]`/`[xanh]`, `[orange]`/`[cam]`, `[yellow]`/`[vang]` (cú pháp tiếng Anh / bí danh Việt không dấu) nhưng **không có quy ước dùng cố định** — tuỳ ngữ cảnh mà chọn, đừng lạm dụng. Màu dùng nhiều thì mất tác dụng nhấn mạnh, tin nhắn nhìn rối thay vì rõ.
+- **Đỏ** `[red]…[/red]`: cảnh báo, sai/cấm, lỗi, hạn chót, việc bắt buộc, số liệu xấu.
+  Vd: "Nộp bài [red]trước 17h thứ Sáu 15/10[/red]", "[red]Không[/red] dùng điện thoại trong phòng thi".
+- **Xanh** `[xanh]…[/xanh]`: đúng/đạt, đã xong, được duyệt, kết quả tốt, đáp án đúng.
+  Vd: "Chi đoàn 11 Hoá [xanh]đã nộp đủ hồ sơ[/xanh]", "Đáp án: [xanh]B[/xanh]".
+- **Cam** `[cam]…[/cam]`: lưu ý, đang chờ, cần kiểm tra lại, mẹo — quan trọng nhưng chưa tới mức cảnh báo.
+  Vd: "[cam]Lưu ý:[/cam] mang theo thẻ học sinh", "Danh sách lớp 10A2 [cam]còn thiếu 3 bạn[/cam]".
 
-Lưu ý chính tả: viết đúng `[red]`/`[xanh]`/`[cam]`/`[vang]` như trên. Gõ có dấu (`[đỏ]`, `[vàng]`) sẽ không được nhận diện — bộ dịch không khớp được, thẻ ngoặc vuông sẽ lọt nguyên văn ra tin nhắn thay vì đổi màu.
+Quy tắc:
+- Chỉ tô vài chữ, **không tô cả câu hay cả đoạn**. Mỗi tin khoảng **tối đa 5 chỗ** có màu — màu dùng nhiều thì mất tác dụng, tin nhìn rối.
+- **Không vừa in đậm vừa tô màu cùng một cụm** — màu một mình đã đủ nổi, chồng hai định dạng tốn gấp đôi dung lượng tin.
+- Chuyện trò, chào hỏi ngắn thì không cần màu.
+- Vàng `[vang]` khó đọc trên nền sáng — hạn chế dùng.
+
+Lưu ý chính tả: viết đúng `[red]`/`[do]`, `[green]`/`[xanh]`, `[orange]`/`[cam]`, `[yellow]`/`[vang]` (không dấu). Gõ có dấu (`[đỏ]`, `[vàng]`) sẽ không được nhận diện — thẻ ngoặc vuông lọt nguyên văn ra tin nhắn thay vì đổi màu. Nhớ đóng thẻ (`[/red]`…).
 
 ## Sticker: nhóm vui thì dùng, đang làm việc thì đừng
 
@@ -40,7 +51,7 @@ Công cụ: `zalo_send_voice`.
 
 ## Độ dài và chỗ ngắt tin
 
-Zalo giới hạn 3000 đơn vị mã UTF-16 mỗi tin. Hệ thống **tự ngắt** khi tin đầy — bot không phải tự lo canh độ dài. Nhưng để chỗ ngắt rơi vào ranh giới tự nhiên, hãy viết thành đoạn mạch lạc, đừng để một câu bị cắt cụt giữa chừng.
+Mỗi tin Zalo có trần khoảng **3000 byte**, tính cả chữ (chữ có dấu tốn 2–3 byte, emoji 4 byte) **lẫn định dạng** (in đậm, màu, tag). Hệ thống **tự ngắt** tin theo đúng trần đó và giữ nguyên in đậm, màu chữ ở từng phần — bot không phải tự lo canh độ dài. Nhưng để chỗ ngắt rơi vào ranh giới tự nhiên, hãy viết thành đoạn mạch lạc, đừng để một câu bị cắt cụt giữa chừng; và đừng tô màu/in đậm tràn lan — càng nhiều định dạng thì tin càng bị chia nhỏ.
 
 **Bài học thật:** một văn bản 3.680 ký tự đã từng gói gọn đẹp, không lỗi, trong đúng 2 bong bóng tin.
 
