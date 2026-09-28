@@ -10,6 +10,9 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 
+# Guard ghi log quyết định vào HERMES_HOME; test không được đụng log thật.
+os.environ["ZALO_AUTHZ_LOG"] = "0"
+
 spec = importlib.util.spec_from_file_location(
     "zalo_tools_under_test", Path(__file__).with_name("tools.py")
 )

@@ -3605,20 +3605,99 @@ def install_memory_gate(manager_cls=None) -> bool:
     return True
 
 
-def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Optional[Dict[str, str]]:
+_AUTHZ_LOGGER: Optional[logging.Logger] = None
+_AUTHZ_LOG_LOCK = threading.Lock()
+_AUTHZ_LOG_MAX_BYTES = 5 * 1024 * 1024
+_AUTHZ_LOG_BACKUPS = 3
+
+
+def _authz_log_enabled() -> bool:
+    return str(os.getenv("ZALO_AUTHZ_LOG", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _authz_log_path() -> Path:
+    home = os.getenv("HERMES_HOME") or os.path.expanduser("~/.hermes")
+    return Path(home) / "logs" / "zalo-authz.jsonl"
+
+
+def _authz_logger() -> Optional[logging.Logger]:
+    global _AUTHZ_LOGGER
+    with _AUTHZ_LOG_LOCK:
+        if _AUTHZ_LOGGER is None:
+            from logging.handlers import RotatingFileHandler
+
+            path = _authz_log_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(path, maxBytes=_AUTHZ_LOG_MAX_BYTES,
+                                          backupCount=_AUTHZ_LOG_BACKUPS, encoding="utf-8")
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            log = logging.getLogger("zalo.authz")
+            log.propagate = False
+            log.setLevel(logging.INFO)
+            log.addHandler(handler)
+            _AUTHZ_LOGGER = log
+        return _AUTHZ_LOGGER
+
+
+def _authz_record(turn: Dict[str, Any], tool: str, verdict: Optional[Dict[str, str]],
+                  reason: str, kw: Dict[str, Any]) -> None:
+    """Một dòng JSON cho mỗi quyết định của guard, kể cả lượt được cho qua.
+
+    Chỉ ghi nhãn: không tham số, không nội dung tin, không path, không UID hay
+    thread id. Đủ để đếm theo vai × quyết định × lý do; không đủ để lần lại ai
+    đã nói gì.
+    """
+    if not _authz_log_enabled():
+        return
+    if turn.get("cron_job_id"):
+        chat = "cron"
+    else:
+        chat = "group" if turn.get("is_group") else "dm"
+    if turn.get("is_owner"):
+        role = "owner"
+    elif turn.get("audience") == "guest":
+        role = "guest"
+    else:
+        role = "public"
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "session_id": str(kw.get("session_id") or ""),
+        "tool_call_id": str(kw.get("tool_call_id") or ""),
+        "role": role,
+        "chat": chat,
+        "tool": tool,
+        "decision": "block" if verdict else "allow",
+        "reason": reason,
+    }
+    try:
+        log = _authz_logger()
+        if log is not None:
+            log.info(json.dumps(entry, ensure_ascii=False))
+    except Exception as exc:  # log hỏng không được làm hỏng lượt chat
+        logger.warning("[zalo] không ghi được log quyết định: %s", exc)
+
+
+def guard_member_tool_call(tool_name: str = "", args: Any = None, **kw) -> Optional[Dict[str, str]]:
     """Execution boundary for every Zalo turn; non-Zalo callers are untouched."""
     turn = _TURN.get()
     if not turn:
         return None
-    name = str(tool_name or "")
+    verdict, reason, tool = _guard_decision(turn, str(tool_name or ""), args)
+    _authz_record(turn, tool, verdict, reason, kw)
+    return verdict
+
+
+def _guard_decision(turn: Dict[str, Any], name: str, args: Any) -> tuple:
+    """Trả về ``(verdict, reason, tool)``: verdict None là cho qua, reason là mã ngắn."""
     resolved = _resolved_tool_name(name, args)
+    tool = resolved or name
     owner_dm = _owner_dm(turn) and not _outsider_spoke_after(turn)
     if resolved is None:
         # The progressive tool bridge validates its own payload before dispatch. Let
         # an owner DM reach that validator so malformed calls get its actionable
         # schema error; non-owner and group turns remain fail-closed.
         if name == "tool_call" and owner_dm:
-            return None
+            return None, "owner_dm_unresolved", tool
         logger.warning("[zalo] generic core action denied")
         # Vẫn chặn, nhưng một tool_call hỏng hình dạng (gộp nhiều lệnh, `calls`
         # là chuỗi) phải nói được vì sao. "Không khả dụng" trơn khiến model tưởng
@@ -3631,50 +3710,50 @@ def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Opti
                 f"tool_call không chạy: {problem} Gọi mỗi công cụ bằng một tool_call riêng."
                 if problem else "Hành động này không khả dụng qua Zalo."
             ),
-        }
+        }, "unresolved", tool
     if resolved in ZALO_DENIED_CORE_TOOLS:
         logger.warning("[zalo] generic core action denied")
         return {
             "action": "block",
             "message": "Hành động này không khả dụng qua Zalo.",
-        }
+        }, "denied_core", tool
     mcp_tool = _is_mcp_tool(resolved)
     if mcp_tool is None:
         logger.warning("[zalo] cannot classify tool while enforcing MCP boundary: %s", resolved)
         return {
             "action": "block",
             "message": "Hành động này không khả dụng qua Zalo.",
-        }
+        }, "unclassified", tool
     if mcp_tool:
         if owner_dm:
-            return None
+            return None, "owner_dm", tool
         logger.warning("[zalo] MCP tool denied outside owner direct message: %s", resolved)
         return {
             "action": "block",
             "message": "MCP chỉ khả dụng trong tin nhắn riêng của chủ nhân.",
-        }
+        }, "mcp_outside_dm", tool
     if owner_dm:
-        return None
+        return None, "owner_dm", tool
     if _owner_group_may_call(turn, name, args):
-        return None
+        return None, "owner_group_same_thread", tool
     if _member_may_call(name, args):
-        return None
+        return None, "public_tool", tool
     logger.warning("[zalo] chặn %s — lượt không phải của riêng chủ nhân", name)
     # Lý do phải đúng sự thật: lượt 23/09 của chủ nhân trong nhóm nhận "có tin người
     # khác chen vào" dù không ai chen, và model đi đoán nguyên nhân sai.
     if not (turn.get("is_owner") or turn.get("core_tools")):
-        reason = "lượt này do người trong nhóm gửi"
+        reason, code = "lượt này do người trong nhóm gửi", "not_owner"
     elif turn.get("is_group"):
-        reason = "lượt này ở trong nhóm, không phải tin nhắn riêng"
+        reason, code = "lượt này ở trong nhóm, không phải tin nhắn riêng", "owner_in_group"
     else:
-        reason = "lượt của chủ nhân nhưng có tin người khác chen vào"
+        reason, code = "lượt của chủ nhân nhưng có tin người khác chen vào", "outsider_spoke"
     return {
         "action": "block",
         "message": (f"Công cụ {name} chỉ dùng được trong lượt của riêng chủ nhân ({reason}). "
                     "Cần tra tài liệu thì dùng zalo_kb_list rồi zalo_kb_read, cần gửi tệp thì "
                     "zalo_send_file, cần xem lại tin cũ thì zalo_read_history — tìm bằng "
                     "tool_search nếu chưa thấy. Đừng gọi lại công cụ này."),
-    }
+    }, code, tool
 
 
 def define_platform_composite() -> None:

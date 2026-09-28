@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -15,6 +16,10 @@ from jsonschema import Draft7Validator
 ROOT = os.path.dirname(__file__)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
+# Guard ghi log quyết định vào HERMES_HOME thật; bộ test chạy bằng `run --rm` với
+# mount thật nên phải tắt, chỉ AuthzLogTests bật lại với thư mục tạm.
+os.environ["ZALO_AUTHZ_LOG"] = "0"
 
 from gateway.config import PlatformConfig
 import plugins
@@ -3676,6 +3681,92 @@ class OwnerGroupScopeTests(unittest.IsolatedAsyncioTestCase):
         target, kind, err = zalo_tools._scoped_thread({})
         self.assertIsNone(err)
         self.assertEqual((target, kind), (self.GROUP, "group"))
+
+
+class AuthzLogTests(unittest.TestCase):
+    """B4: mỗi quyết định của guard là một dòng JSON có mã lý do, không mang tham số."""
+
+    OWNER = "9200000000000000001"
+    MEMBER = "3900000000000000001"
+    GROUP = "9133000000000000001"
+    SECRET_PATH = "/opt/data/.env"
+
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        self.addCleanup(self.home.cleanup)
+        self.enterContext(patch.dict(os.environ, {"ZALO_AUTHZ_LOG": "1", "HERMES_HOME": self.home.name}))
+        self._reset_logger()
+        self.addCleanup(self._reset_logger)
+        self.addCleanup(zalo_tools._TURN.set, {})
+
+    def _reset_logger(self):
+        log = logging.getLogger("zalo.authz")
+        for handler in list(log.handlers):
+            log.removeHandler(handler)
+            handler.close()
+        zalo_tools._AUTHZ_LOGGER = None
+
+    def _turn(self, *, owner, group, **extra):
+        turn = {"sender_uid": self.OWNER if owner else self.MEMBER,
+                "thread_id": self.GROUP if group else (self.OWNER if owner else self.MEMBER),
+                "is_group": group, "is_owner": owner, "text": ""}
+        turn.update(extra)
+        zalo_tools._TURN.set(turn)
+
+    def _guard(self, name, args=None, call_id="c1"):
+        return zalo_tools.guard_member_tool_call(tool_name=name, args=args or {},
+                                                 task_id="t", session_id="s1", tool_call_id=call_id)
+
+    def _lines(self):
+        path = os.path.join(self.home.name, "logs", "zalo-authz.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+
+    def test_every_branch_writes_its_reason(self):
+        cases = [
+            (dict(owner=True, group=False), "zalo_list_groups", None, "allow", "owner_dm"),
+            (dict(owner=True, group=False), "terminal", None, "block", "denied_core"),
+            (dict(owner=True, group=True), "zalo_read_history", {}, "allow", "owner_group_same_thread"),
+            (dict(owner=True, group=True), "zalo_list_groups", None, "block", "owner_in_group"),
+            (dict(owner=False, group=True), "zalo_list_groups", None, "block", "not_owner"),
+            (dict(owner=False, group=True), "zalo_kb_list", None, "allow", "public_tool"),
+            (dict(owner=False, group=True), "tool_call", {"calls": "x"}, "block", "unresolved"),
+        ]
+        for i, (turn, tool, args, decision, reason) in enumerate(cases):
+            self._turn(**turn)
+            verdict = self._guard(tool, args, call_id=f"c{i}")
+            self.assertEqual(verdict is None, decision == "allow", (tool, reason, verdict))
+        got = [(e["tool"], e["decision"], e["reason"]) for e in self._lines()]
+        self.assertEqual(got, [(t, d, r) for _turn, t, _a, d, r in cases])
+
+    def test_mcp_outside_dm_and_cron_chat_are_labelled(self):
+        self._turn(owner=True, group=True)
+        with patch.object(zalo_tools, "_is_mcp_tool", return_value=True):
+            self.assertEqual(self._guard("mcp_sentry_search_events")["action"], "block")
+        self._turn(owner=True, group=False, cron_job_id="job1")
+        self._guard("zalo_list_groups")
+        first, second = self._lines()
+        self.assertEqual((first["reason"], first["chat"], first["role"]), ("mcp_outside_dm", "group", "owner"))
+        self.assertEqual(second["chat"], "cron")
+
+    def test_guest_role_and_no_parameters_or_ids_leak(self):
+        self._turn(owner=False, group=True, audience="guest")
+        self._guard("zalo_send_file", {"path": self.SECRET_PATH, "thread_id": self.GROUP, "caption": "bí mật"})
+        (entry,) = self._lines()
+        self.assertEqual(entry["role"], "guest")
+        self.assertEqual(set(entry), {"ts", "session_id", "tool_call_id", "role", "chat",
+                                      "tool", "decision", "reason"})
+        raw = json.dumps(entry, ensure_ascii=False)
+        for secret in (self.SECRET_PATH, self.GROUP, self.MEMBER, self.OWNER, "bí mật"):
+            self.assertNotIn(secret, raw)
+
+    def test_switch_off_writes_nothing(self):
+        with patch.dict(os.environ, {"ZALO_AUTHZ_LOG": "0"}):
+            self._turn(owner=True, group=False)
+            self._guard("zalo_list_groups")
+        self.assertEqual(self._lines(), [])
 
 
 class MemoryGateTests(unittest.TestCase):

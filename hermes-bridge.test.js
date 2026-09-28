@@ -942,6 +942,37 @@ test('bridge rejects an unauthorized admin command before calling Zalo and audit
   }
 });
 
+test('bridge audits owner-only reads and every denied read, without content', async (t) => {
+  const store = testStore(t);
+  const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store, ownerUids: ['owner'] });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await hello;
+    ws.send(JSON.stringify({
+      type: 'history_range', reqId: 'owner-range', threadId: 'group-1', threadType: 1,
+      sinceMs: 0, auth: auth('group-1', 1),
+    }));
+    assert.equal((await onceMessage(ws, (msg) => msg.reqId === 'owner-range')).ok, true);
+    ws.send(JSON.stringify({
+      type: 'history_range', reqId: 'member-range', threadId: 'group-1', threadType: 1,
+      sinceMs: 0, auth: auth('group-1', 1, { actorUid: 'member' }),
+    }));
+    const denied = await onceMessage(ws, (msg) => msg.reqId === 'member-range');
+    assert.equal(denied.ok, false);
+    assert.deepEqual(store.getAuditTrail('owner-range').map((row) => row.status), ['attempted', 'succeeded']);
+    const trail = store.getAuditTrail('member-range');
+    assert.deepEqual(trail.map((row) => row.status), ['attempted', 'failed']);
+    assert.equal(trail[0].category, 'read');
+    assert.ok(!JSON.stringify(trail).includes('sinceMs'));
+  } finally {
+    ws.close();
+    stopHermesBridge();
+  }
+});
+
 test('rich-media invoke persists its outbound IDs for later undo', async (t) => {
   const store = testStore(t);
   const api = {
