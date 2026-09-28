@@ -149,6 +149,18 @@ def _current_thread() -> Optional[str]:
 def _current_thread_kind() -> str:
     return "group" if _turn().get("is_group") else "dm"
 
+
+def _owner_dm(turn: Optional[Dict[str, Any]] = None) -> bool:
+    """Chủ nhân đang nhắn riêng — lượt duy nhất giữ quyền tham số của chủ.
+
+    Trong nhóm, bot đọc chữ của người khác (lịch sử, tin được reply, tệp đính
+    kèm) ngay trong lượt của chủ nhân, nên chữ đó có thể dụ bot gửi tin hay tệp
+    sang nơi khác. Vì vậy chủ nhân ngoài DM đi chung đường với mọi người: chỉ
+    chính hội thoại này, chỉ tệp trong kho tài liệu.
+    """
+    turn = _turn() if turn is None else turn
+    return bool(turn.get("is_owner")) and not turn.get("is_group")
+
 # Adapter đang sống tự ghi tên mình vào đây khi kết nối, để các công cụ tìm
 # được đường ra cầu nối. Công cụ được đăng ký lúc nạp plugin, còn adapter thì
 # mãi sau mới dựng — nên không truyền thẳng tham chiếu được.
@@ -335,8 +347,8 @@ def _scoped_thread(args: Dict[str, Any], key: str = "thread_id") -> tuple:
     asked = str(args.get(key) or "").strip()
     current = _current_thread()
 
-    if turn.get("is_owner"):
-        # Chủ nhân được nhắm tới hội thoại bất kỳ.
+    if _owner_dm(turn):
+        # Chủ nhân nhắn riêng được nhắm tới hội thoại bất kỳ.
         target = asked or current
         if not target:
             return None, None, _err(f"cần `{key}`")
@@ -404,10 +416,10 @@ async def zalo_send_file(args: Dict[str, Any], **_kw) -> str:
     # đi thẳng lên máy chủ Zalo.
     #
     # Nên người ngoài chỉ gửi được tệp NẰM TRONG kho tài liệu — đúng phạm vi
-    # mà zalo_kb_read đã mở, không rộng thêm một tấc nào. Chủ nhân giữ nguyên
-    # quyền gửi tệp bất kỳ.
+    # mà zalo_kb_read đã mở, không rộng thêm một tấc nào. Chủ nhân nhắn riêng
+    # giữ quyền gửi tệp bất kỳ; trong nhóm thì như mọi người.
     turn = _turn()
-    if turn and not turn.get("is_owner"):
+    if turn and not _owner_dm(turn):
         root = _kb_root()
         if root is None:
             return _err("chưa cấu hình kho tài liệu nên chưa gửi tệp được")
@@ -508,7 +520,7 @@ async def zalo_send_voice(args: Dict[str, Any], **_kw) -> str:
         return err
     if os.path.isfile(url):
         turn = _turn()
-        if not turn.get("is_owner"):
+        if not _owner_dm(turn):
             root = _kb_root()
             target = _kb_resolve(root, url) if root is not None else None
             if target is None or not target.is_file():
@@ -528,7 +540,7 @@ async def zalo_send_voice(args: Dict[str, Any], **_kw) -> str:
         return _ok({"message_id": result.message_id})
     # Với URL, sidecar tự gửi yêu cầu HEAD tới địa chỉ đó từ máy chủ. Người
     # ngoài mà truyền địa chỉ nội bộ là dò được mạng LAN/localhost.
-    if not _turn().get("is_owner") and not _is_public_url(url):
+    if not _owner_dm() and not _is_public_url(url):
         return _err("chỉ gửi được voice từ địa chỉ web công cộng (http/https)")
     return await _invoke("sendVoice", [
         {"voiceUrl": url, "ttl": args.get("ttl", 0)}, thread_id, _thread_type(kind),
@@ -2154,7 +2166,7 @@ VIDEO_DELIVERED: set[str] = set()
 
 def _video_turn() -> Optional[Dict[str, Any]]:
     turn = _turn()
-    return turn if (turn and turn.get("is_owner") and not turn.get("is_group")
+    return turn if (turn and _owner_dm(turn)
                     and turn.get("sender_uid") and turn.get("thread_id")) else None
 
 
@@ -3564,8 +3576,7 @@ def _memory_allowed() -> bool:
     turn = _TURN.get()
     if not turn:
         return True
-    return bool(turn.get("is_owner") and not turn.get("is_group")
-                and not turn.get("cron_job_id") and not _outsider_spoke_after(turn))
+    return bool(_owner_dm(turn) and not turn.get("cron_job_id") and not _outsider_spoke_after(turn))
 
 
 def install_memory_gate(manager_cls=None) -> bool:
@@ -3601,7 +3612,7 @@ def guard_member_tool_call(tool_name: str = "", args: Any = None, **_kw) -> Opti
         return None
     name = str(tool_name or "")
     resolved = _resolved_tool_name(name, args)
-    owner_dm = bool(turn.get("is_owner") and not turn.get("is_group") and not _outsider_spoke_after(turn))
+    owner_dm = _owner_dm(turn) and not _outsider_spoke_after(turn)
     if resolved is None:
         # The progressive tool bridge validates its own payload before dispatch. Let
         # an owner DM reach that validator so malformed calls get its actionable

@@ -3591,6 +3591,93 @@ class ReminderAndBatchFixTests(unittest.TestCase):
             self.assertEqual(self._guard("tool_call", {"name": "zalo_read_history"})["action"], "block")
 
 
+class OwnerGroupScopeTests(unittest.IsolatedAsyncioTestCase):
+    """B1: trong nhóm bot đọc chữ của người khác ngay trong lượt của chủ nhân, nên
+    chủ nhân ngoài DM chỉ được nhắm chính hội thoại này và chỉ gửi tệp trong kho."""
+
+    OWNER = "9200000000000000001"
+    GROUP = "9133000000000000001"
+    OTHER = "9133000000000000999"
+
+    def setUp(self):
+        self.root = tempfile.TemporaryDirectory()
+        self.addCleanup(self.root.cleanup)
+        self.kb_file = os.path.join(self.root.name, "lich.txt")
+        with open(self.kb_file, "w", encoding="utf-8") as fh:
+            fh.write("lịch")
+        outside = tempfile.NamedTemporaryFile(suffix=".env", delete=False)
+        outside.close()
+        self.outside = outside.name
+        self.addCleanup(os.unlink, self.outside)
+        zalo_tools._KB_CACHE.update(root=None, at=0.0, files=None, skipped=0)
+        self.addCleanup(zalo_tools._KB_CACHE.update, root=None, at=0.0, files=None, skipped=0)
+        self.enterContext(patch("agent.secret_scope.get_secret",
+                                side_effect=lambda name, default="": os.environ.get(name, default)))
+        self.enterContext(patch.dict(os.environ, {"ZALO_KB_DIR": self.root.name, "ZALO_KB_PUBLIC_DIRS": ""}))
+
+        calls = self.calls = []
+
+        class FakeAdapter:
+            async def invoke(self, method, args, **_kw):
+                calls.append((method, args))
+                return {"ok": True, "result": {"message": {"msgId": 1}}}
+
+        previous = zalo_tools._ACTIVE_ADAPTER
+        zalo_tools._ACTIVE_ADAPTER = FakeAdapter()
+        self.addCleanup(setattr, zalo_tools, "_ACTIVE_ADAPTER", previous)
+        self.addCleanup(zalo_tools._TURN.set, {})
+
+    def _owner(self, *, group):
+        zalo_tools._TURN.set({"sender_uid": self.OWNER, "thread_id": self.GROUP if group else self.OWNER,
+                              "is_group": group, "is_owner": True, "text": ""})
+
+    async def test_owner_in_group_cannot_send_a_file_outside_the_kb(self):
+        self._owner(group=True)
+        out = json.loads(await zalo_tools.zalo_send_file({"path": self.outside}))
+        self.assertFalse(out["success"])
+        self.assertEqual(self.calls, [])
+
+    async def test_owner_in_group_cannot_target_another_thread(self):
+        self._owner(group=True)
+        out = json.loads(await zalo_tools.zalo_send_file({"path": self.kb_file, "thread_id": self.OTHER}))
+        self.assertFalse(out["success"])
+        self.assertEqual(self.calls, [])
+        _t, _k, err = zalo_tools._scoped_thread({"thread_id": self.OTHER})
+        self.assertIsNotNone(err)
+
+    async def test_owner_in_group_may_send_a_kb_file_to_this_group(self):
+        self._owner(group=True)
+        out = json.loads(await zalo_tools.zalo_send_file({"path": "lich.txt"}))
+        self.assertTrue(out["success"])
+        method, args = self.calls[-1]
+        self.assertEqual(method, "sendMessage")
+        self.assertEqual(args[1], self.GROUP)
+        self.assertEqual(args[0]["attachments"], [os.path.realpath(self.kb_file)])
+
+    async def test_owner_in_dm_keeps_any_file_and_any_thread(self):
+        self._owner(group=False)
+        out = json.loads(await zalo_tools.zalo_send_file({"path": self.outside, "thread_id": self.OTHER,
+                                                          "thread_kind": "group"}))
+        self.assertTrue(out["success"])
+        self.assertEqual(self.calls[-1][1][1], self.OTHER)
+        self.assertEqual(self.calls[-1][1][0]["attachments"], [self.outside])
+
+    async def test_owner_in_group_voice_needs_a_public_url(self):
+        self._owner(group=True)
+        out = json.loads(await zalo_tools.zalo_send_voice({"url": "http://127.0.0.1:3872/x.m4a"}))
+        self.assertFalse(out["success"])
+        self.assertEqual(self.calls, [])
+
+    async def test_owner_cron_into_a_group_is_scoped_like_a_group_turn(self):
+        zalo_tools._TURN.set({"sender_uid": self.OWNER, "thread_id": self.GROUP, "is_group": True,
+                              "is_owner": True, "text": "", "cron_job_id": "job1"})
+        _t, _k, err = zalo_tools._scoped_thread({"thread_id": self.OTHER})
+        self.assertIsNotNone(err)
+        target, kind, err = zalo_tools._scoped_thread({})
+        self.assertIsNone(err)
+        self.assertEqual((target, kind), (self.GROUP, "group"))
+
+
 class MemoryGateTests(unittest.TestCase):
     """Đo ngày 23/09: lượt của chủ nhân trong nhóm alert nhận <memory-context> với ghi
     chú phiên dev, rồi đem chúng khuyên cả nhóm — dù toolset memory đã tắt."""
