@@ -19,7 +19,43 @@ export function snapshotTime(ts) {
   return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : String(ts || '');
 }
 
-export const CHECK_TEXT = { available: 'Có bản Hermes mới', current: 'Hermes đang là bản mới nhất', unknown: 'Chưa rõ — xem nhật ký máy chủ' };
+export const BOT_RESULT = {
+  done: ['is-ok', 'Đã cập nhật xong.'],
+  'rolled-back': ['is-bad', 'Cập nhật không thành công — bot đã tự quay về bản cũ và chạy bình thường.'],
+  failed: ['is-bad', 'Cập nhật lỗi — báo người cài đặt kiểm tra.'],
+};
+
+/** Cập nhật bot (chỉ Quản trị thấy trang này): nút cập nhật, tiến độ (dashboard tự khởi động lại giữa chừng), kết quả. */
+function BotUpdate({ bot, initial, onReload }) {
+  const [st, setSt] = useState(initial || {});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [offline, setOffline] = useState(false);
+  const timer = useRef(0);
+  useEffect(() => {
+    if (!st.running) return undefined;
+    timer.current = setTimeout(() => api('/api/admin/maintenance/bot-update').then((r) => {
+      setOffline(false); setSt(r.botUpdate);
+      if (!r.botUpdate.running) onReload();
+    }).catch(() => { setOffline(true); setSt((s) => ({ ...s })); }), 3000);
+    return () => clearTimeout(timer.current);
+  }, [st]);
+  async function start() {
+    if (!confirm(`Cập nhật bot lên ${bot.latest.tag}?\n\nBot tự sao lưu trước, rồi khởi động lại (ngừng trả lời khoảng 1–3 phút). Lỗi thì tự quay về bản cũ.`)) return;
+    setBusy(true); setError('');
+    try { setSt((await api('/api/admin/maintenance/bot-update', { method: 'POST', body: { to: bot.latest.tag } })).botUpdate); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+  const result = !st.running && BOT_RESULT[st.status];
+  return html`<div class="stack">
+    ${bot.newer && !st.running ? html`<div class="toolbar"><button type="button" class="btn btn-primary btn-sm" disabled=${busy} onClick=${start}><${Icon} name="download" size=${14} /> ${busy ? 'Đang bắt đầu…' : `Cập nhật bot lên ${bot.latest.tag}`}</button></div>` : null}
+    ${st.running ? html`<p class="ai-result is-ok">Đang cập nhật ${st.from ? `v${st.from} ` : ''}→ ${st.to}: ${st.step || '…'}${offline ? ' — dashboard đang khởi động lại, trang tự nối lại…' : ''}</p>` : null}
+    ${result ? html`<p class=${`ai-result ${result[0]}`}>${result[1]} <span class="muted">(${st.from ? `v${st.from}` : ''} → ${st.to}, ${fmtTime(st.finishedAt)})</span>${st.error ? html`<br /><small>${st.error}</small>` : null}</p>` : null}
+    ${st.log ? html`<details open=${st.running}><summary class="small">Nhật ký cập nhật bot</summary><pre class="skill-md">${st.log}</pre></details>` : null}
+    <${Live} error=${error} />
+  </div>`;
+}
+
+export const CHECK_TEXT ={ available: 'Có bản Hermes mới', current: 'Hermes đang là bản mới nhất', unknown: 'Chưa rõ — xem nhật ký máy chủ' };
 
 function Updates({ data, onReload }) {
   const [busy, setBusy] = useState('');
@@ -44,7 +80,8 @@ function Updates({ data, onReload }) {
   return html`<div class="stack">
     <div class="card-sub"><h3>Bot Zalo (2anh-zalo-bot)</h3>
       <p>Đang dùng: <strong>${bot.version ? `v${bot.version}` : 'chưa rõ'}</strong>${bot.latest?.tag ? html` · Mới nhất: <strong>${bot.latest.tag}</strong>` : ' · chưa xem được bản mới nhất (mất mạng?)'}</p>
-      ${bot.newer ? html`<${Notice} kind="info">Có bản mới ${bot.latest.tag}. Liên hệ người cài đặt để cập nhật bot (cần đổi cả kết nối Zalo lẫn plugin).<//>` : bot.latest?.tag ? html`<p class="muted small">Bot đang là bản mới nhất.</p>` : null}
+      ${bot.newer || data.botUpdate?.running ? null : bot.latest?.tag ? html`<p class="muted small">Bot đang là bản mới nhất.</p>` : null}
+      <${BotUpdate} bot=${bot} initial=${data.botUpdate} onReload=${onReload} />
       ${bot.latest?.notes ? html`<details><summary class="small">Có gì mới trong ${bot.latest.tag}</summary><p class="small mem-text">${bot.latest.notes}</p></details>` : null}
     </div>
     <div class="card-sub"><h3>Hermes Agent</h3>

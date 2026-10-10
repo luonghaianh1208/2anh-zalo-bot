@@ -70,3 +70,38 @@ test('bản sao lưu: chỉ tên đúng mẫu trong thư mục backups', (t) => 
   assert.throws(() => m.backupPath('hermes-zalo-20261010-134505.zip'), { statusCode: 404 });
   assert.ok(m.backupPath('hermes-zalo-20261010-134504.zip').endsWith('hermes-zalo-20261010-134504.zip'));
 });
+
+test('cập nhật bot: chỉ lên đúng bản mới nhất; Linux+systemd chạy qua systemd-run, còn lại tách rời; đang chạy thì từ chối', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'zalo-root-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'scripts'));
+  writeFileSync(join(root, 'scripts', 'self-update.js'), '');
+  const spawned = [];
+  const fakeSpawn = (file, args, opts) => { spawned.push({ file, args, opts }); const c = new EventEmitter(); c.pid = 1; c.unref = () => {}; setImmediate(() => c.emit('spawn')); return c; };
+  const { m } = setup(t, { sidecarRoot: root, spawnImpl: fakeSpawn, platform: 'linux', useSystemdRun: () => true });
+  assert.deepEqual(await m.botNotice(), { current: '2.7.0', latest: 'v2.8.0', newer: true, updating: false });
+  await assert.rejects(m.updateBot('v9.9.9'), { statusCode: 400 });
+  const st = await m.updateBot('v2.8.0');
+  assert.equal(st.running, true);
+  assert.equal(spawned[0].file, 'systemd-run');
+  assert.ok(spawned[0].args.includes('--collect'));
+  assert.deepEqual(spawned[0].args.slice(-4), ['--to', 'v2.8.0', '--from', '2.7.0']);
+  await assert.rejects(m.updateBot('v2.8.0'), { statusCode: 409 });
+  assert.equal((await m.botNotice()).updating, true);
+
+  const { m: win } = setup(t, { sidecarRoot: root, spawnImpl: fakeSpawn, platform: 'win32' });
+  await win.updateBot('v2.8.0');
+  assert.equal(spawned[1].file, process.execPath);
+  assert.equal(spawned[1].opts.detached, true);
+  assert.equal(spawned[1].opts.windowsHide, true);
+});
+
+test('cập nhật bot: bản cài cũ chưa có trình cập nhật → báo rõ; trạng thái kẹt quá 30 phút coi như hỏng', async (t) => {
+  let clock = 1_000_000;
+  const { m, dir } = setup(t, { sidecarRoot: join(tmpdir(), 'khong-co-thu-muc-nay'), now: () => clock });
+  await assert.rejects(m.updateBot('v2.8.0'), { statusCode: 503 });
+  writeFileSync(join(dir, 'bot-update.json'), JSON.stringify({ status: 'running', startedAt: clock, to: 'v2.8.0' }));
+  assert.equal(m.botUpdateState().running, true);
+  clock += 31 * 60_000;
+  assert.deepEqual([m.botUpdateState().running, m.botUpdateState().status], [false, 'failed']);
+});

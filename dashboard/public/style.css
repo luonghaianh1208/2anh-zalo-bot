@@ -909,3 +909,10 @@ button.flow-node:hover { border-color: var(--brand); }
 .donate-pill:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .strip .dialog { font-weight: 400; font-size: 15px; }
 @media (prefers-reduced-motion: reduce) { .donate-pill { transition: none; } .donate-pill:hover { transform: none; } }
+.update-pill {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 14px; border-radius: 999px;
+  background: rgba(255, 255, 255, .18); color: inherit; border: 1px solid rgba(255, 255, 255, .55);
+  font-size: 14px; font-weight: 700; text-decoration: none;
+}
+a.update-pill:hover { background: rgba(255, 255, 255, .3); }
+.strip-warn .update-pill, .strip-idle .update-pill { border-color: currentColor; background: transparent; }

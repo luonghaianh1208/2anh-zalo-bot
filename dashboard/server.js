@@ -122,7 +122,7 @@ export function buildDeps({ env = process.env, sidecarRoot = join(here, '..'), i
     agentTrace: createAgentTrace({ dbPath: paths.hermesStateDb }),
     mcpServers: createMcpServers({ configFile: paths.hermesConfigFile, publicMcp: () => readEnvKey(paths.hermesEnvFile, 'ZALO_PUBLIC_MCP') }),
     hermesAdmin,
-    maintenance: createMaintenance({ hermesBin: hermesBin({ hermesHome: paths.hermesHome, env }), dataDir: paths.dataDir,
+    maintenance: createMaintenance({ hermesBin: hermesBin({ hermesHome: paths.hermesHome, env }), dataDir: paths.dataDir, sidecarRoot: paths.sidecarRoot,
       pluginYaml: () => { try { return readFileSync(join(hermesAdmin.root(), 'plugins', 'zalo_tools', 'plugin.yaml'), 'utf8'); } catch { return ''; } } }),
     settings: createSettings({ envFile: paths.hermesEnvFile, configFile: paths.hermesConfigFile, inherited: inheritedSettings }),
     // Lời chào thành viên mới: cùng tệp kết nối Zalo đọc (zalo-welcome.js); ZALO_WELCOME_FILE của kết nối Zalo thắng.

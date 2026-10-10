@@ -38,6 +38,22 @@ export function maintenanceRoutes({ maintenance, hermesAdmin, restartFlags, acti
     try { const update = await maintenance.updateHermes(); log(req, 'hermes_update', 'hermes update --yes --backup'); res.json({ ok: true, update }); } catch (err) { fail(res, err, 'Chưa chạy được cập nhật Hermes.'); }
   });
 
+  // Cập nhật bot: ai đăng nhập cũng thấy "có bản mới" (thanh trạng thái), chỉ Quản trị bấm cập nhật được.
+  r.get('/update-notice', requireAuth, async (req, res) => {
+    try { res.json({ ok: true, ...(await maintenance.botNotice()) }); } catch (err) { fail(res, err, 'Chưa kiểm tra được bản mới.'); }
+  });
+  r.get('/admin/maintenance/bot-update', ...guard, (req, res) => {
+    try { res.json({ ok: true, botUpdate: maintenance.botUpdateState() }); } catch (err) { fail(res, err, 'Chưa đọc được tiến độ cập nhật.'); }
+  });
+  r.post('/admin/maintenance/bot-update', ...guard, async (req, res) => {
+    try {
+      const to = String(req.body?.to ?? '');
+      const botUpdate = await maintenance.updateBot(to);
+      log(req, 'bot_update', `${botUpdate.from} → ${to}`);
+      res.json({ ok: true, botUpdate });
+    } catch (err) { fail(res, err, 'Chưa chạy được cập nhật bot.'); }
+  });
+
   if (!hermesAdmin) return r;
   const restored = (req, action, detail) => { restartFlags.mark('assistant', `Khôi phục: ${detail}`); log(req, action, detail); };
 

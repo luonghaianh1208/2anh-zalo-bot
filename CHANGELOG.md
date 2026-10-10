@@ -2,6 +2,19 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.9.0] — 2026-10-10
+
+### Thêm
+- **Cập nhật bot ngay trên dashboard** (Bảo trì › Cập nhật, chỉ Quản trị): khi GitHub có bản 2anh-zalo-bot mới, bấm **Cập nhật bot lên vX**:
+  1. Tự sao lưu cài đặt và ghi nhận bản đang chạy.
+  2. Lấy mã mới — bản cài git: `git checkout <tag>`; bản cài thường: tải gói phát hành từ GitHub, giải nén đè (giữ `.env`, `data/`).
+  3. `npm ci` nếu thư viện đổi, chạy bộ cài `install-hermes.js --no-dashboard` của mã mới (chép plugin, dựng plugin.yaml, bổ sung config).
+  4. Khởi động lại kết nối Zalo → trợ lý → dashboard, chờ bot chạy lại bình thường.
+  5. Lỗi hoặc sau 3 phút chưa khoẻ → **tự quay về bản cũ**.
+  Trang hiện từng bước và nhật ký, tự nối lại khi dashboard khởi động lại. Trên Linux trình cập nhật chạy bằng `systemd-run` nên không bị tắt theo dashboard.
+- **Thanh trạng thái báo "Có bản mới vX"** cho mọi người đăng nhập (Quản trị bấm vào là tới Bảo trì; Chủ bot thấy lời nhắc báo người quản trị); hiện "Đang cập nhật bot…" khi đang cập nhật.
+- `scripts/self-update.js` (chạy tay được: `node scripts/self-update.js --to vX.Y.Z`).
+
 ## [2.8.3] — 2026-10-10
 
 ### Đổi

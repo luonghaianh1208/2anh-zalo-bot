@@ -1,7 +1,8 @@
 /**
  * Bảo trì (chỉ Quản trị): phiên bản + cập nhật, và nơi giữ bản sao lưu cài đặt.
  * - Bot Zalo (2anh-zalo-bot): phiên bản trong plugin.yaml đã cài; bản mới nhất từ GitHub Releases (repo công khai,
- *   lưu đệm 1 giờ). Cập nhật bot do người cài đặt làm (đổi cả sidecar lẫn plugin) — dashboard chỉ báo.
+ *   lưu đệm 1 giờ). Cập nhật bot: chạy tách rời scripts/self-update.js (sao lưu → mã mới → cài → khởi động lại →
+ *   kiểm tra, hỏng thì tự quay về bản cũ); chỉ lên đúng bản mới nhất.
  * - Hermes: `hermes --version`, `hermes update --check` (bấm mới chạy, ~10 giây). Cập nhật: chạy tách rời
  *   `hermes update --yes --backup` (Hermes tự chụp điểm khôi phục + sao lưu trước), ghi nhật ký ra tệp để xem tiến độ.
  */
@@ -42,7 +43,12 @@ const run = (file, args, opts) => new Promise((resolve) => {
   execFile(file, args, { windowsHide: true, timeout: 60_000, ...opts }, (e, stdout, stderr) => resolve({ ok: !e, out: `${stdout || ''}${stderr || ''}` }));
 });
 
-export function createMaintenance({ hermesBin, pluginYaml = () => '', dataDir, fetchImpl = globalThis.fetch, runImpl = run, spawnImpl = spawn, now = Date.now }) {
+export function createMaintenance({
+  hermesBin, pluginYaml = () => '', dataDir, sidecarRoot = '', fetchImpl = globalThis.fetch, runImpl = run, spawnImpl = spawn, now = Date.now,
+  platform = process.platform, useSystemdRun = () => existsSync('/run/systemd/system') && process.getuid?.() === 0,
+}) {
+  const botStateFile = join(dataDir, 'bot-update.json');
+  const botLogFile = join(dataDir, 'bot-update.log');
   const backupDir = join(dataDir, 'backups');
   const stateFile = join(dataDir, 'hermes-update.json');
   const logFile = join(dataDir, 'hermes-update.log');
@@ -73,6 +79,23 @@ export function createMaintenance({ hermesBin, pluginYaml = () => '', dataDir, f
     return { startedAt: s.startedAt || 0, running, log };
   }
 
+  /** Trạng thái cập nhật bot (scripts/self-update.js ghi). Kẹt "running" quá 30 phút coi như hỏng. */
+  function botUpdateState() {
+    let s = {};
+    try { s = JSON.parse(readFileSync(botStateFile, 'utf8')); } catch { /* chưa cập nhật lần nào */ }
+    const stale = s.status === 'running' && now() - (s.startedAt || 0) > 30 * 60_000;
+    let log = '';
+    try { log = readFileSync(botLogFile, 'utf8').split(/\r?\n/).filter((l) => l.trim()).slice(-60).join('\n'); } catch { /* chưa có */ }
+    return { status: stale ? 'failed' : (s.status || ''), from: s.from || '', to: s.to || '', step: s.step || '', error: stale ? 'Cập nhật dừng giữa chừng.' : (s.error || ''),
+      startedAt: s.startedAt || 0, finishedAt: s.finishedAt || 0, running: s.status === 'running' && !stale, log };
+  }
+
+  async function botNotice() {
+    const current = pluginVersion(pluginYaml());
+    const rel = await latestRelease();
+    return { current, latest: rel?.tag || '', newer: Boolean(rel?.tag && current && compareVersions(rel.tag, current) > 0), updating: botUpdateState().running };
+  }
+
   return {
     backupDir,
     async versions() {
@@ -85,6 +108,7 @@ export function createMaintenance({ hermesBin, pluginYaml = () => '', dataDir, f
         bot: { version: bot, latest: rel, newer: Boolean(rel?.tag && bot && compareVersions(rel.tag, bot) > 0) },
         hermes: { version: hermes, check: hermesCheck },
         update: updateState(),
+        botUpdate: botUpdateState(),
       };
     },
     async checkHermes() {
@@ -103,6 +127,34 @@ export function createMaintenance({ hermesBin, pluginYaml = () => '', dataDir, f
       return updateState();
     },
     updateState,
+    botUpdateState,
+    botNotice,
+    /** Cập nhật bot lên đúng bản mới nhất trên GitHub: chạy scripts/self-update.js tách khỏi dashboard. */
+    async updateBot(to) {
+      const n = await botNotice();
+      if (!n.newer || to !== n.latest) throw fail(400, 'Chỉ cập nhật được lên bản mới nhất — tải lại trang.');
+      if (botUpdateState().running) throw fail(409, 'Bot đang cập nhật — chờ xong rồi xem lại.');
+      if (!sidecarRoot) throw fail(503, 'Không biết thư mục cài bot trên máy này.');
+      const script = join(sidecarRoot, 'scripts', 'self-update.js');
+      if (!existsSync(script)) throw fail(503, 'Bản cài này chưa có trình cập nhật — người cài đặt cập nhật thủ công một lần.');
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(botStateFile, JSON.stringify({ status: 'running', from: n.current, to, startedAt: now(), step: 'Bắt đầu' }));
+      writeFileSync(botLogFile, '');
+      const argv = [script, '--to', to, '--from', n.current];
+      // Linux + systemd: chạy thành unit riêng — `systemctl restart zalo-dashboard` sẽ không giết trình cập nhật.
+      const viaSystemd = platform !== 'win32' && useSystemdRun();
+      const child = viaSystemd
+        ? spawnImpl('systemd-run', ['--unit', `zalo-bot-update-${now()}`, '--collect', '--quiet', `--working-directory=${sidecarRoot}`, process.execPath, ...argv], { windowsHide: true, stdio: 'ignore' })
+        : spawnImpl(process.execPath, argv, { cwd: sidecarRoot, detached: true, windowsHide: true, stdio: 'ignore' });
+      // systemd-run thoát ngay sau khi giao việc; mã ≠ 0 = không chạy được unit → báo lỗi thay vì treo "đang cập nhật".
+      if (viaSystemd) {
+        child.once?.('exit', (code) => {
+          if (code && botUpdateState().running) writeFileSync(botStateFile, JSON.stringify({ status: 'failed', from: n.current, to, startedAt: now(), finishedAt: now(), error: `systemd-run lỗi (mã ${code})` }));
+        });
+      }
+      await waitSpawned(child);
+      return botUpdateState();
+    },
     backups() {
       if (!existsSync(backupDir)) return [];
       return readdirSync(backupDir).filter((f) => BACKUP_FILE.test(f)).sort().reverse()

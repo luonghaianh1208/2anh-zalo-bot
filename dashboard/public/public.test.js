@@ -995,3 +995,11 @@ test('Ủng hộ tác giả: thông tin chuyển khoản và ảnh QR có sẵn 
   const { existsSync } = await import('node:fs');
   assert.ok(existsSync(new URL('./donate-qr.jpg', import.meta.url)));
 });
+
+test('thanh trạng thái: nhãn bản mới / đang cập nhật', async () => {
+  const { noticeText } = await import('./views/shell.js');
+  assert.equal(noticeText(null), '');
+  assert.equal(noticeText({ newer: false }), '');
+  assert.equal(noticeText({ newer: true, latest: 'v2.9.0' }), 'Có bản mới v2.9.0');
+  assert.equal(noticeText({ newer: true, latest: 'v2.9.0', updating: true }), 'Đang cập nhật bot…');
+});

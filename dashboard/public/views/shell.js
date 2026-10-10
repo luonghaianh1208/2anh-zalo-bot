@@ -137,7 +137,26 @@ export function statusLevel(s) {
   return { kind: 'ok', icon: 'check', text: `Bot đang hoạt động bình thường${s.zalo.displayName ? ` — ${s.zalo.displayName}` : ''}.` };
 }
 
-function StatusStrip({ status, error, path }) {
+/** Báo có bản bot mới (hỏi máy chủ khi mở trang và mỗi giờ). Quản trị bấm vào để tới Bảo trì. */
+function useUpdateNotice() {
+  const [n, setN] = useState(null);
+  useEffect(() => {
+    const load = () => api('/api/update-notice').then(setN).catch(() => {});
+    load();
+    const t = setInterval(load, 3600_000);
+    return () => clearInterval(t);
+  }, []);
+  return n;
+}
+
+export function noticeText(n) {
+  if (!n) return '';
+  if (n.updating) return 'Đang cập nhật bot…';
+  return n.newer ? `Có bản mới ${n.latest}` : '';
+}
+
+function StatusStrip({ status, error, path, admin }) {
+  const notice = noticeText(useUpdateNotice());
   let lv;
   if (error) lv = { kind: 'warn', icon: 'warn', text: `Không cập nhật được trạng thái. ${error}` };
   else if (status) lv = statusLevel(status);
@@ -145,6 +164,8 @@ function StatusStrip({ status, error, path }) {
   return html`<div class=${`strip strip-${lv.kind}`} role="status" aria-live="polite">
     <span class="strip-text"><${Icon} name=${lv.icon} /> ${lv.text}</span>
     <span class="strip-actions">
+      ${notice ? (admin && path !== '/maintenance' ? html`<a class="update-pill" href="#/maintenance"><${Icon} name="download" size=${16} /> ${notice}</a>`
+        : html`<span class="update-pill" title=${admin ? '' : 'Báo người quản trị để cập nhật'}><${Icon} name="download" size=${16} /> ${notice}</span>`) : null}
       ${lv.qr && path !== '/zalo' ? html`<a class="btn btn-light btn-sm" href="#/zalo"><${Icon} name="qr" size=${16} /> Quét mã đăng nhập lại</a>` : null}
       <${DonateButton} className="donate-pill" />
     </span>
@@ -273,7 +294,7 @@ export function Shell({ me, brand, path }) {
   return html`<div class="layout">
     <${Sidebar} me=${me} brand=${brand} path=${path} features=${features} />
     <div class="main-col">
-      <${StatusStrip} status=${status} error=${error} path=${path} />
+      <${StatusStrip} status=${status} error=${error} path=${path} admin=${me.role === 'admin'} />
       <main class="content" ref=${mainRef} tabindex="-1">
         ${crumbs.length ? html`<nav class="crumbs" aria-label="Vị trí trang"><ol>${crumbs.map((c, i) => html`<li key=${c}
           aria-current=${i === crumbs.length - 1 ? 'page' : undefined}>${c}</li>`)}</ol></nav>` : null}
