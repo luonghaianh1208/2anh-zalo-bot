@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
 
@@ -10,6 +10,7 @@ import {
   parseCliArgs,
   vieneuProbeScript,
   resolveHermesLayout,
+  findSeparateHermesRepo,
   mergeHermesConfig,
   renderPlatformManifest,
   installHermes as installHermesReal,
@@ -66,7 +67,22 @@ test('resolveHermesLayout accepts a Hermes home and rejects an unrelated directo
   assert.equal(layout.home, fx.hermesHome);
   assert.equal(layout.repoRoot, fx.hermesRepo);
   assert.equal(layout.configPath, join(fx.hermesHome, 'config.yaml'));
-  assert.throws(() => resolveHermesLayout({ hermesHome: fx.sidecar }), /Hermes Agent/);
+  assert.throws(() => resolveHermesLayout({ hermesHome: fx.sidecar, findRepo: () => fx.hermesRepo }), /Hermes Agent/, 'không có config.yaml → không phải HERMES_HOME');
+});
+
+test('resolveHermesLayout: HERMES_HOME tách khỏi mã Hermes (bố trí Linux /root/.hermes + /opt/hermes/hermes-agent)', (t) => {
+  const fx = fixture(t);
+  const home = join(fx.sidecar, '..', 'dot-hermes');
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, 'config.yaml'), 'model: {}\n');
+  const layout = resolveHermesLayout({ hermesHome: home, findRepo: () => fx.hermesRepo });
+  assert.deepEqual(layout, { home: resolve(home), repoRoot: fx.hermesRepo, configPath: join(resolve(home), 'config.yaml') });
+  assert.throws(() => resolveHermesLayout({ hermesHome: home, findRepo: () => null }), /Hermes Agent/);
+  const viaPath = findSeparateHermesRepo({
+    env: { PATH: '/usr/bin:/usr/local/bin' }, hostPlatform: 'linux',
+    exists: (p) => p === join('/usr/local/bin', 'hermes'), real: () => join(fx.hermesRepo, '.venv', 'bin', 'hermes'),
+  });
+  assert.equal(viaPath, fx.hermesRepo);
 });
 
 test('mergeHermesConfig adds safe defaults and preserves customer values', async () => {

@@ -2,6 +2,11 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.9.3] — 2026-10-10
+
+### Sửa
+- Bộ cài (và cập nhật bot trên dashboard) tìm được mã Hermes khi nó nằm riêng với HERMES_HOME — bố trí chuẩn trên Linux (`/root/.hermes` + `/opt/hermes/hermes-agent`): thử `HERMES_REPO`, lệnh `hermes` trên PATH, rồi `/opt/hermes/hermes-agent`.
+
 ## [2.9.2] — 2026-10-10
 
 ### Sửa

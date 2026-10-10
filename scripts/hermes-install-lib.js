@@ -1,6 +1,6 @@
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, cpSync,
-  renameSync, rmSync, statSync,
+  realpathSync, renameSync, rmSync, statSync,
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir, platform } from 'node:os';
@@ -64,12 +64,31 @@ function layoutFromCandidate(candidate) {
   return null;
 }
 
-export function resolveHermesLayout({ hermesHome = null, env = process.env, cwd = process.cwd() } = {}) {
+/**
+ * Mã Hermes nằm riêng với HERMES_HOME (bố trí chuẩn trên Linux: HERMES_HOME=/root/.hermes, mã ở /opt/hermes/hermes-agent):
+ * HERMES_REPO → venv chứa lệnh `hermes` trên PATH (…/hermes-agent/.venv/bin/hermes) → /opt/hermes/hermes-agent.
+ */
+export function findSeparateHermesRepo({ env = process.env, exists = existsSync, real = realpathSync, hostPlatform = platform() } = {}) {
+  const ok = (p) => p && isHermesRepo(p);
+  if (ok(env.HERMES_REPO)) return resolve(env.HERMES_REPO);
+  const exe = hostPlatform === 'win32' ? 'hermes.exe' : 'hermes';
+  for (const dir of String(env.PATH || '').split(hostPlatform === 'win32' ? ';' : ':').filter(Boolean)) {
+    const bin = join(dir, exe);
+    if (!exists(bin)) continue;
+    try { const root = dirname(dirname(dirname(real(bin)))); if (ok(root)) return root; } catch { /* thử thư mục kế */ }
+  }
+  return hostPlatform === 'win32' || !ok('/opt/hermes/hermes-agent') ? null : '/opt/hermes/hermes-agent';
+}
+
+export function resolveHermesLayout({ hermesHome = null, env = process.env, cwd = process.cwd(), findRepo = findSeparateHermesRepo } = {}) {
   const explicit = hermesHome || env.HERMES_HOME;
   if (explicit && explicit.length > 0) {
     const layout = layoutFromCandidate(explicit);
     if (layout) return layout;
-    throw new Error(`Không tìm thấy Hermes Agent hợp lệ tại: ${resolve(explicit)}`);
+    const home = resolve(explicit);
+    const repo = existsSync(join(home, 'config.yaml')) ? findRepo({ env }) : null;
+    if (repo) return { home, repoRoot: repo, configPath: join(home, 'config.yaml') };
+    throw new Error(`Không tìm thấy Hermes Agent hợp lệ tại: ${home}`);
   }
 
   const candidates = [cwd, dirname(cwd), join(homedir(), '.hermes')];

@@ -1,5 +1,5 @@
 name: zalo_memory
-version: 2.9.2
+version: 2.9.3
 description: "Trí nhớ dài hạn OpenViking cho Zalo — tách riêng từng nhóm, từng người (2anh-zalo-bot, spec §19)."
 pip_dependencies:
   - httpx
