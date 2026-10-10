@@ -2,6 +2,11 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.9.4] — 2026-10-11
+
+### Sửa
+- Cập nhật bot: hỏi lại GitHub ngay trước khi chạy, không bị từ chối khi bản mới vừa phát hành trong vòng 1 giờ.
+
 ## [2.9.3] — 2026-10-10
 
 ### Sửa

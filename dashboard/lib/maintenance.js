@@ -90,9 +90,9 @@ export function createMaintenance({
       startedAt: s.startedAt || 0, finishedAt: s.finishedAt || 0, running: s.status === 'running' && !stale, log };
   }
 
-  async function botNotice() {
+  async function botNotice(fresh = false) {
     const current = pluginVersion(pluginYaml());
-    const rel = await latestRelease();
+    const rel = await latestRelease(fresh);
     return { current, latest: rel?.tag || '', newer: Boolean(rel?.tag && current && compareVersions(rel.tag, current) > 0), updating: botUpdateState().running };
   }
 
@@ -131,7 +131,7 @@ export function createMaintenance({
     botNotice,
     /** Cập nhật bot lên đúng bản mới nhất trên GitHub: chạy scripts/self-update.js tách khỏi dashboard. */
     async updateBot(to) {
-      const n = await botNotice();
+      const n = await botNotice(true); // hỏi lại GitHub: bản mới nhất có thể vừa ra
       if (!n.newer || to !== n.latest) throw fail(400, 'Chỉ cập nhật được lên bản mới nhất — tải lại trang.');
       if (botUpdateState().running) throw fail(409, 'Bot đang cập nhật — chờ xong rồi xem lại.');
       if (!sidecarRoot) throw fail(503, 'Không biết thư mục cài bot trên máy này.');
