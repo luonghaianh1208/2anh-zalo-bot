@@ -2,6 +2,12 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.9.1] — 2026-10-10
+
+### Sửa
+- Trang Bảo trì luôn hỏi GitHub bản mới nhất (không chờ bộ nhớ đệm 1 giờ), bản vừa phát hành hiện ngay.
+- Nhãn "Đang cập nhật bot…" trên thanh trạng thái tự kiểm tra lại mỗi 15 giây và tự tắt khi xong.
+
 ## [2.9.0] — 2026-10-10
 
 ### Thêm

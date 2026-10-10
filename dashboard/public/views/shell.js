@@ -140,12 +140,14 @@ export function statusLevel(s) {
 /** Báo có bản bot mới (hỏi máy chủ khi mở trang và mỗi giờ). Quản trị bấm vào để tới Bảo trì. */
 function useUpdateNotice() {
   const [n, setN] = useState(null);
+  const updating = Boolean(n?.updating);
   useEffect(() => {
     const load = () => api('/api/update-notice').then(setN).catch(() => {});
-    load();
-    const t = setInterval(load, 3600_000);
+    if (!updating) load();
+    // Đang cập nhật: hỏi lại mỗi 15 giây để nhãn tự tắt khi xong; bình thường mỗi giờ.
+    const t = setInterval(load, updating ? 15_000 : 3600_000);
     return () => clearInterval(t);
-  }, []);
+  }, [updating]);
   return n;
 }
 

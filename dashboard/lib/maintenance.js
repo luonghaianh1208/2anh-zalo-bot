@@ -55,8 +55,8 @@ export function createMaintenance({
   let latest = null; // { at, value }
   let hermesCheck = null; // { at, status }
 
-  async function latestRelease() {
-    if (latest && now() - latest.at < HOUR) return latest.value;
+  async function latestRelease(fresh = false) {
+    if (latest && now() - latest.at < (fresh ? 60_000 : HOUR)) return latest.value; // trang Bảo trì: gần như luôn hỏi mới
     let value = null;
     try {
       const res = await fetchImpl(RELEASES_URL, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': '2anh-zalo-dashboard' }, signal: AbortSignal.timeout(8000) });
@@ -100,7 +100,7 @@ export function createMaintenance({
     backupDir,
     async versions() {
       const bot = pluginVersion(pluginYaml());
-      const rel = await latestRelease();
+      const rel = await latestRelease(true);
       let hermes = '';
       const v = await runImpl(hermesBin, ['--version']);
       if (v.ok) hermes = v.out.replace(ANSI, '').split(/\r?\n/)[0].trim().slice(0, 200);
