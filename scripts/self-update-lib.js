@@ -17,7 +17,19 @@ export const REPO = 'luonghaianh1208/2anh-zalo-bot';
 export const TAG = /^v\d+\.\d+\.\d+$/;
 const HEALTH_TIMEOUT_MS = 180_000;
 
-const hashFile = (p) => (existsSync(p) ? createHash('sha256').update(readFileSync(p)).digest('hex') : '');
+/** Dấu vân tay phần THƯ VIỆN của package-lock (bỏ số phiên bản của chính bot — đổi mỗi bản phát hành). */
+export function depsHash(p) {
+  if (!existsSync(p)) return '';
+  let text = readFileSync(p, 'utf8');
+  try {
+    const lock = JSON.parse(text);
+    delete lock.version;
+    if (lock.packages?.['']) delete lock.packages[''].version;
+    text = JSON.stringify(lock);
+  } catch { /* lock hỏng: so nguyên tệp */ }
+  return createHash('sha256').update(text).digest('hex');
+}
+const hashFile = depsHash;
 
 export function writeState(file, state) {
   writeFileSync(file, JSON.stringify(state, null, 2));

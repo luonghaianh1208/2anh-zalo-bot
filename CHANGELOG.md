@@ -2,6 +2,12 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.9.2] — 2026-10-10
+
+### Sửa
+- `package.json` ghi nhầm `zca-js ^2.7.0` (không có trên npm) làm `npm ci` luôn lỗi — sửa về `^2.1.2` khớp package-lock.
+- Cập nhật bot: chỉ chạy `npm ci` khi thư viện thật sự đổi (trước đây đổi số phiên bản bot cũng bị tính là đổi thư viện).
+
 ## [2.9.1] — 2026-10-10
 
 ### Sửa

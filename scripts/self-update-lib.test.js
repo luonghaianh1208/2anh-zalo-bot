@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { runSelfUpdate } from './self-update-lib.js';
 
 function setup(t, { git = true, healthy = () => ({ ok: true }), runHook = () => '', lockChangesOn = '' } = {}) {
+  // lockChangesOn: lệnh nào chạy xong thì đổi THƯ VIỆN trong package-lock (không chỉ số phiên bản).
   const root = mkdtempSync(join(tmpdir(), 'zalo-selfupdate-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   if (git) mkdirSync(join(root, '.git'));
@@ -18,7 +19,7 @@ function setup(t, { git = true, healthy = () => ({ ok: true }), runHook = () => 
     run: async (cmd, args) => {
       const line = `${cmd.endsWith('node') || cmd.endsWith('node.exe') ? 'node' : cmd} ${args.join(' ')}`;
       calls.push(line);
-      if (lockChangesOn && line.includes(lockChangesOn)) writeFileSync(join(root, 'package-lock.json'), `changed ${calls.length}`);
+      if (lockChangesOn && line.includes(lockChangesOn)) writeFileSync(join(root, 'package-lock.json'), JSON.stringify({ packages: { 'node_modules/x': { version: String(calls.length) } } }));
       const r = runHook(line);
       if (r instanceof Error) throw r;
       if (cmd === 'git' && args[0] === 'rev-parse') return 'abc123\n';
@@ -92,4 +93,15 @@ test('phiên bản lạ bị từ chối', async (t) => {
   const { go } = setup(t);
   await assert.rejects(go('v2.9.0; rm -rf /'), /không hợp lệ/);
   await assert.rejects(go('main'), /không hợp lệ/);
+});
+
+test('dấu vân tay thư viện: đổi số phiên bản bot không tính là đổi thư viện', async (t) => {
+  const { depsHash } = await import('./self-update-lib.js');
+  const dir = mkdtempSync(join(tmpdir(), 'zalo-lock-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const lock = (v, zca) => JSON.stringify({ name: 'x', version: v, packages: { '': { version: v, dependencies: { 'zca-js': '^2.1.2' } }, 'node_modules/zca-js': { version: zca } } });
+  const f = join(dir, 'package-lock.json');
+  writeFileSync(f, lock('2.9.0', '2.1.2')); const a = depsHash(f);
+  writeFileSync(f, lock('2.9.1', '2.1.2')); assert.equal(depsHash(f), a);
+  writeFileSync(f, lock('2.9.1', '2.2.0')); assert.notEqual(depsHash(f), a);
 });

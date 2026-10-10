@@ -1,6 +1,6 @@
 {
   "name": "2anh-zalo-bot",
-  "version": "2.9.1",
+  "version": "2.9.2",
   "description": "Cầu nối Zalo cho Hermes Agent — đăng nhập bằng QR, chạy như một nền tảng đầy đủ của Hermes (tools, memory, skills), kèm dashboard quản trị cục bộ.",
   "type": "module",
   "main": "server.js",
@@ -37,6 +37,6 @@
     "express": "^5.2.1",
     "ws": "^8.21.3",
     "yaml": "^2.9.0",
-    "zca-js": "^2.7.0"
+    "zca-js": "^2.1.2"
   }
 }
