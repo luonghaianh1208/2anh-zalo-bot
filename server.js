@@ -231,8 +231,17 @@ if (reconnectResult) {
 }
 
 // --- QR Login ---
+// Chặn gọi dồn dập: tạo QR tốn tài nguyên (mở phiên Zalo mới), nên giới hạn
+// tối thiểu 2s giữa hai lần bắt đầu để tránh bị lợi dụng làm cạn tài nguyên máy.
+const QR_START_COOLDOWN_MS = 2000;
+let lastQrStartAt = 0;
 app.post('/api/qr/start', async (req, res) => {
   if (status === 'logged-in' && api && !zaloSessionStale()) return res.json({ ok: true, user: loginInfo });
+  const now = Date.now();
+  if (now - lastQrStartAt < QR_START_COOLDOWN_MS) {
+    return res.status(429).json({ ok: false, error: 'Gọi quá nhanh, vui lòng thử lại sau giây lát' });
+  }
+  lastQrStartAt = now;
   try {
     await qrLogin.start(); // phiên đã chết thì dỡ trước, rồi mở QR mới
     const user = await qrLogin.waitForLogin();
