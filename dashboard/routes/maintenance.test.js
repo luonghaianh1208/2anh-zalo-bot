@@ -68,3 +68,24 @@ test('Cập nhật bot: ai đăng nhập cũng thấy có bản mới; chỉ Qu�
   assert.equal(asked, 'v2.9.0');
   assert.equal(deps.activity.list().find((e) => e.action === 'bot_update').detail, '2.8.3 → v2.9.0');
 });
+
+test('Dọn bản Hermes cũ: chỉ Quản trị xem và dọn; dọn ghi Nhật ký', async (t) => {
+  const deps = makeDeps(t);
+  fakes(deps);
+  let by = '';
+  deps.hermesEnvs = {
+    status: async () => ({ total: 5, keep: [{ id: 'a', why: 'đang dùng' }], removable: by ? 0 : 2, disk: null, last: null, running: false }),
+    clean: async (b) => { by = b; return { at: 1, by: b, removed: 2, kept: 3, failed: [], freed: 10 }; },
+  };
+  const { call } = await startApp(t, deps);
+  const owner = await loginAs(t, deps, call, { username: 'khach', role: 'owner' });
+  assert.equal((await call('/api/admin/maintenance/hermes-envs', { cookie: owner })).status, 403);
+  assert.equal((await call('/api/admin/maintenance/hermes-envs/clean', { method: 'POST', cookie: owner })).status, 403);
+  const admin = await loginAs(t, deps, call);
+  assert.equal((await call('/api/admin/maintenance/hermes-envs', { cookie: admin })).json.envs.removable, 2);
+  const r = await call('/api/admin/maintenance/hermes-envs/clean', { method: 'POST', cookie: admin });
+  assert.equal(by, 'tay');
+  assert.equal(r.json.done.removed, 2);
+  assert.equal(r.json.envs.removable, 0);
+  assert.ok(deps.activity.list().some((e) => e.action === 'hermes_envs_clean'));
+});

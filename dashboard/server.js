@@ -33,6 +33,7 @@ import { createHermesMemory } from './lib/hermes-memory.js';
 import { createSchedules, hermesBin } from './lib/schedules.js';
 import { createHermesAdmin } from './lib/hermes-admin.js';
 import { createMaintenance } from './lib/maintenance.js';
+import { createHermesEnvs } from './lib/hermes-envs.js';
 import { createCallWords } from './lib/call-words.js';
 import { createReplyStyle } from './lib/reply-style.js';
 import { createMemoryTags } from './lib/memory-tags.js';
@@ -154,6 +155,8 @@ export function buildDeps({ env = process.env, sidecarRoot = join(here, '..'), i
     outboxDir: join(paths.dataDir, 'outbox'),
     // Cách gọi bot: cùng tệp plugin đọc (ZALO_CALL_WORDS_FILE trong .env Hermes thắng).
     callWords: createCallWords({ file: readEnvKey(paths.hermesEnvFile, 'ZALO_CALL_WORDS_FILE') || join(paths.hermesHome, 'zalo', 'call-words.json') }),
+    // Dọn bản Hermes cũ (installs/*/environments): nút ở Bảo trì + tự động mỗi ngày.
+    hermesEnvs: createHermesEnvs({ hermesHome: paths.hermesHome }),
     maintenance: createMaintenance({ hermesBin: hermesBin({ hermesHome: paths.hermesHome, env }), dataDir: paths.dataDir, sidecarRoot: paths.sidecarRoot,
       // Plugin cài ở <HERMES_HOME>/plugins; bản ≤ 2.36 nằm trong mã Hermes (chưa chạy lại bộ cài).
       pluginYaml: () => {
@@ -207,6 +210,15 @@ async function main() {
   // Đo máy chủ mỗi phút; lần đầu sau 5 giây để CPU có một khoảng đo thật.
   const healthTick = async () => { try { await deps.health.tick(); } catch (e) { console.warn('[health]', e.message); } }; // tick tự bỏ qua khi nhịp trước còn chạy
   setTimeout(healthTick, 5_000); setInterval(healthTick, 60_000);
+  // Dọn bản Hermes cũ tự động: 10 phút sau khi chạy rồi mỗi ngày; chỉ dọn khi có bản thừa, ghi Nhật ký.
+  const envTick = async () => {
+    try {
+      if ((await deps.hermesEnvs.status()).removable === 0) return;
+      const r = await deps.hermesEnvs.clean('tu-dong');
+      deps.activity.append({ actor: 'hệ thống', action: 'hermes_envs_clean', detail: `tự động: xoá ${r.removed} bản Hermes cũ, giữ ${r.kept}` });
+    } catch (e) { console.warn('[hermes-envs]', e.message); }
+  };
+  setTimeout(envTick, 10 * 60_000); setInterval(envTick, 24 * 3600_000);
   // Tắt dịch vụ (systemd gửi SIGTERM) thì ghi nốt biểu đồ chưa lưu.
   for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { try { deps.health.flush(); } catch { /* bỏ qua */ } process.exit(0); });
   (async function poll() {

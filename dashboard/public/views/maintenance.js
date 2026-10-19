@@ -57,6 +57,35 @@ function BotUpdate({ bot, initial, onReload }) {
 
 export const CHECK_TEXT ={ available: 'Có bản Hermes mới', current: 'Hermes đang là bản mới nhất', unknown: 'Chưa rõ — xem nhật ký máy chủ' };
 
+/** Dọn bản Hermes cũ: mỗi lần cập nhật Hermes để lại một môi trường ~1 GB. Giữ bản đang dùng, bản có tiến trình
+ * và 3 bản mới nhất (cùng quy tắc lần dọn tự động mỗi ngày). */
+export function HermesEnvs() {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState({});
+  const load = () => api('/api/admin/maintenance/hermes-envs').then((r) => setSt(r.envs)).catch((e) => setMsg({ error: e.message }));
+  useEffect(() => { load(); }, []);
+  async function clean() {
+    if (!confirm(`Xoá ${st.removable} bản Hermes cũ? Giữ lại ${st.keep.length} bản: bản đang dùng và các bản mới nhất. Không ảnh hưởng bot đang chạy, chỉ mất khả năng quay về các bản Hermes đã xoá.`)) return;
+    setBusy(true); setMsg({});
+    try {
+      const r = await api('/api/admin/maintenance/hermes-envs/clean', { method: 'POST' });
+      setSt(r.envs);
+      const loi = r.done.failed.length ? ` (${r.done.failed.length} bản chưa xoá được)` : '';
+      setMsg({ ok: `Đã xoá ${r.done.removed} bản${r.done.freed != null ? `, giải phóng ${fmtSize(r.done.freed)}` : ''}${loi}.` });
+    } catch (e) { setMsg({ error: e.message }); } finally { setBusy(false); }
+  }
+  if (!st) return msg.error ? html`<${Live} error=${msg.error} />` : html`<${Spinner} />`;
+  const disk = st.disk ? `Ổ đĩa còn trống ${fmtSize(st.disk.free)} / ${fmtSize(st.disk.total)} (đã dùng ${Math.round((1 - st.disk.free / st.disk.total) * 100)}%).` : '';
+  return html`<div>
+    <p class="small">Có <strong>${st.total}</strong> bản Hermes trên máy; giữ ${st.keep.length} bản${st.removable ? html`, <strong>${st.removable}</strong> bản cũ xoá được` : ', không có bản thừa'}. ${disk}</p>
+    ${st.keep.length ? html`<p class="muted small">Giữ: ${st.keep.map((k) => `${k.id.slice(0, 8)} (${k.why})`).join(' · ')}</p>` : null}
+    ${st.last ? html`<p class="muted small">Lần dọn gần nhất: ${fmtTime(st.last.at)} (${st.last.by === 'tu-dong' ? 'tự động' : 'bấm tay'}) — xoá ${st.last.removed} bản${st.last.freed != null ? `, giải phóng ${fmtSize(st.last.freed)}` : ''}.</p>` : html`<p class="muted small">Tự động dọn mỗi ngày khi có bản thừa.</p>`}
+    <div class="toolbar"><button type="button" class="btn btn-secondary btn-sm" disabled=${busy || st.running || !st.removable} onClick=${clean}><${Icon} name="disk" size=${14} /> ${busy || st.running ? 'Đang dọn…' : 'Dọn ngay'}</button></div>
+    <${Live} error=${msg.error} ok=${msg.ok} />
+  </div>`;
+}
+
 function Updates({ data, onReload }) {
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState({});
@@ -92,6 +121,10 @@ function Updates({ data, onReload }) {
         ${hermes.check?.status === 'available' || update?.running ? html`<button type="button" class="btn btn-primary btn-sm" disabled=${busy !== '' || update?.running} onClick=${runUpdate}>${update?.running ? 'Đang cập nhật…' : 'Cập nhật Hermes'}</button>` : null}
       </div>
       ${update?.startedAt ? html`<details open=${update.running}><summary class="small">${update.running ? 'Đang cập nhật — nhật ký' : `Lần cập nhật gần nhất (${fmtTime(update.startedAt)})`}</summary><pre class="skill-md">${update.log || '(chưa có dòng nào)'}</pre></details>` : null}
+    </div>
+    <div class="card-sub"><h3>Dọn bản Hermes cũ</h3>
+      <p class="muted small">Mỗi lần cập nhật, Hermes để lại một bản cũ (~1 GB) làm đầy ổ đĩa. Giữ bản đang dùng và các bản mới nhất.</p>
+      <${HermesEnvs} />
     </div>
     <${Live} error=${msg.error} ok=${msg.ok} />
   </div>`;

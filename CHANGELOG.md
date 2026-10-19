@@ -2,6 +2,19 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.56.0] — 2026-10-19
+
+### Thêm — Dọn bản Hermes cũ (tự động và nút bấm)
+
+- Mỗi lần cập nhật, Hermes dựng thêm một môi trường Python mới (~1 GB) và không xoá bản cũ, nên ổ đĩa đầy dần (VPS từng lên 94%).
+- **Tự động:** dashboard dọn mỗi ngày một lần (lần đầu 10 phút sau khi chạy). Chỉ dọn khi có bản thừa, và ghi vào Nhật ký.
+- **Nút "Dọn ngay"** ở Bảo trì → Cập nhật → "Dọn bản Hermes cũ". Chỉ Quản trị thấy. Thẻ cho biết có bao nhiêu bản, bản nào được giữ và vì sao, ổ đĩa còn trống bao nhiêu, và lần dọn gần nhất.
+- Cả hai cách dùng chung một quy tắc giữ lại:
+  - bản Hermes đang dùng;
+  - mọi bản còn tiến trình chạy;
+  - 3 bản mới nhất.
+- Bản nào xoá lỗi thì ghi lại và dọn tiếp các bản khác. Không chạy hai lần dọn cùng lúc.
+
 ## [2.55.0] — 2026-10-19
 
 ### Thêm — Cắt ghép và sửa video ngay trên Zalo

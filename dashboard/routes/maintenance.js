@@ -10,7 +10,7 @@ import { requireAuth, requireRole } from '../lib/http-guards.js';
 
 export const MAX_RESTORE_UPLOAD = 300 * 1024 * 1024;
 
-export function maintenanceRoutes({ maintenance, hermesAdmin, restartFlags, activity }) {
+export function maintenanceRoutes({ maintenance, hermesAdmin, restartFlags, activity, hermesEnvs }) {
   const r = express.Router();
   const guard = [requireAuth, requireRole('admin')];
   const fail = (res, err, fallback) => {
@@ -27,6 +27,19 @@ export function maintenanceRoutes({ maintenance, hermesAdmin, restartFlags, acti
 
   r.get('/admin/maintenance', ...guard, async (req, res) => {
     try { res.json({ ok: true, ...(await maintenance.versions()), backups: maintenance.backups(), snapshots: hermesAdmin ? await snapshots() : null }); } catch (err) { fail(res, err, 'Chưa đọc được thông tin bảo trì.'); }
+  });
+  // Dọn bản Hermes cũ: xem (bao nhiêu bản, giữ bản nào, ổ đĩa) và dọn ngay — cùng quy tắc với lần dọn tự động.
+  r.get('/admin/maintenance/hermes-envs', ...guard, async (req, res) => {
+    if (!hermesEnvs) return res.status(404).json({ ok: false, error: 'Máy này chưa bật dọn bản Hermes cũ.' });
+    try { res.json({ ok: true, envs: await hermesEnvs.status() }); } catch (err) { fail(res, err, 'Chưa đọc được các bản Hermes.'); }
+  });
+  r.post('/admin/maintenance/hermes-envs/clean', ...guard, async (req, res) => {
+    if (!hermesEnvs) return res.status(404).json({ ok: false, error: 'Máy này chưa bật dọn bản Hermes cũ.' });
+    try {
+      const done = await hermesEnvs.clean('tay');
+      log(req, 'hermes_envs_clean', `xoá ${done.removed} bản Hermes cũ, giữ ${done.kept}`);
+      res.json({ ok: true, done, envs: await hermesEnvs.status() });
+    } catch (err) { fail(res, err, 'Chưa dọn được bản Hermes cũ.'); }
   });
   r.post('/admin/maintenance/hermes-check', ...guard, async (req, res) => {
     try { res.json({ ok: true, check: await maintenance.checkHermes() }); } catch (err) { fail(res, err, 'Chưa kiểm tra được bản Hermes mới.'); }
