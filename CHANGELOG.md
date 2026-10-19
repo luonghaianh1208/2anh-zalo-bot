@@ -2,6 +2,35 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.58.0] — 2026-10-19
+
+### Thêm — Slide theo mẫu người dùng gửi
+
+- `zalo_studio kind=slide` có thêm tuỳ chọn `mau`: đường dẫn tệp `.pptx` mẫu mà người dùng đã gửi.
+  - Chỉ nhận tệp nằm trong bộ nhớ đệm tài liệu của Hermes, đuôi `.pptx`, tối đa 40 MB và 30 trang mẫu.
+- Xưởng đọc tệp mẫu trong hộp cát, không có mạng (`pptx_template_import.py`), rồi giữ nguyên thiết kế từng trang: nền, gradient, ảnh, hình trang trí, font, bố cục.
+  - AI chỉ chọn trang mẫu làm khuôn cho từng trang và viết chữ cho từng ô.
+  - Code tự ngắt dòng và co chữ theo bề rộng ô.
+  - Tham chiếu lạ trong mẫu (link ngoài, script) bị gỡ.
+- Bot được dặn: người dùng gửi `.pptx` và muốn "làm theo style này" thì dùng Xưởng kèm `mau`, không dùng `zalo_make_file`.
+
+### Thêm — Cảnh báo hành vi nguy hiểm trong nhóm
+
+- Mọi tin nhóm của thành viên (kể cả tin không tag bot) được lọc hai lớp:
+  - Lớp 1, lọc từ khoá: từ dễ trùng thì so trên chữ có dấu, để "lớn", "các", "từ từ" không bị bắt nhầm.
+  - Lớp 2: AI xác nhận, để không báo những tin như bài giảng "tác hại của ma tuý".
+- Bot nhắn riêng cho chủ nhân: tên nhóm, người gửi, loại, mức độ, lý do và trích tin.
+- Các loại được báo:
+  - tục tĩu / xúc phạm, bắt nạt;
+  - nội dung tình dục;
+  - chất cấm / thuốc lá điện tử;
+  - bạo lực / vũ khí;
+  - tự hại;
+  - cờ bạc / lừa đảo;
+  - can thiệp sâu vào bot: bảo bỏ quy tắc, đòi system prompt, khoá hoặc cấu hình, chạy lệnh trên máy chủ, đổi tính cách/bộ nhớ/phân quyền, giả làm chủ nhân.
+- Không báo trùng: cùng nhóm, người và loại chỉ báo 1 lần mỗi 30 phút. Tối đa 30 cảnh báo mỗi giờ. Khi AI không chạy thì chỉ báo hai loại dấu hiệu rõ là can thiệp bot và tự hại.
+- Bật/tắt ở Cài đặt › Kết bạn và an toàn ("Cảnh báo hành vi nguy hiểm trong nhóm về tin riêng"). Mặc định bật, áp dụng ngay khi lưu.
+
 ## [2.57.0] — 2026-10-19
 
 ### Sửa — Slide của Xưởng không còn hỏng cả bộ vì một lỗi nhỏ

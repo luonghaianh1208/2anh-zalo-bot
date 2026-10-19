@@ -863,6 +863,8 @@ class ZaloAdapter(BasePlatformAdapter):
             extra.get("auto_react", _get_scoped_secret("ZALO_AUTO_REACT", "true")),
             default=True,
         )
+        # Cảnh báo hành vi nguy hiểm trong nhóm → nhắn riêng chủ nhân (zalo_tools/group_safety.py).
+        self._alert_danger: bool = _truthy(_get_scoped_secret("ZALO_ALERT_DANGER", "true"), default=True)
         # Hỏi về ảnh/tệp ("xem ảnh này", "gộp 2 file") thì lật lại bao nhiêu tin gần nhất trong nhóm để lấy
         # ảnh/tệp nạp cho trợ lý (Cấu hình › Đọc ảnh và tệp). Ảnh xa hơn chỉ còn là đường link, trợ lý không xem được.
         self._media_lookback: int = _media_lookback(
@@ -945,6 +947,8 @@ class ZaloAdapter(BasePlatformAdapter):
         }
         if is_group:
             self._remember_group_message(thread_id, recent_entry)
+            if getattr(self, "_alert_danger", True) and not self._is_owner(sender_uid):
+                self._safety_watch(thread_id, sender_uid, sender_name, text)
 
         # Chỉ áp trong nhóm và không bao giờ áp cho chủ nhân: lỡ dán nhầm UID chủ
         # nhân vào danh sách này thì bot không được im lặng với chính chủ.
@@ -1532,6 +1536,41 @@ class ZaloAdapter(BasePlatformAdapter):
         readable_groups = {group for _u, fmt, group in parsed if group and fmt and fmt != "jxl"}
         return [url for url, fmt, group in parsed
                 if not (fmt == "jxl" and group in readable_groups)]
+
+    def _safety_watch(self, thread_id: str, sender_uid: str, sender_name: str, text: str) -> None:
+        """Tin nhóm có dấu hiệu nguy hiểm (không hợp với học sinh / can thiệp sâu vào bot) → AI xác nhận rồi nhắn
+        riêng chủ nhân. Lọc từ khoá chạy ngay (rẻ); phần AI + gửi chạy nền, không làm chậm tin."""
+        try:
+            safety = _zalo_tools_module("group_safety", "Watcher", "prefilter")
+        except ImportError:
+            return
+        try:
+            if not safety.prefilter(text):
+                return
+        except Exception:
+            logger.warning("[zalo] lọc an toàn lỗi", exc_info=True)
+            return
+        owners = _split_ids(_get_scoped_secret("ZALO_ALLOWED_USERS", "") or "")
+        if not owners:
+            return
+        watcher = getattr(self, "_safety", None)
+        if watcher is None:
+            async def send(uid: str, message: str) -> None:
+                await self._command({"type": "send", "threadId": str(uid), "threadType": THREAD_TYPE_USER,
+                                     "text": message}, expect_ack=True)
+
+            def llm():
+                try:
+                    return _zalo_tools()._studio_llm()
+                except Exception:
+                    return None
+
+            watcher = self._safety = safety.Watcher(
+                send=send, llm=llm, group_name=lambda gid: safety.group_name_via(self.invoke, gid))
+        task = asyncio.ensure_future(watcher.check(thread_id=thread_id, sender_uid=sender_uid,
+                                                   sender_name=sender_name, text=text, owners=list(owners)))
+        self._message_tasks.add(task)
+        task.add_done_callback(self._message_tasks.discard)
 
     def _remember_group_message(self, thread_id: str, entry: Dict[str, Any]) -> None:
         bucket = self._recent_group_messages.get(thread_id)

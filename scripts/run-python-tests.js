@@ -74,6 +74,7 @@ const suites = [
   { label: 'test_zalo_adapter.py', module: 'test_zalo_adapter', cwd: REPO_ROOT, requires: 'import gateway, jsonschema' },
   { label: 'test_zalo_media.py', module: 'test_zalo_media', cwd: REPO_ROOT, requires: 'import gateway, lxml, httpx' },
   { label: 'test_zalo_video_edit.py', module: 'test_zalo_video_edit', cwd: REPO_ROOT, requires: 'import gateway, lxml, httpx' },
+  { label: 'test_zalo_group_safety.py', module: 'test_zalo_group_safety', cwd: REPO_ROOT, requires: 'import gateway' },
   { label: 'test_zalo_pdf.py', module: 'test_zalo_pdf', cwd: REPO_ROOT, requires: 'import gateway, pymupdf, pdf2docx' },
   { label: 'test_zalo_academic.py', module: 'test_zalo_academic', cwd: REPO_ROOT, requires: 'import gateway' },
   { label: 'test_zalo_open_data.py', module: 'test_zalo_open_data', cwd: REPO_ROOT, requires: 'import gateway' },

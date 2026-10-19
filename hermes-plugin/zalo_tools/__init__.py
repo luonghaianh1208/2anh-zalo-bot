@@ -32,6 +32,11 @@ def register(ctx) -> None:
         publish_video_policy()
     except Exception:  # cố hết sức — không được làm hỏng việc nạp plugin
         logger.warning("[zalo] không ghi được studio-policy.json lúc nạp plugin", exc_info=True)
+    # Cảnh báo hành vi nguy hiểm trong nhóm: adapter tìm mô-đun đã nạp theo namespace của Hermes — nạp sẵn ở đây.
+    try:
+        from . import group_safety  # noqa: F401
+    except Exception:  # cố hết sức — thiếu thì chỉ không có cảnh báo
+        logger.warning("[zalo] không nạp được bộ lọc an toàn nhóm", exc_info=True)
     # Insight nhóm (spec §18.5): luồng nền nhận yêu cầu tóm tắt từ dashboard qua tệp, gọi ctx.llm không công cụ.
     try:
         from .insight_ai import start_insight_worker

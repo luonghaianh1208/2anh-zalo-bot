@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
-from . import author, builtin, doan_docx, images, recipes, sandbox, validate
+from . import author, builtin, doan_docx, images, mau, recipes, sandbox, validate
 from .. import group_permissions as gp
 from . import ledger as ledger_module
 from .ledger import Ledger
@@ -34,6 +34,7 @@ MAX_FILES = 4
 MAX_FILE_BYTES = {".mp4": 200 * 1024 * 1024}
 DEFAULT_MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_SLIDE_PAGES = validate.MAX_PAGES
+MAX_TEMPLATE_BYTES = 40 * 1024 * 1024   # tệp .pptx mẫu người dùng gửi
 STALE_DIR_SECONDS = 24 * 3600
 # error.step của bộ dựng 2Anh Studio do NỘI DUNG sai (viết lại được); bước khác là lỗi máy.
 CONTENT_STEPS = {"input", "parse", "canh", "model", "check", "framework", "json", "the-thuc"}
@@ -78,6 +79,7 @@ class Job:
     turn: Dict[str, Any]          # danh tính chụp lúc nhận việc — nơi gửi trả, không lấy từ mô hình
     created: float = field(default_factory=time.time)
     script: str = ""              # video: kịch bản người dùng đã duyệt (bước lên kịch bản) — dựng đúng bản này
+    template: str = ""            # slide: tệp .pptx mẫu người dùng gửi (đã kiểm nằm trong cache/documents)
 
     @property
     def uid(self) -> str:
@@ -553,13 +555,87 @@ class Builder:
         return outline, pages, scripts, pics
 
     async def slides(self) -> List[Path]:
-        _outline, _pages, scripts, _pics = await self._deck()
+        if self.job.template:
+            scripts = await self._template_deck()
+        else:
+            _outline, _pages, scripts, _pics = await self._deck()
         export = await self.run([str(self.where.python), str(scripts / "svg_to_pptx.py"), str(self.project),
                                  "--quick-generate", "--no-notes"], timeout=600, network=False)
         if export.timed_out or export.code != 0:
             logger.warning("[zalo] xưởng %s: xuất pptx lỗi %s — %s", self.job.id, export.code, export.err[-2000:])
             raise StudioError("chưa xuất được tệp PowerPoint", refund=True)
         return collect(self.job_dir, self.project / "exports", self.recipe.outputs)[:1]
+
+    async def _template_deck(self) -> Path:
+        """Slide theo MẪU: tệp .pptx người dùng gửi → trang mẫu SVG (hộp cát, không mạng) → AI viết chữ từng ô →
+        trang mới giữ nguyên thiết kế → bộ kiểm. Trả thư mục scripts."""
+        scripts = self.where.studio / "skills" / "ppt-master" / "scripts"
+        py = str(self.where.python)
+        guard = await self.run([py, str(scripts / "attribution_guard.py")], timeout=60, network=False)
+        if guard.code != 0:
+            raise StudioError("bộ làm slide trên máy chủ không còn nguyên vẹn", refund=True)
+        try:
+            with open(self.job.template, "rb") as fh:
+                data = fh.read(MAX_TEMPLATE_BYTES + 1)
+        except OSError:
+            raise StudioError("không còn tệp mẫu người dùng gửi — nhờ họ gửi lại", refund=True) from None
+        if len(data) > MAX_TEMPLATE_BYTES:
+            raise StudioError("tệp mẫu lớn quá (tối đa 40 MB)", refund=True)
+        source = sandbox.write_file(self.job_dir, self.job_dir / "mau.pptx", data)
+        out = self.job_dir / "mau"
+        imported = await self.run([py, str(scripts / "pptx_template_import.py"), str(source), "-o", str(out),
+                                   "--inheritance-mode", "flat"], timeout=300, network=False)
+        pages_src = _regular_files(self.job_dir, out / "svg", ".svg")
+        if imported.timed_out or imported.code != 0 or not pages_src:
+            logger.warning("[zalo] xưởng %s: đọc mẫu lỗi %s — %s", self.job.id, imported.code, imported.err[-2000:])
+            raise StudioError("chưa đọc được tệp mẫu (cần tệp PowerPoint .pptx còn mở được)", refund=True)
+        protos = {}
+        for path in pages_src[:mau.MAX_TEMPLATE_PAGES]:
+            match = re.search(r"(\d+)$", path.stem)
+            try:
+                root = mau.parse_page(sandbox.read_file(self.job_dir, path, limit=5_000_000).decode("utf-8"))
+            except (mau.TemplateError, UnicodeDecodeError) as exc:
+                logger.info("[zalo] xưởng %s: bỏ trang mẫu %s — %s", self.job.id, path.name, exc)
+                continue
+            if match:
+                protos[int(match.group(1))] = (root, mau.slots(root))
+        if not any(ss for _root, ss in protos.values()):
+            raise StudioError("tệp mẫu không có trang nào có ô chữ để làm theo", refund=True)
+        try:
+            plan = await author.write_template_plan(
+                self.llm, brief=self.job.brief, options=self.job.options, listing=mau.listing(protos),
+                usage=self.usage, max_pages=MAX_SLIDE_PAGES,
+                check=lambda data: mau.check_plan(data, protos, MAX_SLIDE_PAGES))
+        except validate.SourceError as exc:
+            raise StudioError(f"chưa viết được chữ theo mẫu ({exc})", refund=False) from None
+        init = await self.run([py, str(scripts / "project_manager.py"), "init", "deck", "--quick-generate",
+                               "--dir", str(self.job_dir)], timeout=120, network=False)
+        with os.scandir(self.job_dir) as entries:
+            decks = sorted(Path(e.path) for e in entries
+                           if e.name.startswith("deck_") and stat.S_ISDIR(os.lstat(e.path).st_mode))
+        if init.code != 0 or not decks:
+            raise StudioError("chưa tạo được dự án slide", refund=True)
+        self.project = decks[0]
+        # Ảnh của mẫu (nền, hình trang trí): trang mẫu trỏ "../images/<tệp>" từ svg_output.
+        for suffix in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"):
+            for pic in _regular_files(self.job_dir, out / "images", suffix):
+                sandbox.write_file(self.job_dir, self.project / "images" / pic.name,
+                                   sandbox.read_file(self.job_dir, pic, limit=MAX_TEMPLATE_BYTES))
+        svg_dir = self.project / "svg_output"
+        for index, page in enumerate(plan, 1):
+            text, notes = mau.build_page(protos[page["mau"]][0], page["o"])
+            if notes:
+                logger.info("[zalo] xưởng %s: trang %d — %s", self.job.id, index, "; ".join(notes))
+            sandbox.write_file(self.job_dir, svg_dir / f"{index:02d}_mau{page['mau']}.svg", text.encode("utf-8"))
+        await self.run([py, str(scripts / "compact_svg_styles.py"), str(svg_dir), "--inplace"], timeout=120,
+                       network=False)
+        check = await self.run([py, str(scripts / "svg_quality_checker.py"), str(self.project), "--quick-generate",
+                                "--canonical-authoring", "--stage", "final", "--json"], timeout=300, network=False)
+        if check.code != 0:
+            errors = self._checker_errors()
+            logger.warning("[zalo] xưởng %s: slide theo mẫu chưa qua bộ kiểm — %s", self.job.id, errors)
+            raise StudioError("slide theo mẫu chưa qua được bộ kiểm của 2Anh Studio", refund=not errors)
+        return scripts
 
     async def lecture_video(self) -> List[Path]:
         """Video bài giảng (§11 của 2Anh Studio): slide → lời giảng → giọng đọc → PPTX gắn tiếng → MP4 (FFmpeg)."""
