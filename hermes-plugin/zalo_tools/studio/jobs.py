@@ -525,6 +525,8 @@ class Builder:
             raise StudioError("chưa tạo được dự án slide", refund=True)
         self.project = decks[0]
         pics = await self.deck_images(outline.get("images") or [], self.project / "images")
+        # Ảnh không lấy được thì bỏ khỏi dàn ý, để AI viết trang không còn trỏ tới nó.
+        outline["images"] = [i for i in outline.get("images") or [] if i["id"] in pics]
         refs = {k: v["path"] for k, v in pics.items()}
         available = {k: v["note"] for k, v in pics.items()}
         pages = {}
@@ -605,7 +607,7 @@ class Builder:
                                        outline=outline, index=index, usage=self.usage, repair=repair,
                                        available=available)
         try:
-            return validate.check_svg(text, refs)
+            return validate.check_svg(validate.drop_missing_images(text, refs or {}), refs)
         except validate.SourceError as exc:
             if repair is not None:
                 raise StudioError(f"trang {index} chưa dựng được ({exc})", refund=False) from None

@@ -280,6 +280,17 @@ class ValidateTest(unittest.TestCase):
                                  {"w1": r"..\images\w1.jpg"})
         self.assertIn(r'href="..\images\w1.jpg"', out)
 
+    def test_page_drops_only_images_that_could_not_be_fetched(self):
+        page = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720"><rect width="1" height="1"/>'
+                '<image href="img:w1" width="1" height="1"/><image x="2" xlink:href="img:a2" width="1"></image>'
+                "<image href='img:w3'\n width='1'></image ><image href=\"#local\"/></svg>")
+        out = validate.drop_missing_images(page, {"a2": "../images/a2.png"})
+        self.assertNotIn("img:w1", out)
+        self.assertNotIn("img:w3", out)
+        self.assertIn("img:a2", out)
+        self.assertIn('<image href="#local"/>', out)
+        self.assertIn("<rect", out)
+
     def test_engine_json_checks_type_and_keeps_only_allow_listed_keys(self):
         keys = recipes.ENGINE_KEYS["soan-van-ban-hanh-chinh"]
         data = validate.check_engine_json(json.dumps({"loai_van_ban": "thong_bao", "noi_dung": "A",
@@ -869,8 +880,17 @@ class AuthorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([p["role"] for p in got["pages"]], ["cover", "content", "ending"])
         too_many = {"pages": [{"role": "content"}] * 13}
         with self.assertRaises(validate.SourceError):
-            await author.write_outline(FakeLlm(json.dumps(too_many)), guides=[], brief="x", options={},
-                                       usage=author.Usage(), max_pages=12)
+            await author.write_outline(FakeLlm(json.dumps(too_many), json.dumps(too_many)), guides=[], brief="x",
+                                       options={}, usage=author.Usage(), max_pages=12)
+
+    async def test_bad_outline_is_repaired_once_instead_of_failing_the_job(self):
+        bad = {"pages": [{"role": "cover"}, {"role": "ending"}], "images": [{"id": "Ảnh-Bìa-AI-1", "web": "robot"}]}
+        good = {"pages": [{"role": "cover"}, {"role": "ending"}], "images": [{"id": "bia1", "web": "robot"}]}
+        llm = FakeLlm(json.dumps(bad), json.dumps(good))
+        got = await author.write_outline(llm, guides=[], brief="x", options={}, usage=author.Usage(), max_pages=12)
+        self.assertEqual([i["id"] for i in got["images"]], ["bia1"])
+        self.assertEqual(len(llm.calls), 2)
+        self.assertIn("mỗi ảnh cần `id` riêng", llm.calls[1]["messages"][-1]["content"])
 
     def test_read_guides_caps_each_file_and_the_total(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1427,8 +1447,7 @@ class BuilderImagesTest(unittest.IsolatedAsyncioTestCase):
                               "images": [{"id": "a1", "ai": "cell diagram"}, {"id": "w1", "web": "mitochondria"},
                                          {"id": "w2", "web": "hỏng"}]})
         llm = FakeLlm(outline, svg.format(r="cover", x='<image href="img:a1" width="9" height="9"/>'),
-                      svg.format(r="ending", x='<image href="img:w2" width="9" height="9"/>'),
-                      svg.format(r="ending", x='<image href="img:w1" width="9" height="9"/>'))
+                      svg.format(r="ending", x='<image href="img:w2" width="9" height="9"/>'))
 
         def behave(argv, job_dir, kw):
             script = Path(argv[1]).name
@@ -1448,7 +1467,12 @@ class BuilderImagesTest(unittest.IsolatedAsyncioTestCase):
         deck = self.job_dir / "deck_20261008"
         self.assertEqual(sorted(p.name for p in (deck / "images").iterdir()), ["a1.png", "w1.jpg"])
         self.assertIn('href="../images/a1.png"', (deck / "svg_output" / "01_cover.svg").read_text(encoding="utf-8"))
-        self.assertIn('href="../images/w1.jpg"', (deck / "svg_output" / "02_ending.svg").read_text(encoding="utf-8"))
+        # Trang trỏ tới ảnh hỏng (w2) không làm hỏng cả bộ: thẻ ảnh đó bị gỡ, không phải gọi AI viết lại.
+        ending = (deck / "svg_output" / "02_ending.svg").read_text(encoding="utf-8")
+        self.assertNotIn("<image", ending)
+        self.assertIn("<text>t</text>", ending)
+        self.assertEqual(len(llm.calls), 3)
+        self.assertNotIn('"w2"', llm.calls[1]["messages"][1]["content"], "ảnh hỏng cũng bị bỏ khỏi dàn ý gửi trang")
         self.assertEqual(out.images, 2)
         self.assertIn("không lấy được ảnh w2", out.notes[0])
         page_prompt = llm.calls[1]["messages"][0]["content"]

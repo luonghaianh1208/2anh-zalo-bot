@@ -276,6 +276,16 @@ def check_svg(text: str, images: Optional[Dict[str, str]] = None) -> str:
     return text
 
 
+_MISSING_IMAGE = re.compile(r"<image\b[^>]*?\bhref\s*=\s*[\"']img:([a-z0-9]{1,16})[\"'][^>]*?(?:/>|>.*?</image\s*>)",
+                            re.IGNORECASE | re.DOTALL)
+
+
+def drop_missing_images(text: str, images: Dict[str, str]) -> str:
+    """Bỏ thẻ ``<image href="img:<mã>">`` mà ảnh không lấy được (không có trong ``images``) — trang vẫn dựng được,
+    chỉ thiếu ảnh đó, thay vì cả bộ slide hỏng vì một ảnh web không tìm thấy."""
+    return _MISSING_IMAGE.sub(lambda m: m.group(0) if m.group(1) in images else "", text)
+
+
 def _plain(value: Any, limit: int, what: str) -> str:
     """Chữ thuần một trường: bỏ ký tự điều khiển (trừ \\t, \\n); rỗng sau khi bỏ = thiếu (lỗi nội dung, vẫn tính lượt)."""
     if not isinstance(value, str):

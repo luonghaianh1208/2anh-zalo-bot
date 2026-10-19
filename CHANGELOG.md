@@ -2,6 +2,15 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.57.0] — 2026-10-19
+
+### Sửa — Slide của Xưởng không còn hỏng cả bộ vì một lỗi nhỏ
+
+- **Ảnh minh hoạ không tìm được:** ảnh đó bị bỏ khỏi dàn ý, và trang nào còn trỏ tới nó thì chỉ gỡ ảnh đó ra. Trước đây bộ kiểm chặn trang, nên cả bộ slide hỏng ("trang 3 chưa dựng được").
+- **Dàn ý sai quy tắc** (mã ảnh lạ, số trang không hợp lệ): AI được viết lại dàn ý một lần. Trước đây việc dừng ngay ("chưa lập được dàn ý").
+- **`zalo_make_file` với PowerPoint:** mô tả và kết quả trả về nói rõ đây là slide chữ theo mẫu cố định, không có ảnh và không theo template người dùng gửi. Bot không được báo là "giống mẫu" hay "do Xưởng làm".
+  - Trước đây, khi slide của Xưởng hỏng, bot quay sang công cụ này rồi báo khách là "bám sát 100% phong cách mẫu".
+
 ## [2.56.0] — 2026-10-19
 
 ### Thêm — Dọn bản Hermes cũ (tự động và nút bấm)

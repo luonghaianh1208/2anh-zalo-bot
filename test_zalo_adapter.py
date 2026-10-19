@@ -1792,6 +1792,9 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
             try:
                 results = [json.loads(await zalo_tools.zalo_make_file(dict(spec))) for _ in range(6)]
                 other_group = json.loads(await zalo_tools.zalo_make_file(dict(spec, thread_id="1111111111111111111")))
+                zalo_tools._FILE_QUOTA.clear()
+                pptx = json.loads(await zalo_tools.zalo_make_file(dict(spec, format="pptx", content=None,
+                                                                       slides=[{"title": "Ý", "bullets": ["a"]}])))
             finally:
                 zalo_tools._TURN.reset(token)
             token = zalo_tools._TURN.set(dict(member, is_group=False, thread_id="9000000000000000001"))
@@ -1808,7 +1811,9 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("5 tệp mỗi giờ", results[5]["error"])
         self.assertFalse(other_group["success"])
         self.assertFalse(dm["success"])
-        self.assertEqual(len(fake.calls), 5)
+        self.assertEqual(len(fake.calls), 6)
+        self.assertNotIn("note", results[0])
+        self.assertIn("không theo template", pptx["note"], "slide chữ cố định: bot phải nói đúng, không nhận là giống mẫu")
         method, args, existed, path = fake.calls[0]
         self.assertEqual(method, "sendMessage")
         self.assertEqual(args[1:], ["7903718250465581275", 1])

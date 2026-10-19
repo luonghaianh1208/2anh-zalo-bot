@@ -650,8 +650,14 @@ async def zalo_make_file(args: Dict[str, Any], **_kw) -> str:
             {"msg": caption, "attachments": [str(path)]},
             thread_id, _thread_type(kind),
         ])
-        if not is_owner and json.loads(sent).get("success"):
+        result = json.loads(sent)
+        if not is_owner and result.get("success"):
             _FILE_QUOTA.setdefault(uid, []).append(now)
+        if result.get("success") and args.get("format") == "pptx":
+            # Bot từng báo khách "đúng 100% style mẫu" với tệp này — nói thẳng nó là gì.
+            result["note"] = ("Đây là slide chữ theo mẫu cố định của bot (không ảnh, không theo template người dùng "
+                              "gửi). Báo đúng như vậy; đừng nói là giống mẫu hay do Xưởng/2Anh Studio làm.")
+            return json.dumps(result, ensure_ascii=False)
         return sent
     finally:
         shutil.rmtree(directory, ignore_errors=True)
@@ -3446,6 +3452,9 @@ TOOLS = [
         "Nghị định 30 (A4, Times New Roman, chữ đen — in nộp được), PDF/PowerPoint/Excel có màu, "
         "bảng tô nền, số trang. Soạn cho đẹp: chia mục bằng # rõ ràng, dữ liệu so sánh thì dùng bảng, "
         "mỗi slide 3–6 ý ngắn, slide chỉ có tiêu đề (bullets rỗng) làm slide chuyển phần. "
+        "PowerPoint ở đây là slide CHỮ theo một mẫu cố định (dải tiêu đề xanh + gạch đầu dòng): không có ảnh, "
+        "không theo được tệp mẫu/template hay phong cách người dùng gửi — slide đẹp có ảnh thì dùng zalo_studio "
+        "kind=slide; đừng nói tệp này giống mẫu của họ. "
         "Chỉ báo đã gửi khi kết quả trả về thành công.",
         {
             "thread_id": _THREAD_ID,

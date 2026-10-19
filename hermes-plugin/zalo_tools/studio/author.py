@@ -214,8 +214,24 @@ async def write_outline(llm: Any, *, guides: Sequence[Tuple[str, str]], brief: s
     from .validate import SourceError
     system = system_prompt(SLIDE_OUTLINE.format(max_pages=max_pages, max_ai=max_ai, max_web=max_web,
                                                 max_icon=max_icon), guides)
-    data = parse_json_object(await _call(llm, system, _brief_block(brief, options), usage, max_tokens=6_000,
-                                         purpose="zalo-studio:slide-outline"))
+    history: List[Dict[str, str]] = []
+    for attempt in (1, 2):
+        text = await _call(llm, system, _brief_block(brief, options), usage, max_tokens=6_000,
+                           purpose="zalo-studio:slide-outline", history=history)
+        try:
+            return _clean_outline(text, max_pages=max_pages, max_ai=max_ai, max_web=max_web, max_icon=max_icon)
+        except SourceError as exc:
+            # Dàn ý sai (mã ảnh lạ, số trang…) thì nhờ AI viết lại đúng một lần, như trang slide — không bỏ cả việc.
+            if attempt == 2:
+                raise
+            history = [{"role": "assistant", "content": text[:60_000]},
+                       {"role": "user", "content": f"Dàn ý trên bị từ chối: {exc}\nViết lại toàn bộ dàn ý JSON, sửa đúng lỗi đó."}]
+    raise AssertionError("unreachable")
+
+
+def _clean_outline(text: str, *, max_pages: int, max_ai: int, max_web: int, max_icon: int) -> Dict[str, Any]:
+    from .validate import SourceError
+    data = parse_json_object(text)
     pages = data.get("pages")
     if not isinstance(pages, list) or not 2 <= len(pages) <= max_pages:
         raise SourceError(f"dàn ý cần 2–{max_pages} trang")
