@@ -3473,7 +3473,7 @@ TOOLS = [
 
     ("zalo_make_file", "📄", _schema(
         "zalo_make_file",
-        "Tạo tệp Word (docx), PowerPoint (pptx), Excel (xlsx) hoặc PDF từ nội dung em soạn "
+        "Tạo tệp Word (docx), PowerPoint (pptx), Excel (xlsx), PDF hoặc Markdown (md) từ nội dung em soạn "
         "rồi gửi luôn vào nhóm đang chat — dùng khi thầy cô nhờ làm giáo án, đề, danh sách, "
         "slide, bảng điểm dưới dạng tệp. Chỉ dùng trong nhóm; mỗi người tối đa 5 tệp/giờ. "
         "Tệp chỉ có chữ và bảng, không chèn ảnh; hệ thống tự trình bày: Word theo thể thức "
@@ -3483,11 +3483,13 @@ TOOLS = [
         "PowerPoint ở đây là slide CHỮ theo một mẫu cố định (dải tiêu đề xanh + gạch đầu dòng): không có ảnh, "
         "không theo được tệp mẫu/template hay phong cách người dùng gửi — slide đẹp có ảnh thì dùng zalo_studio "
         "kind=slide; đừng nói tệp này giống mẫu của họ. "
+        "Người dùng xin tệp (md, Word, PDF…) thì GỬI TỆP bằng công cụ này — không dán cả tài liệu vào tin nhắn rồi "
+        "bảo họ tự lưu thành tệp. Markdown (md) giữ nguyên văn bản: hợp tài liệu kỹ thuật, hướng dẫn có mã. "
         "Chỉ báo đã gửi khi kết quả trả về thành công.",
         {
             "thread_id": _THREAD_ID,
             "thread_kind": _THREAD_KIND,
-            "format": {"type": "string", "enum": ["docx", "pptx", "xlsx", "pdf"],
+            "format": {"type": "string", "enum": ["docx", "pptx", "xlsx", "pdf", "md"],
                        "description": "Loại tệp."},
             "title": {"type": "string", "description": "Tiêu đề tài liệu, cũng dùng làm tên tệp."},
             "filename": {"type": "string", "description": "Tên tệp mong muốn (không bắt buộc)."},

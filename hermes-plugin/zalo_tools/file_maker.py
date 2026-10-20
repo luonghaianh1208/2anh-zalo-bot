@@ -19,7 +19,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-FORMATS = ("docx", "pptx", "xlsx", "pdf")
+FORMATS = ("docx", "pptx", "xlsx", "pdf", "md")
 MAX_TEXT_CHARS = 30_000
 MAX_SLIDES = 40
 MAX_BULLETS_PER_SLIDE = 15
@@ -569,12 +569,18 @@ def make_file(
     """Kiểm tra giới hạn rồi dựng tệp trong ``directory``. Trả đường dẫn tệp đã tạo."""
     fmt = str(fmt or "").lower().lstrip(".")
     if fmt not in FORMATS:
-        raise FileSpecError("chỉ tạo được tệp docx, pptx, xlsx hoặc pdf")
+        raise FileSpecError("chỉ tạo được tệp docx, pptx, xlsx, pdf hoặc md")
     title = str(title or "").strip()
     from .reply_style import file_name
 
     path = Path(directory) / file_name(safe_filename(filename or title, fmt)[: -len(fmt) - 1], fmt)
-    if fmt in ("docx", "pdf"):
+    if fmt == "md":
+        # Markdown giữ nguyên văn bản bot soạn (tài liệu kỹ thuật, hướng dẫn, mã) — UTF-8, có tiêu đề nếu thiếu.
+        text = str(content or "")
+        _check_text(title, text)
+        body = text if not title or text.lstrip().startswith("#") else f"# {title}\n\n{text}"
+        path.write_text(body.rstrip() + "\n", encoding="utf-8")
+    elif fmt in ("docx", "pdf"):
         text = str(content or "")
         _check_text(title, text)
         (build_docx if fmt == "docx" else build_pdf)(title, text, path)

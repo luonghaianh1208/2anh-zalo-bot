@@ -203,12 +203,17 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         adapter.handle_message = lambda event: asyncio.sleep(0)
         sent = []
 
+        reads = []
+
         async def command(payload, expect_ack=False):
+            if payload.get("type") == "invoke":
+                reads.append(payload)
+                return {"ok": True, "result": {"gridInfoMap": {"g1": {"name": "Lớp 10A1"}}}}
             sent.append(payload)
             return {"ok": True}
 
         async def invoke(method, args, confirmed=False):
-            return {"ok": True, "result": {"gridInfoMap": {"g1": {"name": "Lớp 10A1"}}}}
+            raise AssertionError("tên nhóm phải đọc bằng quyền chủ nhân, không theo lượt nền")
 
         judge = SimpleNamespace(complete=lambda messages, **kw: SimpleNamespace(
             text='{"bao": true, "loai": "can_thiep", "muc_do": "cao", "ly_do": "đòi bot bỏ quy tắc"}'))
@@ -227,6 +232,9 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Lớp 10A1", alert["text"])
         self.assertIn("Tùng (u7)", alert["text"])
         self.assertIn("can thiệp sâu vào bot", alert["text"])
+        # Lượt nền không có người gửi: lệnh đọc tên nhóm (quyền chủ nhân) phải tự mang quyền chủ nhân.
+        self.assertEqual(reads[0]["method"], "getGroupInfo")
+        self.assertEqual((reads[0]["auth"]["actorRole"], reads[0]["auth"]["actorUid"]), ("owner", "4032503529991691000"))
 
     async def test_bare_tag_after_a_sticker_looks_at_what_was_just_sent(self):
         # Trong nhóm đệ ruột lúc 01:11 ngày 13/9: gửi sticker rồi tag trơ
@@ -1825,6 +1833,8 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
                 zalo_tools._FILE_QUOTA.clear()
                 pptx = json.loads(await zalo_tools.zalo_make_file(dict(spec, format="pptx", content=None,
                                                                        slides=[{"title": "Ý", "bullets": ["a"]}])))
+                md = json.loads(await zalo_tools.zalo_make_file(dict(spec, format="md", title="Hướng dẫn MCP",
+                                                                     content="## Bước 1\n```js\nrun()\n```")))
             finally:
                 zalo_tools._TURN.reset(token)
             token = zalo_tools._TURN.set(dict(member, is_group=False, thread_id="9000000000000000001"))
@@ -1841,7 +1851,9 @@ class ZaloAdapterMediaContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("5 tệp mỗi giờ", results[5]["error"])
         self.assertFalse(other_group["success"])
         self.assertFalse(dm["success"])
-        self.assertEqual(len(fake.calls), 6)
+        self.assertEqual(len(fake.calls), 7)
+        self.assertTrue(md["success"])
+        self.assertTrue(fake.calls[6][3].endswith(".md"), "tệp Markdown thật, không dán chữ vào tin")
         self.assertNotIn("note", results[0])
         self.assertIn("không theo template", pptx["note"], "slide chữ cố định: bot phải nói đúng, không nhận là giống mẫu")
         method, args, existed, path = fake.calls[0]

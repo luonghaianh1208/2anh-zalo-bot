@@ -240,5 +240,6 @@ async def group_name_via(invoke: Callable[[str, List[Any]], Awaitable[Optional[D
     if ack and ack.get("ok"):
         info = ((ack.get("result") or {}).get("gridInfoMap") or {}).get(thread_id) or {}
         name = str(info.get("name") or "")
-    _NAMES[thread_id] = (time.time(), name)
+    if name:                      # lỗi tạm thời thì lần sau hỏi lại, không nhớ chuỗi rỗng cả giờ
+        _NAMES[thread_id] = (time.time(), name)
     return name

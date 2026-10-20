@@ -2,6 +2,19 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.59.0] — 2026-10-21
+
+### Thêm — Tạo tệp Markdown
+
+- `zalo_make_file` có thêm định dạng `md`: giữ nguyên văn bản bot soạn (tài liệu kỹ thuật, hướng dẫn có mã), mã hoá UTF-8, tự thêm tiêu đề nếu thiếu.
+- Bot được dặn: người dùng xin tệp thì gửi tệp, không dán cả tài liệu vào tin nhắn rồi bảo họ tự lưu thành tệp. Trước đây thành viên nhóm xin "file md" thì nhận về 6.400 ký tự chữ thô.
+
+### Sửa — Cảnh báo nhóm ghi đúng tên nhóm
+
+- Cảnh báo hành vi nguy hiểm trước đây ghi mã nhóm thay vì tên nhóm. Bộ lọc chạy nền không có người gửi, nên cầu nối chặn lệnh đọc thông tin nhóm (lệnh này chỉ chủ nhân được dùng).
+  - Giờ riêng lệnh đọc tên nhóm cho cảnh báo mang quyền chủ nhân.
+  - Lỗi tạm thời không còn bị nhớ suốt 1 giờ.
+
 ## [2.58.0] — 2026-10-19
 
 ### Thêm — Slide theo mẫu người dùng gửi

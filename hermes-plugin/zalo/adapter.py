@@ -1565,8 +1565,16 @@ class ZaloAdapter(BasePlatformAdapter):
                 except Exception:
                     return None
 
+            async def owner_read(method: str, args: list) -> Optional[Dict[str, Any]]:
+                # getGroupInfo là quyền đọc của chủ nhân; lượt nền này không có người gửi (vai trò system chỉ được
+                # gửi chữ). Cảnh báo là việc của chủ nhân nên lệnh đọc tên nhóm mang quyền chủ nhân — chỉ lệnh này.
+                uid = (_split_ids(_get_scoped_secret("ZALO_ALLOWED_USERS", "") or "") or [""])[0]
+                return await self._command({"type": "invoke", "method": method, "args": args, "auth": {
+                    "actorUid": uid, "actorRole": "owner", "sourceThreadId": uid,
+                    "sourceThreadType": THREAD_TYPE_USER, "confirmed": False}}, expect_ack=True)
+
             watcher = self._safety = safety.Watcher(
-                send=send, llm=llm, group_name=lambda gid: safety.group_name_via(self.invoke, gid))
+                send=send, llm=llm, group_name=lambda gid: safety.group_name_via(owner_read, gid))
         task = asyncio.ensure_future(watcher.check(thread_id=thread_id, sender_uid=sender_uid,
                                                    sender_name=sender_name, text=text, owners=list(owners)))
         self._message_tasks.add(task)
