@@ -46,9 +46,10 @@ export function clearSessionCookie(res) {
 export function sessionMiddleware({ sessions, users }) {
   return (req, res, next) => {
     const token = readCookie(req, SESSION_COOKIE);
-    const session = token ? sessions.get(token) : null;
+    const session = token ? sessions.get(token, req.ip) : null;
     const user = session ? users.get(session.username) : null;
     req.sessionToken = token;
+    req.sessionId = session?.id || null;
     req.user = user && !user.disabled ? { username: user.username, role: user.role, zaloUid: user.zaloUid } : null;
     next();
   };

@@ -293,6 +293,12 @@ input:focus-visible, select:focus-visible { outline: none; border-color: var(--b
 .account > .live { flex-basis: 100%; }
 .link-out { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .reset-row td { background: #f8fafc; white-space: normal; }
+.device-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.device { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.device:first-child { border-top: 0; }
+.device-icon { flex: none; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand-dark); }
+.device-info { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; overflow-wrap: anywhere; }
+.device > .btn { flex: none; margin-left: auto; }
 .reset-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 .reset-form .field { margin: 0; min-width: 220px; }
 .reset-form .live { flex-basis: 100%; margin: 0; }

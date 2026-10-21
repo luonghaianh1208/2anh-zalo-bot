@@ -196,3 +196,32 @@ test('đăng nhập hỏng với tên không có thật ghi actor "?", không gh
   const actors = deps.activity.list({}).map((e) => e.actor).sort();
   assert.deepEqual(actors, ['?', 'anh']);
 });
+
+test('thiết bị đang đăng nhập: xem danh sách, đăng xuất từ xa thiết bị khác', async (t) => {
+  const deps = makeDeps(t);
+  deps.users.create({ username: 'anh', role: 'admin', password: 'matkhau-dai' });
+  deps.users.create({ username: 'khach', role: 'owner', password: 'matkhau-dai' });
+  const { call } = await startApp(t, deps);
+  const login = (username, ua) => call('/api/auth/verify', { method: 'POST', body: { username, password: 'matkhau-dai' }, headers: { 'User-Agent': ua } });
+  const pc = (await login('anh', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/141.0 Safari/537.36')).cookie;
+  const phone = (await login('anh', 'Mozilla/5.0 (Linux; Android 14) Chrome/141.0 Mobile Safari/537.36')).cookie;
+  const khach = (await login('khach', 'curl/8')).cookie;
+  const list = await call('/api/auth/sessions', { cookie: pc });
+  assert.equal(list.status, 200);
+  assert.equal(list.json.sessions.length, 2); // chỉ thiết bị của chính tài khoản
+  const self = list.json.sessions.find((s) => s.current);
+  const other = list.json.sessions.find((s) => !s.current);
+  assert.equal(self.device.label, 'Chrome · Windows');
+  assert.equal(self.method, 'mật khẩu');
+  assert.equal(other.device.label, 'Chrome · Android');
+  assert.equal(JSON.stringify(list.json).includes(pc.split('=')[1]), false); // không lộ token
+  // Không đăng xuất thiết bị đang dùng qua route này; không gỡ được phiên người khác.
+  assert.equal((await call(`/api/auth/sessions/${self.id}/logout`, { method: 'POST', cookie: pc })).status, 400);
+  const khachId = (await call('/api/auth/sessions', { cookie: khach })).json.sessions[0].id;
+  assert.equal((await call(`/api/auth/sessions/${khachId}/logout`, { method: 'POST', cookie: pc })).status, 404);
+  assert.equal((await call('/api/me', { cookie: khach })).status, 200);
+  assert.equal((await call(`/api/auth/sessions/${other.id}/logout`, { method: 'POST', cookie: pc })).status, 200);
+  assert.equal((await call('/api/me', { cookie: phone })).status, 401);
+  assert.equal((await call('/api/me', { cookie: pc })).status, 200);
+  assert.ok(deps.activity.list().some((e) => e.actor === 'anh' && e.action === 'session_revoke' && e.detail === 'Chrome · Android'));
+});

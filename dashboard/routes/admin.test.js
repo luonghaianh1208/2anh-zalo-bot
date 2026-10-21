@@ -168,3 +168,22 @@ test('cờ chờ khởi động lại (giai đoạn 7B): Chủ bot 403; khởi �
   assert.equal(after.json.sidecar, null);
   assert.match(deps.activity.list().find((e) => e.action === 'restart_assistant').detail, /Đổi model, Cấu hình: kết bạn/);
 });
+
+test('Quản trị xem phiên mọi tài khoản và đăng xuất từ xa; Chủ bot không gọi được', async (t) => {
+  const deps = makeDeps(t); const { call } = await startApp(t, deps);
+  const admin = await loginAs(t, deps, call);
+  const khach = await loginAs(t, deps, call, { username: 'khach', role: 'owner' });
+  assert.equal((await call('/api/admin/sessions', { cookie: khach })).status, 403);
+  const list = await call('/api/admin/sessions', { cookie: admin });
+  assert.equal(list.status, 200);
+  assert.deepEqual(list.json.sessions.map((s) => s.username).sort(), ['anh', 'khach']);
+  const mine = list.json.sessions.find((s) => s.current);
+  const theirs = list.json.sessions.find((s) => s.username === 'khach');
+  assert.equal(mine.username, 'anh');
+  assert.equal((await call(`/api/admin/sessions/${theirs.id}/logout`, { method: 'POST', cookie: khach })).status, 403);
+  assert.equal((await call(`/api/admin/sessions/${mine.id}/logout`, { method: 'POST', cookie: admin })).status, 400);
+  assert.equal((await call(`/api/admin/sessions/${theirs.id}/logout`, { method: 'POST', cookie: admin })).status, 200);
+  assert.equal((await call('/api/me', { cookie: khach })).status, 401);
+  assert.equal((await call(`/api/admin/sessions/${theirs.id}/logout`, { method: 'POST', cookie: admin })).status, 404);
+  assert.ok(deps.activity.list().some((e) => e.action === 'session_revoke' && e.detail.startsWith('khach · ')));
+});

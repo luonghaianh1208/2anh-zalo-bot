@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionStore } from './sessions.js';
@@ -66,4 +66,40 @@ test('phiên còn sống qua khởi động lại (đọc lại từ tệp)', (t
   const a = s.create('anh');
   const again = createSessionStore(file, { now: () => clock.t, ttlMs: 1000, idleMs: 300 });
   assert.equal(again.get(a).username, 'anh');
+});
+
+test('danh sách thiết bị: nhãn, IP mới nhất, đăng xuất theo mã chỉ trong tài khoản', (t) => {
+  const clock = { t: 0 }; const { s, file } = mk(t, clock);
+  const ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1';
+  const a = s.create('anh', { ua, ip: '1.2.3.4', method: 'mã Zalo' });
+  clock.t = 10; const b = s.create('anh', { ua: 'curl/8', ip: '5.6.7.8', method: 'mật khẩu' });
+  const k = s.create('khach');
+  clock.t = 20; const idA = s.get(a, '9.9.9.9').id;
+  const list = s.list('anh');
+  assert.deepEqual(list.map((x) => x.id), [idA, s.get(b).id]);
+  assert.equal(list[0].device.label, 'Safari · iPhone');
+  assert.equal(list[0].device.mobile, true);
+  assert.equal(list[0].ip, '9.9.9.9');
+  assert.equal(list[0].method, 'mã Zalo');
+  assert.equal(s.list().length, 3);
+  assert.ok(!readFileSync(file, 'utf8').includes(idA)); // mã công khai không nằm trong tệp, không lộ khoá
+  assert.equal(s.destroyById(idA, 'khach'), null);   // tài khoản khác không gỡ được
+  assert.ok(s.get(a));
+  assert.deepEqual(s.destroyById(idA, 'anh'), { username: 'anh', device: 'Safari · iPhone' });
+  assert.equal(s.get(a), null);
+  assert.ok(s.get(b) && s.get(k));
+  assert.equal(s.destroyById('khong-co'), null);
+});
+
+test('phiên cũ không có thông tin thiết bị vẫn hiện và gỡ được', (t) => {
+  const clock = { t: 0 }; const { s, file } = mk(t, clock);
+  const tok = s.create('anh');
+  const raw = JSON.parse(readFileSync(file, 'utf8'));
+  for (const v of Object.values(raw.sessions)) { delete v.ua; delete v.ip; delete v.method; }
+  writeFileSync(file, JSON.stringify(raw));
+  const fresh = createSessionStore(file, { now: () => clock.t, ttlMs: 1000, idleMs: 300 });
+  const [only] = fresh.list('anh');
+  assert.equal(only.device.label, 'Thiết bị không rõ');
+  assert.ok(fresh.destroyById(only.id));
+  assert.equal(fresh.get(tok), null);
 });

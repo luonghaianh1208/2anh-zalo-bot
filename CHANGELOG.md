@@ -2,6 +2,19 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.60.0] — 2026-10-21
+
+### Thêm — Quản lí thiết bị đăng nhập dashboard, đăng xuất từ xa
+
+- Trang **Tài khoản của tôi** có thẻ "Thiết bị đang đăng nhập". Mỗi thiết bị hiện:
+  - trình duyệt · hệ điều hành (ví dụ "Chrome · Windows", "Safari · iPhone");
+  - IP gần nhất, lần hoạt động cuối, thời điểm và cách đăng nhập (mật khẩu hay mã Zalo).
+- Thiết bị đang dùng có nhãn "Thiết bị này"; các thiết bị khác có nút **Đăng xuất** riêng.
+- Trang **Người dùng** (Quản trị) có nút "Thiết bị (n)" cho từng tài khoản: xem và đăng xuất từ xa từng thiết bị của người đó.
+- Mỗi lần đăng xuất từ xa được ghi vào Nhật ký hoạt động ("Đăng xuất từ xa một thiết bị").
+- Phiên đăng nhập trước bản này vẫn dùng được, hiện là "Thiết bị không rõ".
+- Mã thiết bị là mã băm riêng, không lộ token đăng nhập. Chủ bot chỉ thấy và đăng xuất được thiết bị của chính mình.
+
 ## [2.59.1] — 2026-10-21
 
 ### Sửa — Câu báo khoá phiên tiếng Anh của Hermes không lọt vào Zalo

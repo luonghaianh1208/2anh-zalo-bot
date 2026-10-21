@@ -27,6 +27,7 @@ export const ACTION_LABELS = {
   // activity.jsonl của dashboard
   login: 'Đăng nhập dashboard',
   logout_all: 'Đăng xuất mọi nơi',
+  session_revoke: 'Đăng xuất từ xa một thiết bị',
   setup_admin: 'Tạo tài khoản Quản trị đầu tiên',
   user_create: 'Tạo tài khoản dashboard',
   user_update: 'Sửa tài khoản dashboard',

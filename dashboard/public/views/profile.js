@@ -1,7 +1,8 @@
-import { useState } from '../vendor/hooks.mjs';
+import { useEffect, useState } from '../vendor/hooks.mjs';
 import { api } from '../api.js';
 import { html, Icon, Live, PageHead, roleLabel } from '../ui.js';
 import { DonateButton } from './donate.js';
+import { DeviceList } from './devices.js';
 
 export function Profile({ me, status }) {
   const [busy, setBusy] = useState('');
@@ -31,6 +32,18 @@ export function Profile({ me, status }) {
     }, setSessionMsg);
   };
 
+  const [devices, setDevices] = useState(null);
+  const [devBusy, setDevBusy] = useState('');
+  const [devMsg, setDevMsg] = useState({});
+  const loadDevices = () => api('/api/auth/sessions').then((r) => setDevices(r.sessions)).catch((err) => setDevMsg({ error: err.message }));
+  useEffect(() => { loadDevices(); }, []);
+  async function logoutDevice(s) {
+    if (!confirm(`Đăng xuất ${s.device.label} khỏi tài khoản này?`)) return;
+    setDevBusy(s.id); setDevMsg({});
+    try { await api(`/api/auth/sessions/${encodeURIComponent(s.id)}/logout`, { method: 'POST' }); setDevMsg({ ok: `Đã đăng xuất ${s.device.label}.` }); await loadDevices(); }
+    catch (err) { setDevMsg({ error: err.message }); } finally { setDevBusy(''); }
+  }
+
   const linked = Boolean(status?.telegramLinked);
   return html`
     <${PageHead} title="Tài khoản của tôi" />
@@ -46,6 +59,12 @@ export function Profile({ me, status }) {
           <button class="btn btn-danger-outline" disabled=${!!busy} onClick=${() => logout(true)}>Đăng xuất mọi nơi</button>
         </div>
         <${Live} error=${sessionMsg.error} />
+      </section>
+      <section class="card">
+        <h2>Thiết bị đang đăng nhập</h2>
+        <p class="small muted">Thấy thiết bị lạ thì đăng xuất nó, rồi đổi mật khẩu.</p>
+        ${devices ? html`<${DeviceList} sessions=${devices} busy=${devBusy} onLogout=${logoutDevice} />` : devMsg.error ? null : html`<p class="muted">Đang tải…</p>`}
+        <${Live} error=${devMsg.error} ok=${devMsg.ok} />
       </section>
       <section class="card">
         <h2>Cảnh báo qua Telegram</h2>

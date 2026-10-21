@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from '../vendor/hooks.mjs';
 import { api } from '../api.js';
 import { html, Icon, Live, PageHead, Spinner, fmtTime, roleLabel } from '../ui.js';
+import { DeviceList } from './devices.js';
 
 const EMPTY = { username: '', role: 'owner', zaloUid: '', password: '' };
 
@@ -89,6 +90,22 @@ function ResetRow({ user, onCancel, onDone }) {
   </td></tr>`;
 }
 
+/** Dòng phụ: thiết bị đang đăng nhập tài khoản này, Quản trị đăng xuất từ xa từng thiết bị. */
+function DevicesRow({ user, sessions, onChanged }) {
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState({});
+  async function logout(s) {
+    if (!confirm(`Đăng xuất ${user.username} trên ${s.device.label}?`)) return;
+    setBusy(s.id); setMsg({});
+    try { await api(`/api/admin/sessions/${encodeURIComponent(s.id)}/logout`, { method: 'POST' }); setMsg({ ok: `Đã đăng xuất ${user.username} trên ${s.device.label}.` }); await onChanged(); }
+    catch (err) { setMsg({ error: err.message }); } finally { setBusy(''); }
+  }
+  return html`<tr class="reset-row"><td colspan="7">
+    <${DeviceList} sessions=${sessions} busy=${busy} onLogout=${logout} />
+    <${Live} error=${msg.error} ok=${msg.ok} />
+  </td></tr>`;
+}
+
 const ZALO_UID = /^[1-9]\d{14,21}$/;
 
 /** Dòng phụ sửa UID Zalo và vai trò ngay trong bảng. Không cho tự hạ quyền chính mình. */
@@ -144,7 +161,10 @@ export function Users({ me }) {
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState({});
 
+  const [sessions, setSessions] = useState([]);
   const load = () => api('/api/admin/users').then((r) => { setList(r.users); setLoadError(''); }).catch((err) => setLoadError(err.message));
+  const loadSessions = () => api('/api/admin/sessions').then((r) => setSessions(r.sessions)).catch(() => {});
+  useEffect(() => { loadSessions(); }, []);
   useEffect(() => { load(); }, []);
 
   async function patch(u, body, okText) {
@@ -157,8 +177,11 @@ export function Users({ me }) {
   };
   const [resetFor, setResetFor] = useState('');
   const [editFor, setEditFor] = useState('');
-  const openReset = (u) => { setResetFor(resetFor === u.username ? '' : u.username); setEditFor(''); setMsg({}); };
-  const openEdit = (u) => { setEditFor(editFor === u.username ? '' : u.username); setResetFor(''); setMsg({}); };
+  const [devicesFor, setDevicesFor] = useState('');
+  const openReset = (u) => { setResetFor(resetFor === u.username ? '' : u.username); setEditFor(''); setDevicesFor(''); setMsg({}); };
+  const openEdit = (u) => { setEditFor(editFor === u.username ? '' : u.username); setResetFor(''); setDevicesFor(''); setMsg({}); };
+  const openDevices = (u) => { setDevicesFor(devicesFor === u.username ? '' : u.username); setResetFor(''); setEditFor(''); setMsg({}); loadSessions(); };
+  const sessionsOf = (u) => sessions.filter((s) => s.username === u.username);
 
   return html`
     <${PageHead} title="Người dùng" sub="Ai được vào dashboard và với vai trò gì." />
@@ -187,10 +210,14 @@ export function Users({ me }) {
                     onClick=${() => openReset(u)}><${Icon} name="key" size=${14} /> Đặt lại mật khẩu</button>
                   <button class="btn btn-secondary btn-sm" disabled=${busy === u.username} aria-expanded=${editFor === u.username}
                     onClick=${() => openEdit(u)}><${Icon} name="user" size=${14} /> Sửa UID / vai trò</button>
+                  <button class="btn btn-secondary btn-sm" aria-expanded=${devicesFor === u.username}
+                    onClick=${() => openDevices(u)}><${Icon} name="monitor" size=${14} /> Thiết bị (${sessionsOf(u).length})</button>
                 </div></td>
               </tr>
               ${editFor === u.username ? html`<${EditRow} key=${`edit-${u.username}`} user=${u} self=${u.username === me.username}
                 onCancel=${() => setEditFor('')} onDone=${(text) => { setEditFor(''); setMsg({ ok: text }); load(); }} />` : null}
+              ${devicesFor === u.username ? html`<${DevicesRow} key=${`dev-${u.username}`} user=${u} sessions=${sessionsOf(u)}
+                onChanged=${loadSessions} />` : null}
               ${resetFor === u.username ? html`<${ResetRow} key=${`reset-${u.username}`} user=${u}
                 onCancel=${() => setResetFor('')} onDone=${(text) => { setResetFor(''); setMsg({ ok: text }); }} />` : null}`)}
             </tbody>

@@ -17,6 +17,18 @@ export function adminRoutes({ users, sessions, activity, restartAssistant, resta
 
   r.get('/admin/users', ...guard, (req, res) => res.json({ ok: true, users: users.list() }));
 
+  // Phiên đăng nhập của mọi tài khoản — Quản trị đăng xuất từ xa một thiết bị bất kỳ.
+  r.get('/admin/sessions', ...guard, (req, res) => {
+    res.json({ ok: true, sessions: sessions.list().map((s) => ({ ...s, current: s.id === req.sessionId })) });
+  });
+  r.post('/admin/sessions/:id/logout', ...guard, (req, res) => {
+    if (req.params.id === req.sessionId) return res.status(400).json({ ok: false, error: 'Đây là thiết bị bạn đang dùng — bấm "Đăng xuất" ở trang Tài khoản nếu muốn thoát.' });
+    const gone = sessions.destroyById(req.params.id);
+    if (!gone) return res.status(404).json({ ok: false, error: 'Thiết bị này đã đăng xuất hoặc hết phiên — tải lại danh sách.' });
+    activity.append({ actor: req.user.username, action: 'session_revoke', detail: `${gone.username} · ${gone.device}` });
+    res.json({ ok: true });
+  });
+
   r.post('/admin/users', ...guard, (req, res) => {
     try {
       const u = users.create(req.body || {});
