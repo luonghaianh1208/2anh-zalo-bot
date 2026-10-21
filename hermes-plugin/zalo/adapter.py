@@ -358,7 +358,10 @@ _BUSY_STATUS_HEADS = ("⚡ Interrupting current task", "⏳ Queued for the next 
                       # Khoá phiên (Hermes 0.22, agent/turn_facade_lease.py): đang chờ lượt khác của cùng phiên, hoặc
                       # thôi chờ vì người dùng vừa nhắn tin mới — tin mới đó vẫn được xử lý ngay sau.
                       "⏳ Another Hermes process is using this session", "⏳ Still waiting for the other Hermes process",
-                      "Stopped waiting for another Hermes process")
+                      "Stopped waiting for another Hermes process",
+                      # Đổi sang model dự phòng (agent/chat_completion_helpers.py) khi model chính lỗi: câu trả lời
+                      # vẫn tới từ model dự phòng, người dùng Zalo không cần biết chuyện đổi model.
+                      "⚠️ Model fallback:")
 # Chờ khoá phiên quá lâu: tin của người dùng KHÔNG được xử lý — phải báo để họ gửi lại, nhưng bằng tiếng Việt.
 _LEASE_TIMEOUT_HEAD = "⏳ Another Hermes process kept this session busy too long"
 _LEASE_TIMEOUT_VI = "⏳ Em đang bận xử lý việc trước nên chưa làm được tin vừa rồi — gửi lại giúp em sau ít phút nhé."

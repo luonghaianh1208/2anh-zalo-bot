@@ -2,6 +2,13 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.60.1] — 2026-10-21
+
+### Sửa — Không gửi câu báo đổi model dự phòng vào Zalo
+
+- Khi model chính lỗi và Hermes tự chuyển sang model dự phòng (`fallback_providers` trong config.yaml), gateway gửi câu tiếng Anh "⚠️ Model fallback: … unavailable; using …" ra kênh chat.
+- Plugin Zalo giờ bỏ câu này. Người dùng chỉ nhận câu trả lời từ model dự phòng; việc đổi model vẫn ghi trong nhật ký gateway.
+
 ## [2.60.0] — 2026-10-21
 
 ### Thêm — Quản lí thiết bị đăng nhập dashboard, đăng xuất từ xa

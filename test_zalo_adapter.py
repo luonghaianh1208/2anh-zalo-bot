@@ -1989,6 +1989,13 @@ class BusyStatusFilterTest(unittest.TestCase):
         result = asyncio.run(adapter.send("123", "⚡ Interrupting current task. I'll respond to your message shortly."))
         self.assertTrue(result.success)
 
+    def test_model_fallback_notice_is_hidden(self):
+        # Model chính lỗi, Hermes đổi sang model dự phòng và báo bằng tiếng Anh — không gửi câu đó vào Zalo.
+        text = ("⚠️ Model fallback: gpt-5.5 via custom unavailable (provider error); using deepseek-v4.1-flash via custom. "
+                "Primary retry eligible in ~60 s; recovery is not guaranteed.")
+        self.assertTrue(zalo_adapter._is_busy_status(text))
+        self.assertFalse(zalo_adapter._is_busy_status("⚠️ Model này trả lời chậm, anh chờ chút nhé."))
+
     def test_session_lease_notices_are_hidden_or_said_in_vietnamese(self):
         # Hermes 0.22 (turn_facade_lease.py): khách nhắn dồn ảnh + PDF thì lượt sau chờ khoá phiên của lượt trước.
         for text in ("Stopped waiting for another Hermes process on this session. Your message was not processed.",
