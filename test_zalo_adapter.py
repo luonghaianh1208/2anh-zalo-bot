@@ -1989,6 +1989,27 @@ class BusyStatusFilterTest(unittest.TestCase):
         result = asyncio.run(adapter.send("123", "⚡ Interrupting current task. I'll respond to your message shortly."))
         self.assertTrue(result.success)
 
+    def test_session_lease_notices_are_hidden_or_said_in_vietnamese(self):
+        # Hermes 0.22 (turn_facade_lease.py): khách nhắn dồn ảnh + PDF thì lượt sau chờ khoá phiên của lượt trước.
+        for text in ("Stopped waiting for another Hermes process on this session. Your message was not processed.",
+                     "⏳ Another Hermes process is using this session; waiting for it to finish before starting your turn...",
+                     "⏳ Still waiting for the other Hermes process on this session (30s)..."):
+            self.assertTrue(zalo_adapter._is_busy_status(text), text)
+        adapter = zalo_adapter.ZaloAdapter.__new__(zalo_adapter.ZaloAdapter)
+        adapter._skip_inactive_group_cron = lambda chat_id, metadata: False
+        adapter._guess_thread_type = lambda chat_id, metadata: zalo_adapter.THREAD_TYPE_USER
+        adapter._chunk = lambda part: [part]
+        sent = []
+
+        async def command(payload, expect_ack=False):
+            sent.append(payload["text"])
+            return {"ok": True, "msgId": "1"}
+
+        adapter._command = command
+        asyncio.run(adapter.send("123", "⏳ Another Hermes process kept this session busy too long. Your message was not "
+                                        "processed - wait for the other process to finish, then send it again."))
+        self.assertEqual(sent, [zalo_adapter._LEASE_TIMEOUT_VI])
+
 
 class ZaloToolSchemaTest(unittest.TestCase):
     def test_every_zalo_tool_has_one_unique_public_or_owner_assignment(self):

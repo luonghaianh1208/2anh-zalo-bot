@@ -2,6 +2,15 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.59.1] — 2026-10-21
+
+### Sửa — Câu báo khoá phiên tiếng Anh của Hermes không lọt vào Zalo
+
+- Hermes 0.22 có thêm các câu báo khi một lượt phải chờ lượt khác của cùng phiên. Trường hợp hay gặp: người dùng gửi dồn ảnh rồi PDF rồi câu hỏi. Máy khách đã hiện nguyên câu "Stopped waiting for another Hermes process on this session. Your message was not processed."
+- Cách xử lý mới:
+  - Ẩn các câu đang chờ / vẫn đang chờ / thôi chờ. Tin mới của người dùng vẫn được xử lý ngay sau.
+  - Câu "chờ quá lâu, tin chưa được xử lý" được báo bằng tiếng Việt, để người dùng biết gửi lại.
+
 ## [2.59.0] — 2026-10-21
 
 ### Thêm — Tạo tệp Markdown
