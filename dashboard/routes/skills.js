@@ -11,9 +11,9 @@ import { isBlocked } from '../lib/member-skills.js';
 export const MAX_SKILL_UPLOAD = 8 * 1024 * 1024;
 /** Trần số skill mỗi lần bật/tắt hàng loạt (mỗi skill một lệnh Hermes). */
 export const MAX_BULK_SKILLS = 50;
-/** Cùng luật tên skill sẵn có của hermes-admin.py (EXISTING_NAME). */
+/** Cùng luật tên skill sẵn có của hermes-admin.py (EXISTING_NAME): "/" chỉ ở giữa (tên "nhóm/tên" của skill trùng tên). */
 // eslint-disable-next-line no-control-regex
-const SKILL_NAME = /^[^\u0000-\u001f\u007f/\\]{1,64}$/;
+export const SKILL_NAME = /^(?!\/)(?!.*(?:^|\/)\.{1,2}(?:\/|$))[^\u0000-\u001f\u007f\\]{1,128}(?<!\/)$/;
 
 export function skillRoutes({ hermesAdmin, restartFlags, activity, memberSkills = null }) {
   const r = express.Router();

@@ -91,6 +91,15 @@ def hermes_importable():
         return False
 
 
+class SkillNameTest(unittest.TestCase):
+    def test_slash_qualified_names_allowed_but_no_escape(self):
+        for ok in ("codex", "content giao duc", "software-development/systematic-debugging"):
+            self.assertEqual(ha.need_skill_name(ok), ok)
+        for bad in ("../x", "/x", "x/", "a/../b", "a/./b", "..", "a\b", ""):
+            with self.subTest(bad=bad), self.assertRaises(ha.Refusal):
+                ha.need_skill_name(bad)
+
+
 @unittest.skipUnless(hermes_importable(), "cần Python của Hermes (hermes_cli)")
 class HelperEndToEndTest(unittest.TestCase):
     def setUp(self):

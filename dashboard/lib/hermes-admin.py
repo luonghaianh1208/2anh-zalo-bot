@@ -23,7 +23,9 @@ from pathlib import PurePosixPath
 _REAL_STDOUT = sys.stdout
 
 SKILL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")  # tên skill mới (tải lên) — cũng là tên thư mục
-EXISTING_NAME = re.compile(r"^[^\x00-\x1f\x7f/\\]{1,64}$")  # skill sẵn có có thể mang tên có dấu cách
+# Skill sẵn có có thể mang tên có dấu cách; skill trùng tên được Hermes gọi theo đường dẫn "nhóm/tên" (load_name) —
+# cho "/" ở giữa nhưng không ở đầu/cuối, không có đoạn "." hay "..".
+EXISTING_NAME = re.compile(r"^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))[^\x00-\x1f\x7f\\]{1,128}(?<!/)$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9@_.:/-]{1,200}$")
 PLATFORM = "zalo"
 MAX_SKILL_MD = 200_000

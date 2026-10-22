@@ -125,3 +125,9 @@ test('Skill cho thành viên: đánh dấu trong danh sách, mở/đóng ghi t�
   assert.ok(deps.activity.list().some((e) => e.action === 'skill_member_on' && e.detail === 'content-giao-duc'));
   assert.ok(!deps.restartFlags.get().assistant, 'plugin đọc lại tệp mỗi lượt — không cần khởi động lại');
 });
+
+test('Tên skill: nhận "nhóm/tên" của skill trùng tên, chặn thoát thư mục', async () => {
+  const { SKILL_NAME } = await import('./skills.js');
+  for (const ok of ['codex', 'content giao duc', 'software-development/systematic-debugging']) assert.ok(SKILL_NAME.test(ok), ok);
+  for (const bad of ['../x', '/x', 'x/', 'a/../b', 'a/./b', '..', 'a\b', '']) assert.ok(!SKILL_NAME.test(bad), bad);
+});

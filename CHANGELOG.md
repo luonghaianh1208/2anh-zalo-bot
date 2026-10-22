@@ -2,6 +2,13 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.62.1] — 2026-10-23
+
+### Sửa — Bật/tắt được skill tên dạng "nhóm/tên"
+
+- Khi hai skill trùng tên, Hermes gọi chúng theo đường dẫn, ví dụ `software-development/systematic-debugging`. Dashboard trước đây không nhận dấu "/", nên không bật/tắt được những skill này. Một lô bật/tắt hàng loạt có lẫn tên như vậy bị từ chối cả lô.
+- Nay tên có "/" ở giữa được nhận, vẫn chặn "/" ở đầu hoặc cuối, đoạn "." hay "..", và dấu "\\".
+
 ## [2.62.0] — 2026-10-23
 
 ### Thêm — Skill cho thành viên
