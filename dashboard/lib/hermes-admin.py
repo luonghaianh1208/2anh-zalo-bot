@@ -18,7 +18,7 @@ import shutil
 import sys
 import zipfile
 import zlib
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 _REAL_STDOUT = sys.stdout
 
@@ -115,6 +115,14 @@ def _skill_dirs():
     from agent.skill_utils import get_external_skills_dirs, iter_skill_index_files
     from tools.skills_tool import _parse_frontmatter
     out = {}
+    # Skill trùng tên: Hermes liệt kê theo load_name "nhóm/tên" — lấy đúng bảng tên đó từ danh mục của Hermes.
+    try:
+        from tools.skills_tool import _skill_catalog
+        for entry in _skill_catalog(skip_disabled=True, include_hidden=True):
+            if entry.get("load_name") and entry.get("path"):
+                out.setdefault(str(entry["load_name"]), Path(entry["path"]).parent)
+    except Exception:  # Hermes cũ chưa có _skill_catalog — vẫn còn bảng theo tên khai báo bên dưới
+        pass
     for base in [_skills_root(), *get_external_skills_dirs()]:
         if not base.exists():
             continue

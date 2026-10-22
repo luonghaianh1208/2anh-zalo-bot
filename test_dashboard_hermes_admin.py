@@ -140,6 +140,17 @@ class HelperEndToEndTest(unittest.TestCase):
         self.assertTrue(self.run_cmd("skills.uninstall", {"name": "thu-nghiem"})["ok"])
         self.assertFalse([s for s in self.run_cmd("skills.list")["skills"] if s["name"] == "thu-nghiem"])
 
+    def test_same_name_skills_toggle_by_category_path(self):
+        for cat in ("a", "b"):
+            d = os.path.join(self.home, "skills", cat, "trung-ten")
+            os.makedirs(d)
+            write(os.path.join(d, "SKILL.md"), SKILL.format(name="trung-ten", body=cat))
+        names = [s["name"] for s in self.run_cmd("skills.list")["skills"] if "trung-ten" in s["name"]]
+        self.assertEqual(sorted(names), ["a/trung-ten", "b/trung-ten"])
+        self.assertTrue(self.run_cmd("skills.toggle", {"name": "a/trung-ten", "enabled": False})["ok"])
+        state = {s["name"]: s["enabled"] for s in self.run_cmd("skills.list")["skills"] if "trung-ten" in s["name"]}
+        self.assertEqual(state, {"a/trung-ten": False, "b/trung-ten": True})
+
     def test_usage_count_read_from_hermes(self):
         self.assertTrue(self.upload("dem-luot", "Hướng dẫn.")["installed"])
         write(os.path.join(self.home, "skills", ".usage.json"),

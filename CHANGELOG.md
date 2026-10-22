@@ -2,6 +2,12 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.62.2] — 2026-10-23
+
+### Sửa — Skill trùng tên báo "Không tìm thấy" khi bật/tắt
+
+- Dashboard tra thư mục skill theo tên khai báo, còn Hermes liệt kê skill trùng tên theo đường dẫn "nhóm/tên". Nay dashboard tra theo đúng danh mục của Hermes, nên bật/tắt, xem, gỡ được những skill này.
+
 ## [2.62.1] — 2026-10-23
 
 ### Sửa — Bật/tắt được skill tên dạng "nhóm/tên"
