@@ -3,7 +3,7 @@
 name: 2anh-zalo-platform
 label: Zalo
 kind: platform
-version: 2.60.1
+version: 2.61.0
 description: >
   Zalo gateway adapter for Hermes Agent.
 

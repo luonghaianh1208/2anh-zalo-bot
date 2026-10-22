@@ -1580,3 +1580,28 @@ button.board-item:disabled { cursor: default; }
 .mcp-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
 .mcp-card-actions .mcp-remove { margin-left: auto; }
 @media (max-width: 480px) { .mcp-grid { grid-template-columns: 1fr; } }
+/* Skill: lọc theo lĩnh vực / mục đích, lưới thẻ */
+.skill-filters { display: flex; flex-direction: column; gap: 8px; }
+.skill-filter-row { display: flex; align-items: flex-start; gap: 10px; }
+.skill-filter-label { flex: none; width: 76px; padding-top: 6px; font-size: 13px; font-weight: 600; color: var(--muted, #64748b); }
+.skill-filter-row .chips { flex: 1; min-width: 0; }
+.chip-count { font-size: 11.5px; opacity: .7; margin-left: 2px; }
+.skill-grid { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.skill-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--card, #fff); min-width: 0; }
+.skill-card.is-off { opacity: .72; }
+.skill-card-head { display: flex; align-items: center; gap: 8px; }
+.skill-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 14.5px; }
+.skill-toggle { flex: none; margin: 0; }
+.skill-desc { margin: 0; font-size: 13.5px; line-height: 1.45; }
+.clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.skill-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.skill-card-actions { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
+.skill-card-actions .skill-remove { margin-left: auto; }
+@media (max-width: 560px) {
+  .skill-filter-row { flex-direction: column; gap: 4px; }
+  .skill-filter-label { width: auto; padding-top: 0; }
+  .skill-filter-row .chips { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; padding-bottom: 4px; }
+  .skill-filter-row .chip { flex: none; }
+  .skill-grid { grid-template-columns: 1fr; }
+}
+

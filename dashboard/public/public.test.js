@@ -966,13 +966,11 @@ test('Lịch hẹn › Luồng: thêm/bỏ nơi gửi — không trùng, tối �
   assert.equal(flowTargetsChange({ targets: ['1'] }, 'remove', '1'), null, 'không bỏ nơi gửi cuối cùng');
 });
 
-test('Skill: câu kết quả quét an toàn, lọc skill không dấu', async () => {
-  const { scanText, matchSkill } = await import('./views/skills.js');
+test('Skill: câu kết quả quét an toàn', async () => {
+  const { scanText } = await import('./views/skills.js');
   assert.equal(scanText({ policy: 'allow', counts: { low: 0 } }), 'Đạt kiểm tra an toàn.');
   assert.equal(scanText({ policy: 'allow', counts: { low: 2 } }), 'Đạt kiểm tra an toàn — 2 điểm cần chú ý.');
   assert.match(scanText({ policy: 'block', verdict: 'dangerous', trust: 'community', counts: { critical: 1 } }), /^Không cài được: .*“Nguy hiểm”.*Cộng đồng — 1 điểm/);
-  assert.equal(matchSkill({ name: 'soan-van-ban', description: 'Soạn công văn hành chính' }, 'cong van'), true);
-  assert.equal(matchSkill({ name: 'pdf', description: 'Đọc PDF' }, 'excel'), false);
 });
 
 test('MCP: câu kết quả kiểm tra kết nối', async () => {

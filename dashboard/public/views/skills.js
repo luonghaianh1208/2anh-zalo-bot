@@ -7,14 +7,12 @@ import { html, Dialog, Icon, Live, Notice, PageHead, Spinner } from '../ui.js';
 import { fold } from '../fold.js';
 import { RestartBanner } from './restart-banner.js';
 import { BulkBar, bulkMessage, flip, stillPicked } from './multi-pick.js';
+import { SKILL_DOMAINS, SKILL_USES, countTags, filterChips, filterSkills, viSkill } from '../skills-vi.js';
 
 export const ORIGIN = { bundled: 'Có sẵn', local: 'Tự tạo', hub: 'Từ kho', upload: 'Tải lên' };
 export const TRUST = { builtin: 'Chính thức', trusted: 'Tin cậy', community: 'Cộng đồng' };
 export const VERDICT = { safe: ['ok', 'An toàn'], caution: ['warn', 'Cần cân nhắc'], dangerous: ['danger', 'Nguy hiểm'] };
 const SEVERITY = { critical: 'nghiêm trọng', high: 'cao', medium: 'vừa', low: 'thấp' };
-
-/** Lọc skill theo chữ gõ (không dấu) trên tên, mô tả, nhóm. */
-export const matchSkill = (s, q) => !q || fold(`${s.name} ${s.description} ${s.category || ''}`).includes(q);
 
 /** Skill đã chọn cần đổi sang `enabled` (bỏ skill đã đúng trạng thái và skill lõi luôn bật). */
 export function skillsToToggle(list, picked, enabled) {
@@ -83,12 +81,32 @@ function HubDialog({ item, onInstalled, onClose }) {
   <//>`;
 }
 
-function HubRow({ s, onOpen }) {
-  return html`<li class="row-item">
-    <span class="row-main"><strong>${s.name}</strong><small class="clamp-2">${s.description}</small></span>
-    <span class=${`badge badge-${s.trust === 'community' ? 'warn' : 'idle'}`}>${TRUST[s.trust] || s.trust}</span>
-    ${s.installed ? html`<span class="badge badge-ok">Đã cài</span>` : null}
-    <button type="button" class="btn btn-secondary btn-sm" onClick=${() => onOpen(s)}>Xem</button>
+const DOMAIN_LABEL = Object.fromEntries([...SKILL_DOMAINS, ['khac', 'Khác']]);
+
+/** Hai hàng nút lọc: lĩnh vực và mục đích dùng; số cạnh nhãn là số skill khớp khi kết hợp với hàng còn lại. */
+function SkillFilters({ list, domain, use, onDomain, onUse }) {
+  const byDomain = filterSkills(list, { use });
+  const byUse = filterSkills(list, { domain });
+  const row = (label, chips, value, set) => html`<div class="skill-filter-row" role="group" aria-label=${`Lọc theo ${label.toLowerCase()}`}>
+    <span class="skill-filter-label">${label}</span>
+    <div class="chips">${chips.map(([id, text, n]) => html`<button key=${id} type="button" class="btn btn-secondary btn-sm chip"
+      aria-pressed=${value === id ? 'true' : 'false'} onClick=${() => set(value === id && id !== 'all' ? 'all' : id)}>${text} <span class="chip-count">${n}</span></button>`)}</div></div>`;
+  return html`<div class="skill-filters">
+    ${row('Lĩnh vực', filterChips(byDomain.length, SKILL_DOMAINS, countTags(byDomain, 'domains')), domain, onDomain)}
+    ${row('Mục đích', filterChips(byUse.length, SKILL_USES, countTags(byUse, 'uses')), use, onUse)}
+  </div>`;
+}
+
+const DomainTags = ({ s }) => html`<div class="skill-tags">${s.domains.map((d) => html`<span key=${d} class="tag">${DOMAIN_LABEL[d] || d}</span>`)}</div>`;
+
+function HubCard({ s, onOpen }) {
+  return html`<li class="skill-card">
+    <div class="skill-card-head"><strong class="skill-name">${s.name}</strong>
+      <span class=${`badge badge-${s.trust === 'community' ? 'warn' : 'idle'}`}>${TRUST[s.trust] || s.trust}</span></div>
+    <p class="skill-desc clamp-3" title=${s.descVi}>${s.descVi}</p>
+    <${DomainTags} s=${s} />
+    <div class="skill-card-actions">${s.installed ? html`<span class="badge badge-ok">Đã cài</span>` : null}
+      <button type="button" class="btn btn-secondary btn-sm" onClick=${() => onOpen(s)}>Xem</button></div>
   </li>`;
 }
 
@@ -99,6 +117,8 @@ function Installed({ onChanged }) {
   const [msg, setMsg] = useState({});
   const [view, setView] = useState('');
   const [picked, setPicked] = useState(() => new Set());
+  const [domain, setDomain] = useState('all');
+  const [use, setUse] = useState('all');
   const load = () => api('/api/admin/skills').then((r) => setList(r.skills)).catch((e) => setMsg({ error: e.message }));
   useEffect(() => { load(); }, []);
   async function toggle(s, enabled) {
@@ -128,7 +148,8 @@ function Installed({ onChanged }) {
     try { await api('/api/admin/skills/uninstall', { method: 'POST', body: { name: s.lockName } }); setMsg({ ok: `Đã gỡ ${s.name}.` }); onChanged(); await load(); } catch (e) { setMsg({ error: e.message }); } finally { setBusy(''); }
   }
   const n = fold(q).trim();
-  const shown = (list || []).filter((s) => matchSkill(s, n));
+  const all = (list || []).map(viSkill);
+  const shown = filterSkills(all, { domain, use, q: n, fold });
   const on = (list || []).filter((s) => s.enabled).length;
   const pickable = shown.filter((s) => !s.essential).map((s) => ({ uid: s.name }));
   const sel = stillPicked(picked, (list || []).map((s) => ({ uid: s.name })));
@@ -136,20 +157,28 @@ function Installed({ onChanged }) {
     <div class="toolbar"><label class="sr-only" for="skill-q">Tìm skill</label>
       <input id="skill-q" type="search" placeholder="Tìm theo tên hoặc mô tả…" value=${q} onInput=${(e) => setQ(e.currentTarget.value)} />
       ${list ? html`<small class="muted">${on}/${list.length} skill đang bật trên Zalo</small>` : null}</div>
+    ${list ? html`<${SkillFilters} list=${all} domain=${domain} use=${use} onDomain=${setDomain} onUse=${setUse} />` : null}
     <${Live} error=${msg.error} ok=${msg.ok} />
     ${!list && !msg.error ? html`<${Spinner} />` : null}
     ${list && !shown.length ? html`<p class="muted">Không có skill nào khớp.</p>` : null}
-    ${pickable.length > 1 ? html`<${BulkBar} shown=${pickable} picked=${new Set(sel)} onPick=${setPicked} filtered=${Boolean(n)} unit="skill">
+    ${pickable.length > 1 ? html`<${BulkBar} shown=${pickable} picked=${new Set(sel)} onPick=${setPicked} filtered=${Boolean(n) || domain !== 'all' || use !== 'all'} unit="skill">
       <button type="button" class="btn btn-secondary btn-sm" disabled=${busy !== ''} onClick=${() => toggleMany(true)}>Bật ${sel.length} skill</button>
       <button type="button" class="btn btn-secondary btn-sm" disabled=${busy !== ''} onClick=${() => toggleMany(false)}>Tắt ${sel.length} skill</button><//>` : null}
-    <ul class="row-list">${shown.map((s) => html`<li key=${s.name} class="row-item">
-      ${pickable.length > 1 ? html`<input type="checkbox" class="bulk-check" checked=${picked.has(s.name)} disabled=${busy !== '' || s.essential}
-        aria-label=${`Chọn ${s.name}`} onChange=${() => setPicked(flip(picked, s.name))} />` : null}
-      <span class="row-main"><strong>${s.name}</strong><small class="clamp-2">${s.description}</small>
-        <small class="muted">${ORIGIN[s.origin] || s.origin}${s.category ? ` · ${s.category}` : ''}${s.usage ? ` · đã dùng ${s.usage} lần` : ''}${s.essential ? ' · lõi Hermes, luôn bật' : ''}${s.offEverywhere ? ' · đang tắt cho mọi nơi' : ''}</small></span>
-      <label class="check"><input type="checkbox" checked=${s.enabled} disabled=${busy !== '' || s.essential} onChange=${(e) => toggle(s, e.currentTarget.checked)} />Bật</label>
-      <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setView(s.name)}>Xem</button>
-      ${s.lockName ? html`<button type="button" class="btn btn-ghost btn-sm" aria-label=${`Gỡ skill ${s.name}`} disabled=${busy !== ''} onClick=${() => remove(s)}><${Icon} name="close" size=${14} /></button>` : null}
+    <ul class="skill-grid">${shown.map((s) => html`<li key=${s.name} class=${`skill-card${s.enabled ? '' : ' is-off'}`}>
+      <div class="skill-card-head">
+        ${pickable.length > 1 ? html`<input type="checkbox" class="bulk-check" checked=${picked.has(s.name)} disabled=${busy !== '' || s.essential}
+          aria-label=${`Chọn ${s.name}`} onChange=${() => setPicked(flip(picked, s.name))} />` : null}
+        <strong class="skill-name">${s.name}</strong>
+        <label class="check skill-toggle"><input type="checkbox" checked=${s.enabled} disabled=${busy !== '' || s.essential}
+          aria-label=${`Bật ${s.name} trên Zalo`} onChange=${(e) => toggle(s, e.currentTarget.checked)} />Bật</label>
+      </div>
+      <p class="skill-desc clamp-3" title=${s.descVi}>${s.descVi}</p>
+      <${DomainTags} s=${s} />
+      <small class="muted">${ORIGIN[s.origin] || s.origin}${s.usage ? ` · đã dùng ${s.usage} lần` : ''}${s.essential ? ' · lõi Hermes, luôn bật' : ''}${s.offEverywhere ? ' · đang tắt cho mọi nơi' : ''}</small>
+      <div class="skill-card-actions">
+        <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setView(s.name)}>Xem</button>
+        ${s.lockName ? html`<button type="button" class="btn btn-ghost btn-sm skill-remove" aria-label=${`Gỡ skill ${s.name}`} disabled=${busy !== ''} onClick=${() => remove(s)}><${Icon} name="close" size=${14} /> Gỡ</button>` : null}
+      </div>
     </li>`)}</ul>
     ${view ? html`<${ViewDialog} name=${view} onClose=${() => setView('')} />` : null}
   </div>`;
@@ -163,6 +192,8 @@ function AddSkill({ onChanged }) {
   const [open, setOpen] = useState(null);
   const [upload, setUpload] = useState({});
   const [msg, setMsg] = useState({});
+  const [domain, setDomain] = useState('all');
+  const [use, setUse] = useState('all');
   useEffect(() => { api('/api/admin/skills/hub/official').then((r) => setOfficial(r.skills)).catch((e) => setMsg({ error: e.message })); }, []);
   const n = fold(q).trim();
   async function search(e) {
@@ -181,7 +212,8 @@ function AddSkill({ onChanged }) {
     } catch (err) { setUpload({ error: err.message }); }
   }
   const installed = (text) => { setOpen(null); setMsg({ ok: text }); onChanged(); setOfficial((o) => o && o.map((s) => (s.identifier === open?.identifier ? { ...s, installed: true } : s))); };
-  const officialShown = (official || []).filter((s) => matchSkill(s, n));
+  const officialAll = (official || []).map(viSkill);
+  const officialShown = filterSkills(officialAll, { domain, use, q: n, fold });
   return html`<div class="stack">
     <div class="card-sub"><h3>Tải lên skill của bạn</h3>
       <p class="muted small">Tệp .zip chứa SKILL.md (kèm thư mục tài liệu, mẫu nếu có), hoặc một tệp SKILL.md. Tối đa 8 MB.</p>
@@ -193,10 +225,12 @@ function AddSkill({ onChanged }) {
       <button class="btn btn-secondary btn-sm" disabled=${searching || !q.trim()}><${Icon} name="search" size=${14} /> ${searching ? 'Đang tìm…' : 'Tìm trên kho'}</button></form>
     ${results ? html`<div><h3>Kết quả trên kho <small class="muted">${results.length}</small></h3>
       ${results.length ? html`<${Notice} kind="warn">Skill “Cộng đồng” do người ngoài viết — đọc nội dung và bấm Kiểm tra an toàn trước khi cài.<//>` : html`<p class="muted">Không tìm thấy.</p>`}
-      <ul class="row-list">${results.map((s) => html`<${HubRow} key=${s.identifier} s=${s} onOpen=${setOpen} />`)}</ul></div>` : null}
+      <ul class="skill-grid">${results.map(viSkill).map((s) => html`<${HubCard} key=${s.identifier} s=${s} onOpen=${setOpen} />`)}</ul></div>` : null}
     <div><h3>Danh mục chính thức của Hermes ${official ? html`<small class="muted">${officialShown.length}</small>` : null}</h3>
       ${!official && !msg.error ? html`<${Spinner} />` : null}
-      <ul class="row-list">${officialShown.map((s) => html`<${HubRow} key=${s.identifier} s=${s} onOpen=${setOpen} />`)}</ul></div>
+      ${official ? html`<${SkillFilters} list=${officialAll} domain=${domain} use=${use} onDomain=${setDomain} onUse=${setUse} />` : null}
+      ${official && !officialShown.length ? html`<p class="muted">Không có skill nào khớp — thử bỏ bớt bộ lọc.</p>` : null}
+      <ul class="skill-grid">${officialShown.map((s) => html`<${HubCard} key=${s.identifier} s=${s} onOpen=${setOpen} />`)}</ul></div>
     ${open ? html`<${HubDialog} item=${open} onInstalled=${installed} onClose=${() => setOpen(null)} />` : null}
   </div>`;
 }

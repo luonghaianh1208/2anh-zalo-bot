@@ -2,6 +2,17 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.61.0] — 2026-10-22
+
+### Thêm — Trang Skill tiếng Việt, lọc theo lĩnh vực và mục đích, dạng lưới
+
+- Mô tả của 273 skill (skill đã cài và danh mục chính thức của Hermes) được viết lại bằng tiếng Việt dễ hiểu. Tên skill giữ nguyên để khớp với trợ lý.
+- Hai hàng nút lọc: **Lĩnh vực** (Giáo dục, Văn bản & hành chính, Văn phòng, Truyền thông, Thiết kế – ảnh – video, Nghiên cứu, Dữ liệu & AI, Lập trình, Máy chủ & bảo mật, Tác tử & tự động hoá, Đời sống) và **Mục đích** (tạo tệp, soạn thảo, dạy học – ra đề, tra cứu, ảnh – video, phân tích dữ liệu, gửi tin – email, quản lí việc, tự động hoá, lập trình).
+  - Mỗi nút hiện số skill khớp.
+  - Hai hàng lọc kết hợp được với nhau và với ô tìm kiếm.
+- Danh sách chuyển sang lưới thẻ: tên, mô tả, nhãn lĩnh vực, nút Bật, Xem, Gỡ. Áp dụng cho cả tab "Đã cài" lẫn danh mục chính thức và kết quả tìm trên kho.
+- Skill mới chưa có bản dịch vẫn hiện, kèm mô tả gốc và lĩnh vực đoán theo nhóm của Hermes.
+
 ## [2.60.1] — 2026-10-21
 
 ### Sửa — Không gửi câu báo đổi model dự phòng vào Zalo

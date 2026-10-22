@@ -1,7 +1,7 @@
 name: zalo_memory
 # Provider trí nhớ: Hermes chỉ nạp qua memory.provider, trình nạp plugin chung bỏ qua.
 kind: exclusive
-version: 2.60.1
+version: 2.61.0
 description: "Trí nhớ dài hạn OpenViking cho Zalo — tách riêng từng nhóm, từng người (2anh-zalo-bot, spec §19)."
 pip_dependencies:
   - httpx
