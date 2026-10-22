@@ -2026,7 +2026,7 @@ class ZaloToolSchemaTest(unittest.TestCase):
         self.assertEqual(set(assignments), {
             zalo_tools.TOOLSET_PUBLIC, zalo_tools.TOOLSET_OWNER, zalo_tools.TOOLSET_CRON,
         })
-        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 29)
+        self.assertEqual(assignments.count(zalo_tools.TOOLSET_PUBLIC), 31)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_OWNER), 41)
         self.assertEqual(assignments.count(zalo_tools.TOOLSET_CRON), 1)
 

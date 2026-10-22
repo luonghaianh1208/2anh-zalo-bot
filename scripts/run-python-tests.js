@@ -80,6 +80,7 @@ const suites = [
   { label: 'test_zalo_open_data.py', module: 'test_zalo_open_data', cwd: REPO_ROOT, requires: 'import gateway' },
   { label: 'test_zalo_memory_drift.py', module: 'test_zalo_memory_drift', cwd: REPO_ROOT, requires: 'import gateway' },
   { label: 'test_zalo_reply_style.py', module: 'test_zalo_reply_style', cwd: REPO_ROOT, requires: 'import gateway' },
+  { label: 'test_zalo_member_skills.py', module: 'test_zalo_member_skills', cwd: REPO_ROOT, requires: 'import gateway' },
   { label: 'test_zalo_memory_tags.py', module: 'test_zalo_memory_tags', cwd: REPO_ROOT, requires: 'import gateway' },
   { label: 'test_zalo_freshness.py', module: 'test_zalo_freshness', cwd: REPO_ROOT, requires: 'import gateway' },
   { label: 'test_zalo_media_engines.py', module: 'test_zalo_media_engines', cwd: REPO_ROOT, requires: 'import gateway, requests' },

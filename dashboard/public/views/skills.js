@@ -128,6 +128,11 @@ function Installed({ onChanged }) {
     try { await api('/api/admin/skills/toggle', { method: 'PUT', body: { name: s.name, enabled, everywhere } }); setList((l) => l.map((x) => (x.name === s.name ? { ...x, enabled, offEverywhere: enabled ? false : x.offEverywhere } : x)));
       setMsg({ ok: `${enabled ? 'Đã bật' : 'Đã tắt'} ${s.name} — áp dụng từ cuộc trò chuyện mới.` }); } catch (e) { setMsg({ error: e.message }); } finally { setBusy(''); }
   }
+  async function toggleMember(s, allowed) {
+    setBusy(s.name); setMsg({});
+    try { await api('/api/admin/skills/member', { method: 'PUT', body: { name: s.name, allowed } }); setList((l) => l.map((x) => (x.name === s.name ? { ...x, member: allowed } : x)));
+      setMsg({ ok: allowed ? `Đã mở ${s.name} cho thành viên — áp dụng ngay.` : `Đã đóng ${s.name} với thành viên.` }); } catch (e) { setMsg({ error: e.message }); } finally { setBusy(''); }
+  }
   async function toggleMany(enabled) {
     const items = skillsToToggle(list || [], sel, enabled);
     if (!items.length) { setMsg({ ok: `Các skill đã chọn đều đang ${enabled ? 'bật' : 'tắt'}.` }); return; }
@@ -156,7 +161,7 @@ function Installed({ onChanged }) {
   return html`<div class="stack">
     <div class="toolbar"><label class="sr-only" for="skill-q">Tìm skill</label>
       <input id="skill-q" type="search" placeholder="Tìm theo tên hoặc mô tả…" value=${q} onInput=${(e) => setQ(e.currentTarget.value)} />
-      ${list ? html`<small class="muted">${on}/${list.length} skill đang bật trên Zalo</small>` : null}</div>
+      ${list ? html`<small class="muted">${on}/${list.length} skill đang bật trên Zalo${list.some((s) => 'member' in s) ? ` · ${list.filter((s) => s.member).length} mở cho thành viên` : ''}</small>` : null}</div>
     ${list ? html`<${SkillFilters} list=${all} domain=${domain} use=${use} onDomain=${setDomain} onUse=${setUse} />` : null}
     <${Live} error=${msg.error} ok=${msg.ok} />
     ${!list && !msg.error ? html`<${Spinner} />` : null}
@@ -174,6 +179,9 @@ function Installed({ onChanged }) {
       </div>
       <p class="skill-desc clamp-3" title=${s.descVi}>${s.descVi}</p>
       <${DomainTags} s=${s} />
+      ${'member' in s ? html`<label class="check small skill-member" title=${s.memberBlocked ? 'Skill riêng của chủ bot hoặc thao tác hệ thống — không mở cho thành viên.' : 'Học sinh, thành viên nhóm đọc được skill này (chỉ đọc).'}>
+        <input type="checkbox" checked=${Boolean(s.member)} disabled=${busy !== '' || s.memberBlocked} onChange=${(e) => toggleMember(s, e.currentTarget.checked)} />
+        Cho thành viên dùng${s.memberBlocked ? ' (không mở được)' : ''}</label>` : null}
       <small class="muted">${ORIGIN[s.origin] || s.origin}${s.usage ? ` · đã dùng ${s.usage} lần` : ''}${s.essential ? ' · lõi Hermes, luôn bật' : ''}${s.offEverywhere ? ' · đang tắt cho mọi nơi' : ''}</small>
       <div class="skill-card-actions">
         <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setView(s.name)}>Xem</button>

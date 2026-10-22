@@ -68,6 +68,12 @@ def register(ctx) -> None:
         ctx.register_hook("pre_llm_call", freshness.pre_llm_call)
     except Exception:  # cố hết sức — thiếu thì bot vẫn trả lời, chỉ không tự tra trước
         logger.warning("[zalo] không bật được tra cứu trước khi trả lời", exc_info=True)
+    # Skill chủ bot mở cho thành viên (dashboard › Skill › "Thành viên"): báo trợ lý danh sách ở lượt của thành viên.
+    try:
+        from . import member_skills
+        ctx.register_hook("pre_llm_call", member_skills.pre_llm_call)
+    except Exception:  # cố hết sức — thiếu thì thành viên không được gợi ý skill, công cụ vẫn dùng được
+        logger.warning("[zalo] không bật được skill cho thành viên", exc_info=True)
     # Quy tắc riêng của thư mục (Phân quyền › thư mục): nhóm/người trong thư mục được trả lời theo bộ quy tắc đó.
     try:
         from . import folder_rules

@@ -2,6 +2,23 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.62.0] — 2026-10-23
+
+### Thêm — Skill cho thành viên
+
+- Trước đây chỉ chủ nhân dùng được skill. Thành viên (học sinh, người trong nhóm) chỉ có bộ công cụ công khai, không có công cụ đọc skill, nên trợ lý không hề biết có skill khi trả lời họ.
+- Trang Skill có thêm ô **"Cho thành viên dùng"** trên từng thẻ. Skill được mở cho thành viên đọc qua hai công cụ chỉ-đọc mới:
+  - `zalo_skill_list`: liệt kê skill dùng được.
+  - `zalo_skill_read`: đọc SKILL.md và tệp kèm, không ra ngoài thư mục skill.
+- Mỗi lượt của thành viên, trợ lý được báo danh sách skill dùng được, với lời dặn đọc skill trước khi trả lời.
+- Nút bật/tắt theo nhóm và theo người đi chung với tính năng **"Kho tài liệu và skill"** ở Phân quyền Bot.
+- Mở hay đóng skill có hiệu lực ngay, không cần khởi động lại trợ lý.
+- Skill riêng của chủ bot hoặc thao tác hệ thống (zalo-*, hermes-*, tin nhắn theo giọng chủ bot, email, Google, GitHub, công cụ lập trình…) không mở cho thành viên được. Danh sách cấm được kiểm ở cả dashboard lẫn plugin.
+
+### Sửa — Số lượt dùng skill luôn hiện 0
+
+- Hermes bản mới đổi tên hàm đọc danh sách skill có sẵn, làm dashboard rơi vào nhánh dự phòng: số lượt dùng luôn 0 và mọi skill bị ghi "Tự tạo". Nay dashboard đọc đúng cả bản cũ và bản mới.
+
 ## [2.61.0] — 2026-10-22
 
 ### Thêm — Trang Skill tiếng Việt, lọc theo lĩnh vực và mục đích, dạng lưới

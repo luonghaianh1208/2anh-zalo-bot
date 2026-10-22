@@ -1595,6 +1595,8 @@ button.board-item:disabled { cursor: default; }
 .skill-desc { margin: 0; font-size: 13.5px; line-height: 1.45; }
 .clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .skill-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.skill-member { margin: 0; }
+.skill-member input:disabled + * , .skill-member:has(input:disabled) { color: var(--muted); }
 .skill-card-actions { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
 .skill-card-actions .skill-remove { margin-left: auto; }
 @media (max-width: 560px) {

@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { requireAuth, requireRole } from '../lib/http-guards.js';
+import { isBlocked } from '../lib/member-skills.js';
 
 export const MAX_SKILL_UPLOAD = 8 * 1024 * 1024;
 /** Trần số skill mỗi lần bật/tắt hàng loạt (mỗi skill một lệnh Hermes). */
@@ -14,7 +15,7 @@ export const MAX_BULK_SKILLS = 50;
 // eslint-disable-next-line no-control-regex
 const SKILL_NAME = /^[^\u0000-\u001f\u007f/\\]{1,64}$/;
 
-export function skillRoutes({ hermesAdmin, restartFlags, activity }) {
+export function skillRoutes({ hermesAdmin, restartFlags, activity, memberSkills = null }) {
   const r = express.Router();
   const guard = [requireAuth, requireRole('admin')];
   const fail = (res, err, fallback) => {
@@ -29,7 +30,27 @@ export function skillRoutes({ hermesAdmin, restartFlags, activity }) {
   const changed = (req, action, name, detail = name) => { restartFlags.mark('assistant', `Skill: ${name}`); log(req, action, detail); };
 
   r.get('/admin/skills', ...guard, async (req, res) => {
-    try { res.json({ ok: true, ...strip(await hermesAdmin.read('skills.list')) }); } catch (err) { fail(res, err, 'Chưa đọc được danh sách skill.'); }
+    try {
+      const out = strip(await hermesAdmin.read('skills.list'));
+      if (memberSkills && Array.isArray(out.skills)) {
+        const open = new Set(memberSkills.list());
+        out.skills = out.skills.map((s) => ({ ...s, member: open.has(s.name), memberBlocked: isBlocked(s.name) }));
+      }
+      res.json({ ok: true, ...out });
+    } catch (err) { fail(res, err, 'Chưa đọc được danh sách skill.'); }
+  });
+  /** Mở/đóng một skill cho thành viên (không phải chủ nhân) — plugin đọc lại ngay, không cần khởi động lại. */
+  r.put('/admin/skills/member', ...guard, (req, res) => {
+    if (!memberSkills) return res.status(404).json({ ok: false, error: 'Bản cài này chưa hỗ trợ skill cho thành viên.' });
+    const { name, allowed } = req.body || {};
+    if (typeof name !== 'string' || !SKILL_NAME.test(name.trim()) || typeof allowed !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'Tên skill hoặc giá trị không hợp lệ.' });
+    }
+    try {
+      const out = memberSkills.set(name, allowed);
+      log(req, allowed ? 'skill_member_on' : 'skill_member_off', out.name);
+      res.json({ ok: true, ...out });
+    } catch (err) { fail(res, err, 'Chưa lưu được.'); }
   });
   r.get('/admin/skills/view', ...guard, async (req, res) => {
     try { res.json({ ok: true, ...strip(await hermesAdmin.read('skills.view', { name: String(req.query.name ?? '') })) }); } catch (err) { fail(res, err, 'Chưa đọc được skill.'); }

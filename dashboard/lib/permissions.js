@@ -19,7 +19,7 @@ export const FEATURES = [
   { key: 'voice', label: 'Tin nhắn thoại', hint: 'Bot trả lời bằng giọng nói' },
   { key: 'reminders', label: 'Nhắc hẹn', hint: 'Tạo, xem, xoá lời nhắc của Zalo' },
   { key: 'groupCron', label: 'Hẹn giờ cho nhóm', hint: 'Thành viên tạo việc bot tự làm theo lịch. Tắt chỉ chặn tạo mới — việc đã tạo vẫn chạy' },
-  { key: 'kb', label: 'Kho tài liệu', hint: 'Đọc tài liệu chủ bot đã mở cho nhóm' },
+  { key: 'kb', label: 'Kho tài liệu và skill', hint: 'Đọc tài liệu và skill chủ bot đã mở cho thành viên' },
   { key: 'people', label: 'Sổ người quen', hint: 'Ghi nhớ và tra hồ sơ thành viên' },
   { key: 'academic', label: 'Tra cứu học thuật', hint: 'Tìm bài báo khoa học' },
   { key: 'video', label: 'Video', hint: 'Xem thông tin, tải, cắt ghép video (link hoặc video gửi vào Zalo) và sửa video: phụ đề, nhạc nền, logo, chuyển cảnh' },

@@ -150,8 +150,12 @@ def skills_list(_args):
     config = load_config()
     zalo_off, everywhere = _platform_off(config), _global_off(config)
     try:
-        from tools.skill_usage import _read_bundled_manifest_names, activity_count, load_usage
-        usage, bundled = load_usage(), _read_bundled_manifest_names()
+        from tools import skill_usage
+        # Hermes đổi tên hàm này qua các bản (_read_bundled_manifest_names → _read_bundled_names); import cứng một tên
+        # làm cả khối rơi vào nhánh dự phòng — số lượt dùng luôn 0, mọi skill thành "Tự tạo".
+        read_bundled = (getattr(skill_usage, "_read_bundled_names", None)
+                        or getattr(skill_usage, "_read_bundled_manifest_names", None) or (lambda: set()))
+        usage, bundled, activity_count = skill_usage.load_usage(), set(read_bundled()), skill_usage.activity_count
     except Exception:
         usage, bundled, activity_count = {}, set(), (lambda _u: 0)
     dirs, by_dir = _skill_dirs(), _lock_by_dir(_hub_entries())

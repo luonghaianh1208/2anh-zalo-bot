@@ -12,6 +12,7 @@ import { resolveDashboardPaths } from './lib/paths.js';
 import { loadDashboardConfig } from './lib/config.js';
 import { createUserStore } from './lib/users.js';
 import { createSessionStore } from './lib/sessions.js';
+import { createMemberSkills } from './lib/member-skills.js';
 import { createLoginGuard } from './lib/login-guard.js';
 import { createSetupToken } from './lib/setup-token.js';
 import { createActivityLog } from './lib/activity-log.js';
@@ -188,6 +189,7 @@ export function buildDeps({ env = process.env, sidecarRoot = join(here, '..'), i
     }),
     studioUsageFile: paths.studioUsageFile,
     studioPolicyFile: paths.studioPolicyFile,
+    memberSkills: createMemberSkills(paths.memberSkillsFile),
     publicDir: join(here, 'public'),
   };
 }

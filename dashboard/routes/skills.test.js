@@ -99,3 +99,29 @@ test('Skill: bật/tắt nhiều skill — chỉ Quản trị, kiểm tên trư�
   assert.deepEqual(deps.hermesAdmin.calls.map((c) => [c.kind, c.args.name, c.args.everywhere]), [['write', 'bao-cao', false], ['write', 'loi', false], ['write', 'pdf', false]]);
   assert.deepEqual(deps.activity.list().filter((e) => e.action.startsWith('skill_')).map((e) => [e.action, e.detail]), [['skill_disable', '2 skill: bao-cao, pdf']]);
 });
+
+test('Skill cho thành viên: đánh dấu trong danh sách, mở/đóng ghi tệp, chặn skill riêng tư, chỉ Quản trị', async (t) => {
+  const { createMemberSkills } = await import('../lib/member-skills.js');
+  const { join } = await import('node:path');
+  const { readFileSync } = await import('node:fs');
+  const deps = makeDeps(t);
+  const file = join(deps.dir, 'zalo', 'member-skills.json');
+  deps.memberSkills = createMemberSkills(file);
+  deps.hermesAdmin = fakeAdmin({ 'skills.list': { skills: [{ name: 'content-giao-duc' }, { name: 'tin-nhan-zalo' }] } });
+  const { call } = await startApp(t, deps);
+  const owner = await loginAs(t, deps, call, { username: 'khach', role: 'owner' });
+  assert.equal((await call('/api/admin/skills/member', { method: 'PUT', cookie: owner, body: { name: 'content-giao-duc', allowed: true } })).status, 403);
+  const admin = await loginAs(t, deps, call);
+  const on = await call('/api/admin/skills/member', { method: 'PUT', cookie: admin, body: { name: 'content-giao-duc', allowed: true } });
+  assert.deepEqual([on.status, on.json.member], [200, true]);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).skills, ['content-giao-duc']);
+  const blocked = await call('/api/admin/skills/member', { method: 'PUT', cookie: admin, body: { name: 'tin-nhan-zalo', allowed: true } });
+  assert.equal(blocked.status, 400);
+  assert.equal((await call('/api/admin/skills/member', { method: 'PUT', cookie: admin, body: { name: 'x', allowed: 'yes' } })).status, 400);
+  const list = (await call('/api/admin/skills', { cookie: admin })).json.skills;
+  assert.deepEqual(list.map((s) => [s.name, s.member, s.memberBlocked]), [['content-giao-duc', true, false], ['tin-nhan-zalo', false, true]]);
+  await call('/api/admin/skills/member', { method: 'PUT', cookie: admin, body: { name: 'content-giao-duc', allowed: false } });
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).skills, []);
+  assert.ok(deps.activity.list().some((e) => e.action === 'skill_member_on' && e.detail === 'content-giao-duc'));
+  assert.ok(!deps.restartFlags.get().assistant, 'plugin đọc lại tệp mỗi lượt — không cần khởi động lại');
+});

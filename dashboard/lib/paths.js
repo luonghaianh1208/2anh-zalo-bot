@@ -29,6 +29,8 @@ export function resolveDashboardPaths({ env = process.env, sidecarRoot }) {
     // Sổ lượt Xưởng tạo sản phẩm: plugin ghi, dashboard chỉ đọc (spec §17). studio-policy.json: plugin ghi chính sách video.
     studioUsageFile: join(hermesHome, 'zalo', 'studio-usage.json'),
     studioPolicyFile: join(hermesHome, 'zalo', 'studio-policy.json'),
+    // Skill mở cho thành viên: dashboard ghi, plugin đọc (zalo_tools/member_skills.py).
+    memberSkillsFile: join(hermesHome, 'zalo', 'member-skills.json'),
     hermesStateDb: join(hermesHome, 'state.db'),
     // Giai đoạn 7 (spec §18): sổ người quen của plugin (ZALO_PEOPLE_FILE trong .env Hermes thắng, xem server.js).
     peopleFile: join(hermesHome, 'zalo', 'people.json'),
