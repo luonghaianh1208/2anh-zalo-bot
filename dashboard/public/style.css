@@ -1607,3 +1607,10 @@ button.board-item:disabled { cursor: default; }
   .skill-grid { grid-template-columns: 1fr; }
 }
 
+
+/* Bảng giá model (Khoá API & Model) */
+.price-now { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 8px; }
+.price-now p { margin: 0; }
+.price-wrap { max-height: 60vh; overflow: auto; }
+.price-table td.num, .price-table th.num { text-align: right; white-space: nowrap; }
+.price-table tr.is-current td { background: var(--brand-soft); }

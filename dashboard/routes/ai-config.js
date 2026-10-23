@@ -17,10 +17,14 @@ export function aiConfigRoutes({ aiKeys, aiModels, agentConfig, mediaEngines, re
 
   r.get('/admin/ai/models', ...guard, async (req, res) => {
     try {
-      let list = []; let listError = '';
-      try { list = await agentConfig.models(); } catch (e) { listError = e.message; }
+      let list = []; let listError = ''; let prices = {};
+      try {
+        const info = agentConfig.modelsInfo ? await agentConfig.modelsInfo() : (await agentConfig.models()).map((id) => ({ id }));
+        list = info.map((m) => m.id);
+        prices = Object.fromEntries(info.filter((m) => m.pricing).map((m) => [m.id, { ...m.pricing, name: m.name || '' }]));
+      } catch (e) { listError = e.message; }
       const v = agentConfig.view();
-      res.json({ ok: true, ...aiModels.view(), models: list, listError, choices: v.choices, defaultModel: v.defaultModel });
+      res.json({ ok: true, ...aiModels.view(), models: list, prices, listError, choices: v.choices, defaultModel: v.defaultModel });
     } catch (err) { fail(res, err, 'Chưa đọc được cấu hình model.'); }
   });
   r.put('/admin/ai/model', ...guard, async (req, res) => {

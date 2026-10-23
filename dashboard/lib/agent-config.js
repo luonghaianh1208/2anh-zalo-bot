@@ -41,6 +41,10 @@ export function createAgentConfig({ configFile, envValue = () => null, fetchImpl
     },
     /** Danh sách model của cổng AI đang cấu hình (chuẩn OpenAI `/models`). */
     async models() {
+      return (await this.modelsInfo()).map((m) => m.id);
+    },
+    /** Như models() nhưng kèm tên hiển thị và giá (cổng nào trả `pricing`, vd. Stali — xem normalizePricing). */
+    async modelsInfo() {
       const m = conf()?.model || {};
       const base = String(m.base_url || '').replace(/\/+$/, '');
       if (!/^https?:\/\//.test(base)) throw err(409, 'config.yaml chưa có model.base_url — báo người cài đặt.');
@@ -50,7 +54,9 @@ export function createAgentConfig({ configFile, envValue = () => null, fetchImpl
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         json = await res.json();
       } catch { throw err(502, 'Cổng AI chưa trả danh sách model — thử lại sau ít phút.'); }
-      return (Array.isArray(json?.data) ? json.data : []).map((x) => String(x?.id || '')).filter((id) => MODEL_NAME.test(id)).slice(0, 500);
+      return (Array.isArray(json?.data) ? json.data : [])
+        .map((x) => ({ id: String(x?.id || ''), name: String(x?.display_name || '').slice(0, 80), pricing: normalizePricing(x?.pricing, x?.billing_unit) }))
+        .filter((m) => MODEL_NAME.test(m.id)).slice(0, 500);
     },
     async setModel(name) {
       const model = String(name ?? '').trim();
@@ -64,6 +70,18 @@ export function createAgentConfig({ configFile, envValue = () => null, fetchImpl
       return editConfigYaml(configFile, [{ path: ['agent', 'reasoning_effort'], value }]);
     },
   };
+}
+
+/** Giá của một model từ `/models` (Stali): theo token → { unit: 'token', input, output (đồng / 1 triệu token), min (tối thiểu
+ * mỗi lượt) }; theo lượt → { unit: 'request', perRequest }. Không có hoặc lạ → null. Chỉ nhận số hữu hạn không âm. */
+export function normalizePricing(p, unit) {
+  if (!p || typeof p !== 'object') return null;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+  const currency = typeof p.currency === 'string' ? p.currency.slice(0, 8) : 'VND';
+  if (num(p.per_request) !== null && (unit === 'request' || num(p.input_per_1m) === null)) return { unit: 'request', currency, perRequest: num(p.per_request) };
+  const input = num(p.input_per_1m); const output = num(p.output_per_1m);
+  if (input === null || output === null) return null;
+  return { unit: 'token', currency, input, output, min: num(p.min_per_request) ?? 0 };
 }
 
 export function createSoul({ hermesHome, historyDir, now = Date.now }) {

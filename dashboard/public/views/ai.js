@@ -8,6 +8,7 @@ import { RestartBanner } from './restart-banner.js';
 import { modelOptions } from './agent.js';
 import { FreeApis } from './free-apis.js';
 import { Media } from './media.js';
+import { TYPICAL_CALL, priceRows, priceSentence, shortPrice, vnd } from '../model-price.js';
 
 const fmtMs = (ms) => (ms < 1000 ? `${ms} ms` : `${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(ms / 1000)} giây`);
 
@@ -17,12 +18,37 @@ export function resultText(r) {
   return r.ok ? `Được — ${r.reply ? `"${r.reply}"` : r.detail} (${fmtMs(r.ms)})` : `Không được — ${r.detail}`;
 }
 
+/** Bảng giá model của cổng AI (Stali trả giá trong /models): rẻ trước, lọc, đổi model ngay từ bảng. */
+function PriceDialog({ prices, current, busy, onPick, onClose }) {
+  const [q, setQ] = useState('');
+  const rows = priceRows(prices, { q, fold });
+  return html`<${Dialog} title="Bảng giá model" onClose=${onClose} wide>
+    <div class="stack">
+      <p class="muted small">Giá do cổng AI công bố, tính bằng đồng. "Mỗi lượt gọi AI" là ước tính cho một lần bot gọi model
+        (khoảng ${new Intl.NumberFormat('vi-VN').format(TYPICAL_CALL.input)} token đầu vào, ${TYPICAL_CALL.output} token trả lời); một tin nhắn
+        có tra cứu, đọc ảnh, tạo tệp có thể cần 2–4 lượt.</p>
+      <input type="search" aria-label="Lọc model" placeholder="Lọc, vd. flash, claude, gpt" value=${q} onInput=${(e) => setQ(e.currentTarget.value)} />
+      <div class="table-wrap price-wrap"><table class="table table-cards price-table">
+        <thead><tr><th scope="col">Model</th><th scope="col">Giá</th><th scope="col" class="num">≈ Mỗi lượt gọi AI</th><th scope="col"><span class="sr-only">Chọn</span></th></tr></thead>
+        <tbody>${rows.map((r) => html`<tr key=${r.id} class=${r.id === current ? 'is-current' : ''}>
+          <td data-label="Model"><strong class="mono">${r.id}</strong>${r.name ? html`<br /><small class="muted">${r.name}</small>` : null}</td>
+          <td data-label="Giá">${r.p.unit === 'request' ? `${vnd(r.p.perRequest)} / lượt` : html`vào ${vnd(r.p.input)} · ra ${vnd(r.p.output)}<br /><small class="muted">/ 1 triệu token${r.p.min ? ` · tối thiểu ${vnd(r.p.min)}` : ''}</small>`}</td>
+          <td data-label="≈ Mỗi lượt" class="num">${vnd(r.est)}</td>
+          <td data-label="">${r.id === current ? html`<span class="badge badge-ok">Đang dùng</span>`
+            : html`<button type="button" class="btn btn-secondary btn-sm" disabled=${busy} onClick=${() => onPick(r.id)}>Dùng model này</button>`}</td>
+        </tr>`)}</tbody></table></div>
+      ${rows.length ? null : html`<p class="muted">Không có model nào khớp.</p>`}
+    </div>
+  <//>`;
+}
+
 function Models({ onRestart }) {
   const [data, setData] = useState(null);
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState('');
   const [tests, setTests] = useState({});
   const [msg, setMsg] = useState({});
+  const [showPrices, setShowPrices] = useState(false);
   useEffect(() => { api('/api/admin/ai/models').then(setData).catch((e) => setMsg({ error: e.message })); }, []);
   async function test(id, model) {
     setBusy(id); setTests((t) => ({ ...t, [id]: null }));
@@ -34,6 +60,8 @@ function Models({ onRestart }) {
   }
   if (!data) return html`<${Live} error=${msg.error} />${msg.error ? null : html`<${Spinner} />`}`;
   const main = data.cards.find((c) => c.id === 'main');
+  const prices = data.prices || {};
+  const hasPrices = Object.keys(prices).length > 0;
   return html`<${Live} error=${msg.error} ok=${msg.ok} />
     <div class="ai-cards">${data.cards.map((c) => html`<section key=${c.id} class="ai-card">
       <h3>${c.label}</h3>
@@ -43,12 +71,16 @@ function Models({ onRestart }) {
       ${c.id === 'main' ? html`<div class="field"><label for="ai-main">Đổi model chính</label>
         <input type="search" placeholder="Lọc, vd. gemini" aria-label="Lọc model" value=${q} onInput=${(e) => setQ(e.currentTarget.value)} />
         <select id="ai-main" value=${main.model} disabled=${busy !== '' || !data.models.length} onChange=${(e) => setModel(e.currentTarget.value)}>
-          ${modelOptions({ current: main.model, choices: data.choices, all: data.models, q }).map((m) => html`<option key=${m} value=${m}>${m}${m === data.defaultModel ? ' (mặc định /model)' : ''}</option>`)}
+          ${modelOptions({ current: main.model, choices: data.choices, all: data.models, q }).map((m) => html`<option key=${m} value=${m}>${m}${prices[m] ? ` — ${shortPrice(prices[m])}` : ''}${m === data.defaultModel ? ' (mặc định /model)' : ''}</option>`)}
         </select>
-        ${data.listError ? html`<small class="muted">${data.listError}</small>` : html`<small class="muted">Danh sách lấy từ cổng AI (gồm cả combo). Đổi là có hiệu lực ngay, như lệnh /model trong Zalo.</small>`}</div>` : null}
+        ${data.listError ? html`<small class="muted">${data.listError}</small>` : html`<small class="muted">Danh sách lấy từ cổng AI (gồm cả combo). Đổi là có hiệu lực ngay, như lệnh /model trong Zalo.</small>`}
+        ${hasPrices ? html`<div class="price-now">${prices[main.model] ? html`<p class="small"><strong>Giá model đang dùng:</strong> ${priceSentence(prices[main.model])}</p>` : null}
+          <button type="button" class="btn btn-secondary btn-sm" onClick=${() => setShowPrices(true)}><${Icon} name="list" size=${14} /> Xem bảng giá ${Object.keys(prices).length} model</button></div>` : null}</div>` : null}
       ${c.testable ? html`<p><button type="button" class="btn btn-secondary btn-sm" disabled=${busy !== ''} onClick=${() => test(c.id, c.model)}>${busy === c.id ? 'Đang thử…' : 'Thử'}</button></p>` : null}
       ${tests[c.id] ? html`<p class=${`ai-result ${tests[c.id].ok ? 'is-ok' : 'is-bad'}`} role="status">${resultText(tests[c.id])}</p>` : null}
     </section>`)}</div>
+    ${showPrices ? html`<${PriceDialog} prices=${prices} current=${main.model} busy=${busy !== ''}
+      onPick=${(m) => { setShowPrices(false); setModel(m); }} onClose=${() => setShowPrices(false)} />` : null}
     <p class="muted small"><${Icon} name="info" size=${14} /> Mức suy nghĩ và tính cách của bot nằm ở trang Tính cách AI. Nguồn vẽ ảnh và tạo video chỉnh ở tab "Tạo ảnh & video". Giọng đọc, nghe giọng nói đặt bằng cấu hình trên máy chủ — nhờ người cài đặt nếu muốn đổi.</p>`;
 }
 

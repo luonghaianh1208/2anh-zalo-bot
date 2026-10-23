@@ -2,6 +2,17 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.63.0] — 2026-10-23
+
+### Thêm — Bảng giá model khi đổi model (cổng Stali)
+
+- Cổng AI nào trả giá trong danh sách model (như Stali) thì trang **Khoá API & Model** hiện giá:
+  - Cạnh tên mỗi model trong ô chọn.
+  - Một dòng giá của model đang dùng, kèm ước tính chi phí mỗi lượt gọi AI.
+  - Nút **"Xem bảng giá"**: toàn bộ model xếp rẻ trước, lọc theo tên, giá vào/ra trên 1 triệu token hoặc giá mỗi lượt, mức tối thiểu, ước tính mỗi lượt gọi AI, kèm nút **"Dùng model này"** để đổi ngay.
+- Giá lấy trực tiếp từ cổng AI mỗi lần mở trang nên luôn theo giá hiện hành.
+- Ước tính dựa trên một lượt gọi điển hình của bot (khoảng 25.000 token vào, 600 token ra). Một tin có tra cứu, đọc ảnh, tạo tệp có thể cần 2–4 lượt.
+
 ## [2.62.2] — 2026-10-23
 
 ### Sửa — Skill trùng tên báo "Không tìm thấy" khi bật/tắt

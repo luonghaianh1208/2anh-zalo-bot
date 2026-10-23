@@ -100,3 +100,21 @@ test('SOUL.md: text không phải chuỗi → 400', (t) => {
   const soul = createSoul({ hermesHome: h, historyDir: join(h, 'soul-history') });
   for (const bad of [undefined, null, 5, ['a'], { a: 1 }]) assert.throws(() => soul.save(bad, 'anh'), (e) => e.statusCode === 400);
 });
+
+test('giá model: theo token, theo lượt, thiếu/lạ thì null; modelsInfo đọc giá từ /models', async (t) => {
+  const { normalizePricing } = await import('./agent-config.js');
+  assert.deepEqual(normalizePricing({ currency: 'VND', input_per_1m: 2000, output_per_1m: 4000, min_per_request: 50 }, 'token'),
+    { unit: 'token', currency: 'VND', input: 2000, output: 4000, min: 50 });
+  assert.deepEqual(normalizePricing({ currency: 'VND', per_request: 300 }, 'request'), { unit: 'request', currency: 'VND', perRequest: 300 });
+  assert.equal(normalizePricing(null, 'token'), null);
+  assert.equal(normalizePricing({ input_per_1m: -1, output_per_1m: 2 }, 'token'), null);
+  assert.equal(normalizePricing({ input_per_1m: '2000', output_per_1m: 2 }, 'token'), null);
+  const h = mkdtempSync(join(tmpdir(), 'zd-price-')); t.after(() => rmSync(h, { recursive: true, force: true }));
+  writeFileSync(join(h, 'config.yaml'), 'model:\n  default: a\n  base_url: https://api.stali.vn/v1\n  api_key: k\n');
+  const cfg = createAgentConfig({ configFile: join(h, 'config.yaml'), fetchImpl: async () => ({ ok: true, json: async () => ({ data: [
+    { id: 'a', display_name: 'Model A', billing_unit: 'token', pricing: { currency: 'VND', input_per_1m: 2000, output_per_1m: 2000, min_per_request: 50 } },
+    { id: 'b' }] }) }) });
+  const info = await cfg.modelsInfo();
+  assert.deepEqual(info.map((m) => [m.id, m.name, m.pricing?.input ?? null]), [['a', 'Model A', 2000], ['b', '', null]]);
+  assert.deepEqual(await cfg.models(), ['a', 'b']);
+});
