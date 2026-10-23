@@ -151,6 +151,23 @@ class HelperEndToEndTest(unittest.TestCase):
         state = {s["name"]: s["enabled"] for s in self.run_cmd("skills.list")["skills"] if "trung-ten" in s["name"]}
         self.assertEqual(state, {"a/trung-ten": False, "b/trung-ten": True})
 
+    def test_toggle_many_one_write_reports_failures(self):
+        for i in range(60):
+            d = os.path.join(self.home, "skills", f"hang-loat-{i}")
+            os.makedirs(d)
+            write(os.path.join(d, "SKILL.md"), SKILL.format(name=f"hang-loat-{i}", body="x"))
+        names = [f"hang-loat-{i}" for i in range(60)]
+        r = self.run_cmd("skills.toggle_many", {"names": names + ["khong-co"], "enabled": False})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(len(r["done"]), 60)
+        self.assertEqual([f["name"] for f in r["failed"]], ["khong-co"])
+        state = {s["name"]: s["enabled"] for s in self.run_cmd("skills.list")["skills"] if s["name"].startswith("hang-loat-")}
+        self.assertEqual(set(state.values()), {False})
+        r = self.run_cmd("skills.toggle_many", {"names": names[:30], "enabled": True})
+        self.assertEqual(len(r["done"]), 30)
+        state = {s["name"]: s["enabled"] for s in self.run_cmd("skills.list")["skills"] if s["name"].startswith("hang-loat-")}
+        self.assertEqual(sum(state.values()), 30)
+
     def test_usage_count_read_from_hermes(self):
         self.assertTrue(self.upload("dem-luot", "Hướng dẫn.")["installed"])
         write(os.path.join(self.home, "skills", ".usage.json"),

@@ -19,6 +19,7 @@ import { createActivityLog } from './lib/activity-log.js';
 import { createSidecarClient } from './lib/sidecar-client.js';
 import { createTelegramLinker } from './lib/telegram.js';
 import { createStoreReader } from './lib/store-reader.js';
+import { createAuditCleaner } from './lib/audit-cleaner.js';
 import { createThreadNames } from './lib/thread-names.js';
 import { createPermissionsStore, makeDmEnv, makeGlobalReplyOnlyTagged } from './lib/permissions.js';
 import { createWatchdog } from './lib/watchdog.js';
@@ -92,6 +93,7 @@ export function buildDeps({ env = process.env, sidecarRoot = join(here, '..'), i
   return {
     paths, config, sidecar, linker,
     store,
+    auditCleaner: createAuditCleaner({ path: paths.sqliteFile }),
     botUses: createBotUses({
       hermesHome: paths.hermesHome, stateDb: paths.hermesStateDb, zaloDb: paths.sqliteFile,
       owners: () => [...owners.list(), ...owners.overrideUids()],

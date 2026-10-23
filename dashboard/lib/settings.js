@@ -33,6 +33,7 @@ export const SETTINGS = [
   { id: 'publicMcp', group: 'Tài liệu và MCP', label: 'Kết nối MCP thành viên được dùng', hint: 'Tên kết nối (được dùng * và ?). Mở cho thành viên là cho người ngoài dùng tài nguyên của chủ bot — cân nhắc kỹ.', type: 'patterns', max: 20, env: 'ZALO_PUBLIC_MCP', def: [], restart: NOW, confirm: true },
   { id: 'mediaLookback', group: 'Đọc ảnh và tệp', label: 'Số tin gần nhất bot xem lại để tìm ảnh/tệp', hint: 'Khi được hỏi về ảnh hay tệp (vd. "xem ảnh này", "gộp 2 file vừa gửi") trong nhóm, bot lật lại chừng này tin để lấy ảnh/tệp mà đọc. Mặc định 3. Đặt cao thì đọc được ảnh gửi xa hơn nhưng tốn thêm lượt AI cho mỗi ảnh; chỉ tính các tin nhận được từ lần khởi động lại trợ lý gần nhất.', type: 'int', min: 1, max: 30, env: 'ZALO_MEDIA_LOOKBACK', extra: 'media_lookback', extraWins: true, def: 3, restart: NOW },
   { id: 'historyDays', group: 'Lưu trữ', label: 'Giữ lịch sử trò chuyện (ngày)', type: 'int', min: 30, max: 3650, env: 'ZALO_HISTORY_RETENTION_DAYS', def: 365, restart: S },
+  { id: 'auditDays', group: 'Lưu trữ', label: 'Giữ nhật ký thao tác của bot (ngày)', hint: 'Dòng cũ hơn tự xoá mỗi ngày. Muốn xoá ngay thì vào Nhật ký › Dọn nhật ký.', type: 'int', min: 7, max: 3650, env: 'ZALO_AUDIT_RETENTION_DAYS', def: 90, restart: S },
 ];
 
 const err = (message) => Object.assign(new Error(message), { statusCode: 400 });

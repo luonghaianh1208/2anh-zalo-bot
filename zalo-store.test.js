@@ -210,6 +210,17 @@ test('retention prunes messages older than 365 days but leaves audit records', (
   assert.equal(store.getAuditTrail('r-1').length, 2);
 });
 
+test('audit retention drops audit rows older than auditRetentionDays', (t) => {
+  const day = 24 * 60 * 60 * 1000;
+  let now = 2_000_000_000_000;
+  const { store } = withStore(t, { now: () => now, auditRetentionDays: 90 });
+  store.beginAudit({ requestId: 'cu', accountId: 'account-1', actorUid: 'owner', action: 'send', category: 'send' });
+  now += 91 * day;
+  store.beginAudit({ requestId: 'moi', accountId: 'account-1', actorUid: 'owner', action: 'send', category: 'send' });
+  assert.equal(store.pruneAudit(), 1);
+  assert.deepEqual([store.getAuditTrail('cu').length, store.getAuditTrail('moi').length], [0, 1]);
+});
+
 test('audit trail stores attempted and one terminal result with the same request id', (t) => {
   const { store } = withStore(t);
   store.beginAudit({

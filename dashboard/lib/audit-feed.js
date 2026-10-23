@@ -28,6 +28,7 @@ export const ACTION_LABELS = {
   login: 'Đăng nhập dashboard',
   logout_all: 'Đăng xuất mọi nơi',
   session_revoke: 'Đăng xuất từ xa một thiết bị',
+  audit_clear: 'Dọn nhật ký',
   skill_member_on: 'Mở skill cho thành viên',
   skill_member_off: 'Đóng skill với thành viên',
   setup_admin: 'Tạo tài khoản Quản trị đầu tiên',

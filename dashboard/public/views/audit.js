@@ -172,6 +172,43 @@ function Feed({ source, admin, q, round }) {
     ${next ? html`<button type="button" class="btn btn-secondary btn-sm load-more" disabled=${busy} onClick=${more}>${busy ? 'Đang tải…' : 'Xem cũ hơn'}</button>` : null}`;
 }
 
+/** Mốc "Dọn nhật ký" (khớp CLEAR_DAYS của máy chủ); 0 = xoá hết. */
+export const CLEAR_CHOICES = [
+  { days: 90, label: 'Cũ hơn 90 ngày' },
+  { days: 30, label: 'Cũ hơn 30 ngày' },
+  { days: 7, label: 'Cũ hơn 7 ngày' },
+  { days: 0, label: 'Xoá tất cả' },
+];
+
+/** Dọn nhật ký (chỉ Quản trị): xoá dòng cũ của bot và dashboard. Hoạt động AI (Hermes) không đụng tới. */
+function Cleaner({ onDone }) {
+  const [days, setDays] = useState(90);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState({});
+  async function run() {
+    const what = CLEAR_CHOICES.find((c) => c.days === days).label.toLocaleLowerCase('vi');
+    if (!confirm(`Dọn nhật ký: ${what}? Dòng đã xoá không lấy lại được.`)) return;
+    setBusy(true); setMsg({});
+    try {
+      const r = await api('/api/admin/audit/clear', { method: 'POST', body: { days } });
+      setMsg({ ok: r.removed ? `Đã xoá ${r.removed.toLocaleString('vi-VN')} dòng nhật ký.` : 'Không có dòng nào cần xoá.' });
+      onDone();
+    } catch (e) { setMsg({ error: e.message }); } finally { setBusy(false); }
+  }
+  return html`<details class="audit-clear">
+    <summary>Dọn nhật ký</summary>
+    <p class="muted">Xoá dòng cũ của bot và thao tác dashboard. Bot cũng tự xoá dòng cũ mỗi ngày theo mốc ở Cấu hình › Lưu trữ (mặc định 90 ngày).</p>
+    <div class="toolbar">
+      <label class="sr-only" for="audit-clear-days">Mốc dọn</label>
+      <select id="audit-clear-days" value=${days} onChange=${(e) => setDays(Number(e.currentTarget.value))}>
+        ${CLEAR_CHOICES.map((c) => html`<option key=${c.days} value=${c.days}>${c.label}</option>`)}
+      </select>
+      <button type="button" class="btn btn-danger-outline btn-sm" disabled=${busy} onClick=${run}>${busy ? 'Đang dọn…' : 'Dọn'}</button>
+    </div>
+    <${Live} error=${msg.error} ok=${msg.ok} />
+  </details>`;
+}
+
 export function Audit({ me, tab: initial = 'errors' }) {
   const admin = me.role === 'admin';
   const tabs = auditTabs(admin);
@@ -193,6 +230,7 @@ export function Audit({ me, tab: initial = 'errors' }) {
         <input id="audit-q" type="search" placeholder="Tìm theo nhóm, người, hành động…" value=${q} onInput=${(e) => setQ(e.currentTarget.value)} />
         ${tab === 'ai' ? null : html`<button type="button" class="btn btn-secondary btn-sm" onClick=${() => setRound(round + 1)}><${Icon} name="refresh" size=${16} /> Làm mới</button>`}
       </div>
+      ${admin && tab !== 'ai' ? html`<${Cleaner} onDone=${() => setRound((n) => n + 1)} />` : null}
       ${tab === 'errors' ? html`<${Errors} admin=${admin} q=${q} round=${round} onOpenAi=${openAi} onCount=${setCount} />`
         : tab === 'ai' ? html`<${Trace} embedded q=${q} />`
           : html`<${Feed} key=${tab} source=${tab} admin=${admin} q=${q} round=${round} />`}

@@ -11,6 +11,7 @@ import { createActivityLog } from './lib/activity-log.js';
 import { createTelegramApi, createTelegramLinker } from './lib/telegram.js';
 import { openZaloStore } from '../zalo-store.js';
 import { createStoreReader } from './lib/store-reader.js';
+import { createAuditCleaner } from './lib/audit-cleaner.js';
 import { createThreadNames } from './lib/thread-names.js';
 import { createPermissionsStore } from './lib/permissions.js';
 import { createBrandStore } from './lib/brand.js';
@@ -118,6 +119,7 @@ export function makeDeps(t, overrides = {}) {
     permissions: createPermissionsStore({ file: join(dir, 'zalo', 'permissions.json') }),
     sidecar,
     store: createStoreReader({ path: join(dir, 'zalo.sqlite') }),
+    auditCleaner: createAuditCleaner({ path: join(dir, 'zalo.sqlite') }),
     threadNames: createThreadNames({ loadGroups: () => sidecar.groups() }),
     restartAssistant: async () => {},
     restartSidecar: async () => {},

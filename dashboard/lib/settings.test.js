@@ -20,8 +20,8 @@ function setup(t, { env = ENV, config = CONFIG, inherited = {} } = {}) {
 const pick = (view, id) => view.find((x) => x.id === id);
 
 test('danh sách cố định: không khoá bí mật nào; mỗi mục có kiểu, nhóm, đích khởi động lại', () => {
-  assert.equal(SETTINGS.length, 16);
-  assert.deepEqual(SETTINGS.filter((s) => s.restart.length).map((s) => s.id), ['friendTools', 'historyDays'], 'còn lại áp dụng ngay');
+  assert.equal(SETTINGS.length, 17);
+  assert.deepEqual(SETTINGS.filter((s) => s.restart.length).map((s) => s.id), ['friendTools', 'historyDays', 'auditDays'], 'còn lại áp dụng ngay');
   for (const s of SETTINGS) {
     assert.doesNotMatch(s.env, /KEY|TOKEN|SECRET|PASSWORD/, s.env);
     assert.ok(['bool', 'int', 'enum', 'ids', 'names', 'patterns'].includes(s.type), s.id);

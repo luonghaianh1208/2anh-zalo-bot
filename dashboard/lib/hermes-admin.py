@@ -235,6 +235,42 @@ def skills_toggle(args):
     return {"name": name, "enabled": enabled}
 
 
+def skills_toggle_many(args):
+    """Bật/tắt cả danh sách trên Zalo trong một lần ghi cấu hình. Skill lỗi (lõi, không có, tắt mọi nơi chưa xác nhận)
+    nằm trong ``failed``, các skill còn lại vẫn đổi."""
+    from hermes_cli.config import load_config
+    from hermes_cli.skills_config import save_disabled_skills
+    from agent.skill_utils import ESSENTIAL_SKILLS
+    enabled = args.get("enabled")
+    if not isinstance(enabled, bool):
+        raise Refusal("Giá trị bật/tắt không hợp lệ.")
+    raw = args.get("names")
+    if not isinstance(raw, list) or not raw:
+        raise Refusal("Chưa chọn skill nào.")
+    names = list(dict.fromkeys(need_skill_name(n) for n in raw))
+    dirs = _skill_dirs()
+    config = load_config()
+    everywhere = _global_off(config)
+    done, failed = [], []
+    for name in names:
+        if name in ESSENTIAL_SKILLS and not enabled:
+            failed.append({"name": name, "error": "Skill này là lõi của Hermes, không tắt được."})
+        elif name not in dirs:
+            failed.append({"name": name, "error": "Không tìm thấy skill này."})
+        elif enabled and name in everywhere and args.get("everywhere") is not True:
+            failed.append({"name": name, "error": "Skill này đang tắt cho mọi nơi — bật riêng để xác nhận."})
+        else:
+            done.append(name)
+    if enabled and args.get("everywhere") is True and everywhere & set(done):
+        save_disabled_skills(config, everywhere - set(done))
+        config = load_config()
+    off = _platform_off(config)
+    off = (off - set(done)) if enabled else (off | set(done))
+    if done:
+        save_disabled_skills(config, off, PLATFORM)
+    return {"enabled": enabled, "done": done, "failed": failed}
+
+
 # ─── Kho skill: tìm, xem trước, quét, cài, gỡ ───────────────────────────────
 
 
@@ -995,6 +1031,7 @@ COMMANDS = {
     "skills.list": skills_list,
     "skills.view": skills_view,
     "skills.toggle": skills_toggle,
+    "skills.toggle_many": skills_toggle_many,
     "skills.uninstall": skills_uninstall,
     "skills.upload": skills_upload,
     "hub.search": hub_search,

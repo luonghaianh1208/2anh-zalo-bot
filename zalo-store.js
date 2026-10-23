@@ -123,7 +123,7 @@ function repairDuplicateAliases(db) {
   }
 }
 
-export function openZaloStore({ path, retentionDays = 365, now = Date.now } = {}) {
+export function openZaloStore({ path, retentionDays = 365, auditRetentionDays = 90, now = Date.now } = {}) {
   if (!path) throw new Error('SQLite path is required');
   const databasePath = resolve(path);
   mkdirSync(dirname(databasePath), { recursive: true });
@@ -450,6 +450,12 @@ export function openZaloStore({ path, retentionDays = 365, now = Date.now } = {}
     return Number(db.prepare('DELETE FROM messages WHERE timestamp_ms < ?').run(cutoff).changes);
   }
 
+  /** Nhật ký thao tác của bot chỉ giữ auditRetentionDays ngày (mặc định 90) — bảng này lớn nhanh (mỗi tin gửi một dòng). */
+  function pruneAudit() {
+    const cutoff = Number(now()) - Number(auditRetentionDays) * DAY_MS;
+    return Number(db.prepare('DELETE FROM audit_log WHERE created_at_ms < ?').run(cutoff).changes);
+  }
+
   function beginAudit(entry) {
     if (!entry?.requestId || !entry?.action || !entry?.category) {
       throw new Error('Audit requires requestId, action, and category');
@@ -562,6 +568,7 @@ export function openZaloStore({ path, retentionDays = 365, now = Date.now } = {}
     findOwnMessage,
     markRecalled,
     pruneMessages,
+    pruneAudit,
     beginAudit,
     finishAudit,
     getAuditTrail,

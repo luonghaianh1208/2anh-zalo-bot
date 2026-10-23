@@ -44,3 +44,18 @@ test('dòng hỏng, null hoặc thiếu at bị bỏ qua; limit không phải s�
   assert.equal(log.list({ limit: Number.NaN }).length, 1);
   assert.equal(log.list({ limit: 'abc' }).length, 1);
 });
+
+test('prune xoá dòng cũ ở cả tệp xoay vòng, giữ dòng mới', (t) => {
+  const d = mkdtempSync(join(tmpdir(), 'zd-act-')); t.after(() => rmSync(d, { recursive: true, force: true }));
+  const p = join(d, 'a.jsonl');
+  let clock = 1000;
+  const log = createActivityLog(p, { now: () => clock });
+  log.append({ actor: 'a', action: 'login' });
+  writeFileSync(`${p}.1`, `${JSON.stringify({ at: 500, actor: 'cu', action: 'login', ok: true })}\n`);
+  clock = 3000;
+  log.append({ actor: 'b', action: 'login' });
+  assert.equal(log.prune(2000), 2);
+  assert.deepEqual(log.list({}).map((e) => e.actor), ['b']);
+  assert.equal(existsSync(`${p}.1`), false);
+  assert.equal(log.prune(2000), 0);
+});

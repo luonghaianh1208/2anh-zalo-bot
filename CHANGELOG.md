@@ -2,6 +2,18 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.64.0] — 2026-10-23
+
+### Sửa — Bật/tắt skill hàng loạt không còn giới hạn 50
+
+- Trang **Skill** chọn tất cả (vd. 88 hay 106 skill) rồi bật/tắt một lần được ngay, không còn báo "Chọn từ 1 đến 50 skill".
+- Nhanh hơn hẳn: cả danh sách đổi trong một lần ghi cấu hình thay vì từng skill một. Skill nào không đổi được (skill lõi, đã bị gỡ, đang tắt cho mọi nơi) vẫn được báo riêng, các skill khác vẫn đổi.
+
+### Thêm — Dọn nhật ký
+
+- Trang **Nhật ký** có mục **"Dọn nhật ký"** (chỉ Quản trị): xoá dòng cũ hơn 90, 30, 7 ngày hoặc xoá tất cả — cả việc bot làm lẫn thao tác trên dashboard. Sau khi dọn còn lại một dòng "Dọn nhật ký" ghi ai dọn, dọn bao nhiêu.
+- Bot tự xoá nhật ký thao tác cũ hơn 90 ngày mỗi ngày (trước đây giữ mãi — bot dùng lâu có thể lên hơn 100 nghìn dòng). Đổi mốc ở **Cấu hình › Lưu trữ › Giữ nhật ký thao tác của bot (ngày)**.
+
 ## [2.63.0] — 2026-10-23
 
 ### Thêm — Bảng giá model khi đổi model (cổng Stali)

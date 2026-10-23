@@ -1614,3 +1614,10 @@ button.board-item:disabled { cursor: default; }
 .price-wrap { max-height: 60vh; overflow: auto; }
 .price-table td.num, .price-table th.num { text-align: right; white-space: nowrap; }
 .price-table tr.is-current td { background: var(--brand-soft); }
+
+/* Nhật ký › Dọn nhật ký (chỉ Quản trị) */
+.audit-clear { margin: 0 0 12px; }
+.audit-clear > summary { cursor: pointer; color: var(--muted); font-size: .9rem; width: fit-content; }
+.audit-clear > summary:focus-visible { outline: none; box-shadow: var(--focus); border-radius: 4px; }
+.audit-clear[open] > summary { margin-bottom: 6px; }
+.audit-clear p { margin: 0 0 8px; }

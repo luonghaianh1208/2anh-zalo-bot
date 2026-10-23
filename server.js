@@ -32,6 +32,7 @@ try {
 const zaloStore = openZaloStore({
   path: join(__dirname, 'data', 'zalo.sqlite'),
   retentionDays: Number(process.env.ZALO_HISTORY_RETENTION_DAYS) || 365,
+  auditRetentionDays: Number(process.env.ZALO_AUDIT_RETENTION_DAYS) || 90,
 });
 const runtimeHealth = createRuntimeHealth({ store: zaloStore });
 // Quyền nhắn riêng do dashboard ghi (permissions.json), đọc lại khi tệp đổi — lớp chặn thứ hai sau plugin.
@@ -41,8 +42,9 @@ if (!dmPermissionsFile) {
 }
 const dmRules = createDmRules({ file: dmPermissionsFile });
 zaloStore.pruneMessages();
+zaloStore.pruneAudit();
 const retentionTimer = setInterval(() => {
-  try { zaloStore.pruneMessages(); } catch (error) {
+  try { zaloStore.pruneMessages(); zaloStore.pruneAudit(); } catch (error) {
     runtimeHealth.recordError('history_retention_failed', error?.message || error);
   }
 }, 24 * 60 * 60 * 1000);

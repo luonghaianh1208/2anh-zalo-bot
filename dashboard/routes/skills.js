@@ -9,8 +9,8 @@ import { requireAuth, requireRole } from '../lib/http-guards.js';
 import { isBlocked } from '../lib/member-skills.js';
 
 export const MAX_SKILL_UPLOAD = 8 * 1024 * 1024;
-/** Trần số skill mỗi lần bật/tắt hàng loạt (mỗi skill một lệnh Hermes). */
-export const MAX_BULK_SKILLS = 50;
+/** Trần số skill mỗi lần bật/tắt hàng loạt (cả danh sách đi một lệnh Hermes). */
+export const MAX_BULK_SKILLS = 1000;
 /** Cùng luật tên skill sẵn có của hermes-admin.py (EXISTING_NAME): "/" chỉ ở giữa (tên "nhóm/tên" của skill trùng tên). */
 // eslint-disable-next-line no-control-regex
 export const SKILL_NAME = /^(?!\/)(?!.*(?:^|\/)\.{1,2}(?:\/|$))[^\u0000-\u001f\u007f\\]{1,128}(?<!\/)$/;
@@ -63,23 +63,18 @@ export function skillRoutes({ hermesAdmin, restartFlags, activity, memberSkills 
       res.json({ ok: true, ...strip(out) });
     } catch (err) { fail(res, err, 'Chưa đổi được trạng thái skill.'); }
   });
-  /** Bật/tắt nhiều skill: `{ names: [...], enabled, everywhere }` — kiểm tên trước, chạy lần lượt, trả `{ done, failed }`. */
+  /** Bật/tắt nhiều skill: `{ names: [...], enabled, everywhere }` — kiểm tên trước, một lệnh Hermes ghi cả danh sách, trả `{ done, failed }`. */
   r.put('/admin/skills/toggle-many', ...guard, async (req, res) => {
     const { names, enabled, everywhere } = req.body || {};
     if (typeof enabled !== 'boolean') return res.status(400).json({ ok: false, error: 'Giá trị bật/tắt không hợp lệ.' });
     if (!Array.isArray(names) || !names.length || names.length > MAX_BULK_SKILLS) return res.status(400).json({ ok: false, error: `Chọn từ 1 đến ${MAX_BULK_SKILLS} skill.` });
     const list = [...new Set(names.map((n) => (typeof n === 'string' ? n.trim() : '')))];
     if (!list.every((n) => SKILL_NAME.test(n))) return res.status(400).json({ ok: false, error: 'Tên skill không hợp lệ.' });
-    const done = []; const failed = [];
-    for (const name of list) {
-      try { const out = await hermesAdmin.write('skills.toggle', { name, enabled, everywhere: everywhere === true }); done.push(out.name); } catch (err) {
-        const status = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
-        if (status === 500) console.error('[dashboard]', err?.message || err);
-        failed.push({ name, error: status === 500 ? 'Chưa đổi được trạng thái skill.' : err.message });
-      }
-    }
-    if (done.length) log(req, enabled ? 'skill_enable' : 'skill_disable', `${done.length} skill: ${done.join(', ').slice(0, 300)}`);
-    res.json({ ok: true, enabled, done, failed });
+    try {
+      const { done = [], failed = [] } = await hermesAdmin.write('skills.toggle_many', { names: list, enabled, everywhere: everywhere === true });
+      if (done.length) log(req, enabled ? 'skill_enable' : 'skill_disable', `${done.length} skill: ${done.join(', ').slice(0, 300)}`);
+      res.json({ ok: true, enabled, done, failed });
+    } catch (err) { fail(res, err, 'Chưa đổi được trạng thái skill.'); }
   });
   r.post('/admin/skills/uninstall', ...guard, async (req, res) => {
     try {

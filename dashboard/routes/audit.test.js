@@ -75,3 +75,14 @@ test('chưa có lịch sử: Nhật ký vẫn có hoạt động dashboard', asy
   assert.equal(res.status, 200);
   assert.deepEqual(res.json.items.map((i) => i.source), ['dashboard', 'dashboard', 'dashboard']);
 });
+
+test('Dọn nhật ký: chỉ Quản trị, mốc hợp lệ, xoá cả dòng của bot lẫn dashboard rồi ghi một dòng "Dọn nhật ký"', async (t) => {
+  const { call, admin, owner } = await ready(t);
+  const url = '/api/admin/audit/clear';
+  assert.equal((await call(url, { method: 'POST', cookie: owner, body: { days: 0 } })).status, 403);
+  for (const days of [1, '0', -7, null]) assert.equal((await call(url, { method: 'POST', cookie: admin, body: { days } })).status, 400, String(days));
+  const res = await call(url, { method: 'POST', cookie: admin, body: { days: 30 } });
+  assert.deepEqual([res.status, res.json.bot > 0, res.json.dashboard], [200, true, 3], 'mốc thời gian mẫu đều cũ hơn 30 ngày');
+  const after = await call('/api/audit', { cookie: admin });
+  assert.deepEqual(after.json.items.map((i) => [i.what, i.source]), [['Dọn nhật ký', 'dashboard']]);
+});

@@ -1,5 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { writeFileAtomic } from './json-store.js';
 
 export function createActivityLog(path, { maxBytes = 5 * 1024 * 1024, now = Date.now } = {}) {
   function rotate() {
@@ -18,6 +19,15 @@ export function createActivityLog(path, { maxBytes = 5 * 1024 * 1024, now = Date
       const entry = { at: now(), actor: String(actor).slice(0, 64), action: String(action), detail: String(detail).slice(0, 500), ok: Boolean(ok) };
       appendFileSync(path, `${JSON.stringify(entry)}\n`, { encoding: 'utf8', mode: 0o600 });
       return entry;
+    },
+    /** Xoá mọi dòng có `at` < before (cả tệp xoay vòng .1); trả số dòng đã xoá. */
+    prune(before) {
+      const all = [...readLines(`${path}.1`), ...readLines(path)];
+      const keep = all.filter((e) => !(Number(e?.at) < before));
+      if (keep.length === all.length) return 0;
+      writeFileAtomic(path, keep.map((e) => `${JSON.stringify(e)}\n`).join(''));
+      rmSync(`${path}.1`, { force: true });
+      return all.length - keep.length;
     },
     list({ before = Infinity, limit = 50, failedOnly = false } = {}) {
       const n = Number.parseInt(limit, 10);
