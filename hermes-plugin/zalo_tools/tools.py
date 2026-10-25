@@ -563,7 +563,11 @@ async def zalo_send_file(args: Dict[str, Any], **_kw) -> str:
     # mà zalo_kb_read đã mở, không rộng thêm một tấc nào. Chủ nhân giữ nguyên
     # quyền gửi tệp bất kỳ.
     turn = _turn()
-    if turn and not turn.get("is_owner"):
+    # Lượt tự chạy trong tin nhắn riêng với chủ nhân (vd. việc nền delegate_task xong báo về) không gắn tin nhắn
+    # nào nên không mang quyền chủ, nhưng adapter vẫn giữ công cụ lõi (core_tools) — lượt đó đọc được mọi tệp
+    # bằng terminal. Cho gửi tệp về đúng tin nhắn riêng đó (_scoped_thread đã khoá hội thoại đích); nhóm thì không.
+    owner_dm = bool(turn.get("core_tools")) and not turn.get("is_group")
+    if turn and not turn.get("is_owner") and not owner_dm:
         root = _kb_root()
         if root is None:
             return _err("chưa cấu hình kho tài liệu nên chưa gửi tệp được")

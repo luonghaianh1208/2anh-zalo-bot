@@ -2,6 +2,13 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.64.1] — 2026-10-25
+
+### Sửa — Bot không gửi được tệp vừa làm xong khi việc chạy nền báo về
+
+- Chủ nhân nhờ việc dài (vd. soạn giáo án), bot giao cho trợ lý con chạy nền; khi trợ lý con xong và báo về, bot làm tiếp nhưng gửi tệp thì báo "chưa cấu hình kho tài liệu nên chưa gửi tệp được". Lượt tự chạy này không gắn với tin nhắn nào nên bị coi như người ngoài.
+- Nay trong tin nhắn riêng với chủ nhân, lượt tự chạy đó gửi được tệp về đúng tin nhắn riêng ấy. Trong nhóm, hoặc gửi sang hội thoại khác, vẫn chặn như cũ.
+
 ## [2.64.0] — 2026-10-23
 
 ### Sửa — Bật/tắt skill hàng loạt không còn giới hạn 50

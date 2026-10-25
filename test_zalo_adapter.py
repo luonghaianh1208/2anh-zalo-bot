@@ -2325,6 +2325,40 @@ class ZaloToolContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.calls[0][1][1], "9133571695356732407")
         self.assertEqual(fake.calls[1][1][1], "9133571695356732407")
 
+    async def test_send_file_in_owner_dm_after_background_task(self):
+        """Lượt tự chạy sau khi việc nền (delegate_task) xong: không gắn tin nhắn nào, chỉ giữ công cụ lõi
+        trong tin nhắn riêng với chủ nhân. Gửi tệp vừa làm về đúng tin nhắn riêng đó phải được, dù chưa có kho tài liệu;
+        trong nhóm, hay sang hội thoại khác thì vẫn chặn."""
+        class FakeAdapter:
+            def __init__(self):
+                self.calls = []
+
+            async def invoke(self, method, args):
+                self.calls.append((method, args))
+                return {"ok": True, "result": {"message": {"msgId": 1}, "attachment": [{"msgId": 2}]}}
+
+        fake = FakeAdapter()
+        zalo_tools._ACTIVE_ADAPTER = fake
+        owner_dm = "1234567890123456789"
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as item:
+            item.write(b"giao an")
+            item_path = item.name
+        self.addCleanup(os.unlink, item_path)
+        with patch.dict(os.environ, {"ZALO_KB_DIR": ""}):
+            zalo_tools.bind_turn({"sender_uid": owner_dm, "thread_id": owner_dm, "is_group": False,
+                                  "is_owner": False, "text": "", "core_tools": True})
+            ok = json.loads(await zalo_tools.zalo_send_file({"path": item_path}))
+            other = json.loads(await zalo_tools.zalo_send_file({"path": item_path, "thread_id": "9133571695356732407"}))
+            zalo_tools.bind_turn({"sender_uid": owner_dm, "thread_id": "9133571695356732407", "is_group": True,
+                                  "is_owner": False, "text": "", "core_tools": False})
+            group = json.loads(await zalo_tools.zalo_send_file({"path": item_path}))
+            zalo_tools.bind_turn(None)
+        self.assertTrue(ok["success"], ok)
+        self.assertEqual(fake.calls[0][1][1], owner_dm)
+        self.assertFalse(other["success"])
+        self.assertFalse(group["success"])
+        self.assertEqual(len(fake.calls), 1)
+
     async def test_group_member_change_normalizes_numeric_ids(self):
         class FakeAdapter:
             async def invoke(self, method, args):
