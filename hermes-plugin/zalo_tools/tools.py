@@ -3493,7 +3493,7 @@ TOOLS = [
             "caption": {"type": "string", "description":
                         "Lời nhắn đi kèm tệp, ví dụ tên tài liệu."},
         },
-        ["thread_id"],
+        [],
     ), zalo_send_file, TOOLSET_PUBLIC),
 
     ("zalo_make_file", "📄", _schema(
@@ -3534,7 +3534,7 @@ TOOLS = [
                        }}},
             "caption": {"type": "string", "description": "Lời nhắn đi kèm tệp."},
         },
-        ["thread_id", "format", "title"],
+        ["format", "title"],
     ), zalo_make_file, TOOLSET_PUBLIC),
 
     ("zalo_pdf", "📑", _schema(
@@ -3630,7 +3630,7 @@ TOOLS = [
                     "URL công khai hoặc đường dẫn tệp âm thanh local do text_to_speech trả về."},
             "ttl": {"type": "integer", "description": "Thời gian tự xoá (ms). 0 = không xoá."},
         },
-        ["thread_id", "url"],
+        ["url"],
     ), zalo_send_voice, TOOLSET_PUBLIC),
 
     ("zalo_send_sticker", "🎨", _schema(
@@ -3642,7 +3642,7 @@ TOOLS = [
             "thread_kind": _THREAD_KIND,
             "keyword": {"type": "string", "description": "Từ khoá tìm sticker, ví dụ 'vui', 'cảm ơn'."},
         },
-        ["thread_id", "keyword"],
+        ["keyword"],
     ), zalo_send_sticker, TOOLSET_PUBLIC),
 
     ("zalo_send_link", "🔗", _schema(
@@ -3654,7 +3654,7 @@ TOOLS = [
             "url": {"type": "string", "description": "Liên kết cần gửi."},
             "message": {"type": "string", "description": "Lời nhắn đi kèm."},
         },
-        ["thread_id", "url"],
+        ["url"],
     ), zalo_send_link, TOOLSET_PUBLIC),
 
     ("zalo_forward", "↪️", _schema(
@@ -3682,7 +3682,7 @@ TOOLS = [
             "since_hours": {"type": "number", "description": "Đọc hết tin trong N giờ qua (tối đa 168). Dùng khi cần tổng hợp."},
             "cursor": {"type": "string", "description": "Đọc tiếp từ `next_cursor` của lần gọi trước (giữ nguyên since_hours)."},
         },
-        ["thread_id"],
+        [],
     ), zalo_read_history, TOOLSET_OWNER),
 
     ("zalo_group_history", "🗒️", _schema(
@@ -3798,7 +3798,7 @@ TOOLS = [
         "zalo_group_members",
         "Xem danh sách thành viên một nhóm, kèm tên hiển thị.",
         {"thread_id": _GROUP_ID},
-        ["thread_id"],
+        [],
     ), zalo_group_members, TOOLSET_PUBLIC),
 
     ("zalo_find_user", "🔍", _schema(
@@ -3927,14 +3927,14 @@ TOOLS = [
             "repeat": {"type": "integer",
                        "description": "0 không lặp, 1 hằng ngày, 2 hằng tuần, 3 hằng tháng."},
         },
-        ["thread_id", "title", "start_time"],
+        ["title", "start_time"],
     ), zalo_create_reminder, TOOLSET_PUBLIC),
 
     ("zalo_list_reminders", "🔔", _schema(
         "zalo_list_reminders",
         "Xem các lời nhắc đang đặt trong một hội thoại.",
         {"thread_id": _THREAD_ID, "thread_kind": _THREAD_KIND},
-        ["thread_id"],
+        [],
     ), zalo_list_reminders, TOOLSET_PUBLIC),
 
     ("zalo_remove_reminder", "🗑️", _schema(
@@ -3945,7 +3945,7 @@ TOOLS = [
             "thread_kind": _THREAD_KIND,
             "reminder_id": _ZALO_ID,
         },
-        ["thread_id", "reminder_id"],
+        ["reminder_id"],
     ), zalo_remove_reminder, TOOLSET_PUBLIC),
 
     ("zalo_pin_conversation", "📍", _schema(
@@ -3983,7 +3983,7 @@ TOOLS = [
             "msg_id": _ZALO_ID,
             "cli_msg_id": _ZALO_ID,
         },
-        ["thread_id"],
+        [],
     ), zalo_undo, TOOLSET_OWNER),
 
     ("zalo_rename_group", "✏️", _schema(

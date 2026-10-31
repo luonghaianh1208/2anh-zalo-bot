@@ -2,6 +2,13 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.64.2] — 2026-10-31
+
+### Sửa — Bot lặp hàng trăm lần khi gửi tệp thất bại, tốn tiền model
+
+- Với model không điền được tham số qua cầu `tool_call` (đã gặp ở `gpt-5.6-sol`), lệnh gửi tệp thiếu `thread_id` bị Hermes chặn trước bộ chống lặp, nên bot gọi lại liên tục cho tới khi gần hết lượt.
+- Nay 11 công cụ tự lấy được hội thoại hiện tại (gửi tệp, tạo tệp, gửi giọng nói, sticker, link, đọc lịch sử, xem thành viên, nhắc hẹn, thu hồi) không còn bắt buộc `thread_id`. Gọi thiếu tham số sẽ thành lỗi thường, bộ chống lặp đếm được và dừng sau vài lần.
+
 ## [2.64.1] — 2026-10-25
 
 ### Sửa — Bot không gửi được tệp vừa làm xong khi việc chạy nền báo về

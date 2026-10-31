@@ -1,5 +1,6 @@
 """Phân quyền theo nhóm (spec §8): đọc permissions.json, chặn công cụ, adapter."""
 
+import asyncio
 import json
 import os
 import shutil
@@ -1147,6 +1148,42 @@ class ThreadHistoryToolTest(PermissionsFile, unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("zalo_read_history", message)
         self.write({"version": 1, "groups": {GROUP_A: {"features": {"history": False}}}})
         self.assertNotIn("zalo_thread_history", zalo_tools.guard_member_tool_call("terminal", {"command": "ls"})["message"])
+
+
+class ThreadIdSchemaTests(unittest.TestCase):
+    """Công cụ tự lấy hội thoại hiện tại không được bắt buộc `thread_id` trong schema.
+
+    Hermes kiểm tra `required` của công cụ bị hoãn ở cầu `tool_call` TRƯỚC khi vào
+    guardrail, nên thiếu tham số ở đó bị lặp vô hạn thay vì dừng sau vài lần.
+    """
+
+    SCOPED = {
+        "zalo_send_file", "zalo_make_file", "zalo_send_voice", "zalo_send_sticker",
+        "zalo_send_link", "zalo_read_history", "zalo_group_members", "zalo_create_reminder",
+        "zalo_list_reminders", "zalo_remove_reminder", "zalo_undo",
+    }
+
+    def required(self, name):
+        schema = next(s for n, _e, s, _h, _t in zalo_tools.TOOLS if n == name)
+        return schema["parameters"]["required"]
+
+    def test_tools_scoped_to_current_thread_do_not_require_thread_id(self):
+        for name in self.SCOPED:
+            self.assertNotIn("thread_id", self.required(name), name)
+
+    def test_other_required_arguments_stay(self):
+        self.assertEqual(self.required("zalo_make_file"), ["format", "title"])
+        self.assertEqual(self.required("zalo_create_reminder"), ["title", "start_time"])
+
+    def test_tools_with_no_current_thread_fallback_still_require_it(self):
+        for name in ("zalo_pin_conversation", "zalo_mute"):
+            self.assertIn("thread_id", self.required(name), name)
+
+    def test_empty_send_file_call_is_a_normal_tool_error(self):
+        # Phải là lỗi của chính công cụ để guardrail đếm được và dừng vòng lặp.
+        result = json.loads(asyncio.run(zalo_tools.zalo_send_file({})))
+        self.assertIn("path", result["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
