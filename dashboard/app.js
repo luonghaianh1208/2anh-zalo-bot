@@ -10,6 +10,7 @@ import { auditRoutes } from './routes/audit.js';
 import { secondBrainRoutes } from './routes/second-brain.js';
 import { learnedMemoryRoutes } from './routes/learned-memory.js';
 import { telegramRoutes } from './routes/telegram.js';
+import { burnAlertRoutes } from './routes/burn-alert.js';
 import { adminRoutes } from './routes/admin.js';
 import { permissionRoutes } from './routes/permissions.js';
 import { brandRoutes } from './routes/brand.js';
@@ -37,6 +38,8 @@ export function createDashboardApp(deps) {
   app.disable('x-powered-by');
   app.use(securityHeaders());
   app.use(express.json({ limit: '2mb' }));
+  // Máy khách gọi từ ngoài trình duyệt nên nằm trước checkOrigin; tự xác thực bằng token riêng từng máy.
+  if (deps.burnAlertTokens?.size) app.use('/api', burnAlertRoutes(deps));
   app.use('/api', checkOrigin(deps.config));
   app.use('/api', sessionMiddleware(deps));
   app.use('/api', authRoutes(deps));

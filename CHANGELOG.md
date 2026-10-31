@@ -2,6 +2,14 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.65.0] — 2026-10-31
+
+### Thêm — Cảnh báo bot đang đốt tiền model
+
+- Bot báo về cho người vận hành khi một công cụ lỗi 10 lần liên tiếp, hoặc tiêu từ 30 triệu token trong một giờ. Các lỗi vặt không báo; cùng một sự cố báo tối đa một lần mỗi 30 phút.
+- Bot trên máy khách gửi về dashboard của bot vận hành (`/api/hooks/burn-alert`), bot đó nhắn riêng chủ nhân trên Zalo. Tin chỉ gồm tên máy, công cụ, số đếm và model, không có nội dung trò chuyện.
+- Máy gửi đặt `ZALO_BURN_ALERT_URL` và `ZALO_BURN_ALERT_TOKEN` trong `.env` của Hermes. Máy nhận đặt `ZALO_BURN_ALERT_TOKENS="ten-may:token,..."` trong `.env` của sidecar. Không đặt thì tính năng tắt.
+
 ## [2.64.2] — 2026-10-31
 
 ### Sửa — Bot lặp hàng trăm lần khi gửi tệp thất bại, tốn tiền model

@@ -52,6 +52,7 @@ import { createMcpServers } from './lib/mcp-servers.js';
 import { createMcpToolVi } from './lib/mcp-tool-vi.js';
 import { createSettings } from './lib/settings.js';
 import { createOwnersStore } from './lib/owners.js';
+import { parseBurnAlertTokens } from './routes/burn-alert.js';
 import { createServiceChecker } from './lib/services.js';
 import { createHealthMonitor } from './lib/health-monitor.js';
 import { singleFlight } from './lib/single-flight.js';
@@ -130,6 +131,7 @@ export function buildDeps({ env = process.env, sidecarRoot = join(here, '..'), i
     restartSidecar,
     restartFlags: createRestartFlags({ file: paths.restartFlagsFile }),
     owners,
+    burnAlertTokens: parseBurnAlertTokens(env.ZALO_BURN_ALERT_TOKENS),
     brand: createBrandStore({ file: paths.brandFile, logoFile: paths.brandLogoFile }),
     // Cùng tệp plugin đọc: ZALO_PEOPLE_FILE trong .env của Hermes (nếu đặt) thắng đường mặc định.
     people,

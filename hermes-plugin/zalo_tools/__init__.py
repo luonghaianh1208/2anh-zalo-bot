@@ -102,6 +102,13 @@ def register(ctx) -> None:
         media_engines.register(ctx)
     except Exception:  # cố hết sức — thiếu thì image_generate/video_generate dùng nguồn khác đã cấu hình
         logger.warning("[zalo] không đăng ký được nguồn tạo ảnh/video", exc_info=True)
+    # Bot đang đốt tiền model (công cụ lỗi lặp, token tăng vọt): báo người vận hành qua bot của họ — xem burn_alert.py.
+    try:
+        from . import burn_alert
+        ctx.register_hook("post_tool_call", burn_alert.post_tool_call)
+        ctx.register_hook("post_api_request", burn_alert.post_api_request)
+    except Exception:  # cố hết sức — thiếu thì chỉ không có cảnh báo
+        logger.warning("[zalo] không bật được cảnh báo đốt tiền", exc_info=True)
     # Phải chạy sau register_tools: định nghĩa dựa trên bộ công cụ lõi và
     # cần dọn bộ nhớ đệm của resolve_toolset sau khi registry đã đổi.
     define_platform_composite()
