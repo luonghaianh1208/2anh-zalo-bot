@@ -6,7 +6,7 @@
 import express from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 const ZALO_UID = /^[1-9]\d{14,21}$/;
 const MAX_TEXT = 2000;
@@ -40,7 +40,7 @@ function tokenOk(header, expected) {
   return want.length > 0 && supplied.length === want.length && timingSafeEqual(supplied, want);
 }
 
-export function createControlRouter({ token, health, qr, logout, send, loginCode, groups, groupMembers = null, recall = null, sendFile = null, outboxDir = null, directory = null }) {
+export function createControlRouter({ token, health, qr, logout, send, loginCode, groups, groupMembers = null, recall = null, sendFile = null, outboxDir = null, directory = null, broadcasts = null }) {
   const router = express.Router();
   router.use((req, res, next) => (tokenOk(req.get('authorization'), token)
     ? next() : res.status(401).json({ ok: false, error: 'unauthorized' })));
@@ -57,6 +57,16 @@ export function createControlRouter({ token, health, qr, logout, send, loginCode
     const who = typeof actor === 'string' ? actor.trim() : '';
     if (!who || who.length > MAX_ACTOR) throw bad(`Thiếu người gửi hoặc dài quá ${MAX_ACTOR} ký tự`);
     return who;
+  };
+
+  /** Đường dẫn thật của tệp nằm trong outbox; `rel` để kiểm thêm vị trí bên trong. Ngoài outbox → lỗi. */
+  const inOutbox = (path) => {
+    let real;
+    try { real = realpathSync(String(path ?? '')); } catch { throw bad('Không thấy tệp cần gửi'); }
+    const root = (() => { try { return realpathSync(outboxDir); } catch { return resolve(outboxDir); } })();
+    const rel = relative(root, real);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw bad('Tệp không nằm trong thư mục gửi của dashboard');
+    return { real, rel };
   };
 
   router.get('/health', wrap(async () => ({ health: health() })));
@@ -97,12 +107,7 @@ export function createControlRouter({ token, health, qr, logout, send, loginCode
       const { threadId, threadType, path, actor } = req.body || {};
       if (!/^\d+$/.test(String(threadId ?? ''))) throw bad('threadId không hợp lệ');
       if (threadType !== 0 && threadType !== 1) throw bad('threadType phải là 0 hoặc 1');
-      let real;
-      try { real = realpathSync(String(path ?? '')); } catch { throw bad('Không thấy tệp cần gửi'); }
-      const root = (() => { try { return realpathSync(outboxDir); } catch { return resolve(outboxDir); } })();
-      const rel = relative(root, real);
-      if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw bad('Tệp không nằm trong thư mục gửi của dashboard');
-      return { result: await sendFile({ threadId: String(threadId), threadType, path: real, actor: checkActor(actor) }) };
+      return { result: await sendFile({ threadId: String(threadId), threadType, path: inOutbox(path).real, actor: checkActor(actor) }) };
     }));
   }
   // Thu hồi tin do chính bot gửi (bấm từ Phiên chat). Bot tự kiểm đúng là tin của mình.
@@ -120,6 +125,30 @@ export function createControlRouter({ token, health, qr, logout, send, loginCode
       const groupId = String(req.query.groupId ?? '');
       if (!/^\d+$/.test(groupId)) throw bad('groupId không hợp lệ');
       return groupMembers(groupId);
+    }));
+  }
+
+  // Gửi hàng loạt: bot tự chạy nền theo nhịp đã chọn. Tệp đính kèm nằm trong outbox/broadcast/<mã>/ và bị xoá khi đợt
+  // kết thúc, nên chỉ nhận đúng dạng đó — xoá cả thư mục chứa tệp không được đụng tới thứ khác.
+  if (broadcasts) {
+    router.get('/broadcasts', wrap(async () => broadcasts.list()));
+    router.post('/broadcasts', wrap(async (req) => {
+      const { text, targets, pace, file, actor } = req.body || {};
+      const who = checkActor(actor);
+      let attached = null;
+      if (file) {
+        if (!outboxDir) throw bad('Máy này chưa bật gửi tệp từ dashboard');
+        const { real, rel } = inOutbox(file.path);
+        const parts = rel.split(sep);
+        if (parts.length !== 3 || parts[0] !== 'broadcast') throw bad('Tệp đính kèm không đúng chỗ');
+        attached = { path: real, name: String(file.name ?? '').slice(0, 120) };
+      }
+      return { job: broadcasts.create({ text, file: attached, targets: Array.isArray(targets) ? targets : [], pace, actor: who }) };
+    }));
+    router.post('/broadcasts/:id/:action', wrap(async (req) => {
+      const { id, action } = req.params;
+      if (!['pause', 'resume', 'cancel'].includes(action)) throw bad('Thao tác không hợp lệ');
+      return { job: broadcasts[action](id) };
     }));
   }
 

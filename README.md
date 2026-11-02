@@ -624,6 +624,7 @@ Thanh bên chia năm nhóm: Tổng quan · Hội thoại · Dữ liệu · Hệ 
 | Trang | Ai thấy | Làm được gì |
 |---|---|---|
 | Liên hệ | Quản trị, Chủ bot | Xem bạn bè của bot, người đã nhắn riêng, người có hồ sơ; Đồng ý / Từ chối lời mời kết bạn đang chờ (có ghi Nhật ký). Tắt kết nối Zalo vẫn thấy người nhắn riêng, kèm câu báo. |
+| Gửi hàng loạt | Quản trị, Chủ bot | Gửi một nội dung (kèm một tệp nếu cần) tới các thư mục đã chọn hoặc tự chọn từng nơi; `{ten}` chèn tên người nhận. Bot chạy nền theo nhịp: giãn cách ngẫu nhiên, nghỉ sau mỗi tốp, trần số nơi một ngày, chỉ gửi trong khung giờ, tự dừng khi 5 nơi liên tiếp lỗi. Xem tiến độ, tạm dừng, tiếp tục, huỷ. Chỉ gửi cho nhóm của bot và người đã quen. |
 | Lịch hẹn | Quản trị, Chủ bot | Việc hẹn giờ của trợ lý gửi về Zalo (hẹn giờ nhóm, việc của chủ nhân): tạm dừng, chạy lại, xoá. Lời nhắc Zalo theo từng hội thoại: xem, xoá. Việc gửi sang Telegram không hiện. |
 | Trí nhớ | Quản trị, Chủ bot (bộ nhớ trợ lý: chỉ Quản trị) | Sửa/xoá hồ sơ trong sổ người quen; Quản trị sửa/xoá từng mục MEMORY.md / USER.md của trợ lý. Ghi bằng tệp tạm + `.bak`, từ chối (409) khi bot vừa ghi. |
 | Kho tri thức | Quản trị, Chủ bot | Danh sách tài liệu bot đọc được (`ZALO_KB_DIR`); tải lên .docx/.pdf/.md/.txt (≤ 10 MB) vào thư mục `tai-len-dashboard`; chỉ xoá được tệp đã tải lên. Bot thấy tệp mới sau tối đa 5 phút. |
@@ -655,6 +656,7 @@ Dashboard › Trí nhớ › **Kho tri thức tự học**: Quản trị và Ch�
 - [ ] Quản trị và Chủ bot đăng nhập: thanh bên đúng 5/4 nhóm, Chủ bot không thấy Second brain; đường dẫn vị trí đúng; điện thoại "Thêm" chia nhóm.
 - [ ] Thương hiệu: đổi dòng phụ → thanh bên đổi ngay.
 - [ ] Liên hệ: có bạn bè; tắt kết nối Zalo → vẫn thấy người nhắn riêng + câu báo; dùng tài khoản phụ gửi lời mời → Đồng ý → Nhật ký có "Đồng ý lời mời kết bạn".
+- [ ] Gửi hàng loạt: chọn 2 tài khoản phụ ở mức An toàn → cả hai nhận đúng tên, tiến độ tăng dần; khởi động lại `zalo-bridge` giữa đợt → đợt chạy tiếp, không ai nhận trùng; Tạm dừng → không có tin mới; Huỷ → nơi còn lại không nhận.
 - [ ] Lịch hẹn: tạo một hẹn giờ nhóm bằng tài khoản phụ → thấy ở "Hẹn giờ cho nhóm" → Tạm dừng → `hermes cron list` thấy paused → Chạy lại → Xoá. Việc gửi Telegram không hiện.
 - [ ] Trí nhớ: sửa một hồ sơ → hỏi bot trong nhóm "bạn biết gì về tôi" thấy nội dung mới. Quản trị sửa một mục MEMORY.md → tệp còn đúng dấu §.
 - [ ] Kho tri thức: tải một PDF → sau ≤ 5 phút bot tìm thấy bằng `zalo_kb_list`; xoá tệp đó.

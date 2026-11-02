@@ -432,12 +432,12 @@ test('thanh điều hướng điện thoại: 4 mục chính + "Thêm" theo vai 
   const { navSplit } = await import('./views/shell.js');
   const admin = navSplit('admin', '/audit', { secondBrain: true });
   assert.deepEqual(admin.primary.map((i) => [i.path, i.short]), [['/', 'Tổng quan'], ['/chats', 'Phiên chat'], ['/zalo', 'Zalo'], ['/permissions', 'Phân quyền']]);
-  assert.deepEqual(admin.more.map((i) => i.path), ['/contacts', '/schedules', '/memory', '/kb', '/insight', '/second-brain', '/mcp',
+  assert.deepEqual(admin.more.map((i) => i.path), ['/contacts', '/broadcast', '/schedules', '/memory', '/kb', '/insight', '/second-brain', '/mcp',
     '/agent', '/ai', '/tools', '/skills', '/audit', '/brand', '/health', '/maintenance', '/settings', '/users', '/owners', '/alerts', '/profile']);
   assert.equal(admin.activeMore.text, 'Nhật ký');
   const owner = navSplit('owner', '/', { secondBrain: true });
   assert.equal(owner.primary.length, 4);
-  assert.deepEqual(owner.more.map((i) => i.path), ['/contacts', '/schedules', '/memory', '/kb', '/insight', '/audit', '/brand', '/health', '/profile'],
+  assert.deepEqual(owner.more.map((i) => i.path), ['/contacts', '/broadcast', '/schedules', '/memory', '/kb', '/insight', '/audit', '/brand', '/health', '/profile'],
     'Chủ bot không thấy mục Quản trị (kể cả Second brain)');
   assert.equal(owner.activeMore, null);
   assert.equal(navSplit('owner', '/users').activeMore, null);
@@ -754,7 +754,7 @@ test('thanh bên: 5 nhóm theo mẫu; Second brain chỉ Quản trị và chỉ 
   const { visibleGroups } = await import('./views/shell.js');
   const admin = visibleGroups('admin', { secondBrain: true });
   assert.deepEqual(admin.map((g) => g.label), ['Tổng quan', 'Hội thoại', 'Dữ liệu', 'Hệ thống', 'Quản trị']);
-  assert.deepEqual(admin[1].items.map((i) => i.text), ['Phiên chat', 'Liên hệ', 'Phân quyền Bot', 'Lịch hẹn']);
+  assert.deepEqual(admin[1].items.map((i) => i.text), ['Phiên chat', 'Liên hệ', 'Gửi hàng loạt', 'Phân quyền Bot', 'Lịch hẹn']);
   assert.deepEqual(admin[2].items.map((i) => i.text), ['Trí nhớ', 'Kho tri thức', 'Insight nhóm', 'Second brain', 'Kết nối MCP']);
   assert.deepEqual(admin[3].items.map((i) => i.text), ['Tài khoản Zalo', 'Tính cách AI', 'Khoá API & Model', 'Công cụ', 'Skill', 'Nhật ký', 'Thương hiệu', 'Sức khoẻ máy chủ', 'Bảo trì', 'Cấu hình']);
   const owner = visibleGroups('owner', { secondBrain: true });
@@ -777,7 +777,7 @@ test('menu "Thêm" trên điện thoại chia theo nhóm, giữ thứ tự thanh
   const { navSplit, moreSections } = await import('./views/shell.js');
   const secs = moreSections(navSplit('owner', '/').more);
   assert.deepEqual(secs.map((s) => s.label), ['Hội thoại', 'Dữ liệu', 'Hệ thống', 'Tài khoản']);
-  assert.deepEqual(secs[0].items.map((i) => i.path), ['/contacts', '/schedules']);
+  assert.deepEqual(secs[0].items.map((i) => i.path), ['/contacts', '/broadcast', '/schedules']);
 });
 
 test('mọi trang trong thanh bên đều có route; mục/nhóm Quản trị thì route cũng chỉ Quản trị', async () => {

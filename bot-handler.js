@@ -73,6 +73,7 @@ export function setupBotListener(api, profile = null, {
   let connectedAt = 0;
   let stableTimer = null;
   let kicked = false;
+  let connects = 0;
 
   const stickers = createStickerDirectory({
     fetchDetail: (id) => api.getStickersDetail(id),
@@ -132,6 +133,7 @@ export function setupBotListener(api, profile = null, {
 
   const onConnected = () => {
     connectedAt = now();
+    connects += 1;
     health?.setListenerState('connected');
     console.log('[bot] 🔌 Zalo listener đã kết nối');
     clearTimeout(stableTimer);
@@ -155,9 +157,12 @@ export function setupBotListener(api, profile = null, {
   const onDisconnected = (code, reason) => {
     clearTimeout(stableTimer);
     health?.setListenerState('reconnecting');
-    noteKick(code);
     const heldMs = connectedAt ? now() - connectedAt : null;
-    const flap = heldMs != null && heldMs < flapWindowMs ? ` (rớt sau ${heldMs}ms)` : '';
+    const flapped = heldMs != null && heldMs < flapWindowMs;
+    // Vừa đăng nhập, kết nối đầu tiên hay bị Zalo trả 3000 rồi tự nối lại được. Coi đó là bị đá thì dashboard báo
+    // mất kết nối và lần mở QR kế tiếp dỡ luôn phiên mới (sự cố 02/11/2026). Rớt 3000 lần nữa mới tính.
+    if (!(Number(code) === 3000 && connects === 1 && flapped)) noteKick(code);
+    const flap = flapped ? ` (rớt sau ${heldMs}ms)` : '';
     console.warn(`[bot] ⚠️ Zalo listener mất kết nối (mã ${code}${reason ? `: ${reason}` : ''})${flap}`);
   };
 

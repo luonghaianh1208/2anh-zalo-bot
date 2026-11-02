@@ -11,6 +11,7 @@ import { secondBrainRoutes } from './routes/second-brain.js';
 import { learnedMemoryRoutes } from './routes/learned-memory.js';
 import { telegramRoutes } from './routes/telegram.js';
 import { burnAlertRoutes } from './routes/burn-alert.js';
+import { broadcastRoutes } from './routes/broadcast.js';
 import { adminRoutes } from './routes/admin.js';
 import { permissionRoutes } from './routes/permissions.js';
 import { brandRoutes } from './routes/brand.js';
@@ -54,6 +55,7 @@ export function createDashboardApp(deps) {
   if (deps.studioUsageFile) app.use('/api', studioRoutes(deps));
   if (deps.people) app.use('/api', peopleRoutes(deps));
   app.use('/api', contactRoutes(deps));
+  app.use('/api', broadcastRoutes(deps));
   if (deps.agentMemory) app.use('/api', agentMemoryRoutes(deps));
   if (deps.schedules) app.use('/api', scheduleRoutes(deps));
   if (deps.kb) app.use('/api', kbRoutes(deps));

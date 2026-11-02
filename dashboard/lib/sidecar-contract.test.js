@@ -4,6 +4,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createControlRouter } from '../../control-api.js';
 import { createSidecarClient } from './sidecar-client.js';
 import { chatMsg, makeDeps, seedHistory, startApp, loginAs } from '../test-helpers.js';
@@ -120,4 +123,48 @@ test('hợp đồng: Liên hệ và Lịch hẹn — client thật ↔ router th
     ['reminders', { threadId: '55', threadType: 1 }], ['remove', { reminderId: '7', threadId: '55', threadType: 1, actor: 'anh' }],
   ]);
   await assert.rejects(client.removeReminder({ reminderId: '7', threadId: '55', threadType: 1 }), (e) => e.statusCode === 400);
+});
+
+test('hợp đồng: Gửi hàng loạt — route thật → client thật → router thật, tệp ngoài outbox/broadcast bị từ chối', async (t) => {
+  const calls = [];
+  const dir = mkdtempSync(join(tmpdir(), 'bc-contract-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const outboxDir = join(dir, 'outbox');
+  const job = { id: 'bc-a1', status: 'running', counts: { total: 1, sent: 0, failed: 0, unknown: 0, pending: 1 } };
+  const app = express();
+  app.use(express.json());
+  app.use('/control', createControlRouter({
+    token: TOKEN, health: () => ({}), qr: { start: async () => {}, state: () => ({}) }, logout: async () => {},
+    send: async () => ({}), loginCode: async () => {}, groups: async () => [{ id: '200', name: 'Tổ Hoá' }], outboxDir,
+    broadcasts: {
+      list: () => ({ jobs: [job], sentToday: 2 }),
+      create: (m) => { calls.push(['create', m]); return job; },
+      pause: (id) => { calls.push(['pause', id]); return job; }, resume: () => job, cancel: () => job,
+    },
+  }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  t.after(() => server.close());
+  const client = createSidecarClient({ token: TOKEN, baseUrl: `http://127.0.0.1:${server.address().port}` });
+  client.friends = async () => [];
+
+  assert.deepEqual(await client.broadcasts(), { jobs: [job], sentToday: 2 });
+  const deps = makeDeps(t, { sidecar: client, outboxDir });
+  const { call } = await startApp(t, deps);
+  const cookie = await loginAs(t, deps, call, { username: 'khach', role: 'owner' });
+  const res = await call('/api/broadcasts', { method: 'POST', cookie, body: { text: 'Chào', targets: [{ id: '200', type: 1 }] } });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls[0][1].targets, [{ id: '200', type: 1, name: 'Tổ Hoá' }]);
+  assert.equal(calls[0][1].actor, 'khach');
+  assert.equal((await call('/api/broadcasts/bc-a1/pause', { method: 'POST', cookie })).status, 200);
+  assert.deepEqual(calls.at(-1), ['pause', 'bc-a1']);
+
+  await assert.rejects(client.createBroadcast({ text: 'x', targets: [] }), (e) => e.statusCode === 400); // thiếu actor
+  const stray = join(outboxDir, 'khac.pdf');
+  mkdirSync(outboxDir, { recursive: true });
+  writeFileSync(stray, 'x');
+  await assert.rejects(client.createBroadcast({ text: 'x', targets: [], actor: 'a', file: { path: stray, name: 'khac.pdf' } }), /không đúng chỗ/);
+  const outside = join(dir, 'ngoai.pdf');
+  writeFileSync(outside, 'x');
+  await assert.rejects(client.createBroadcast({ text: 'x', targets: [], actor: 'a', file: { path: outside, name: 'ngoai.pdf' } }), /không nằm trong/);
 });

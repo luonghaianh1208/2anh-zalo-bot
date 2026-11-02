@@ -14,6 +14,7 @@ import { Brand } from './brand.js';
 import { Owners } from './owners.js';
 import { Health } from './health.js';
 import { Contacts } from './contacts.js';
+import { Broadcast } from './broadcast.js';
 import { Schedules } from './schedules.js';
 import { Memory } from './memory.js';
 import { Kb } from './kb.js';
@@ -43,6 +44,7 @@ const ROUTES = {
   '/alerts': { view: Alerts, admin: true },
   '/profile': { view: Profile },
   '/contacts': { view: Contacts },
+  '/broadcast': { view: Broadcast },
   '/schedules': { view: Schedules },
   '/memory': { view: Memory },
   '/kb': { view: Kb },
@@ -64,6 +66,7 @@ export const GROUPS = [
   { label: 'Hội thoại', items: [
     { path: '/chats', text: 'Phiên chat', icon: 'chat' },
     { path: '/contacts', text: 'Liên hệ', icon: 'users' },
+    { path: '/broadcast', text: 'Gửi hàng loạt', icon: 'send' },
     { path: '/permissions', text: 'Phân quyền Bot', icon: 'shield' },
     { path: '/schedules', text: 'Lịch hẹn', icon: 'clock' },
   ] },
@@ -95,7 +98,7 @@ export const GROUPS = [
 
 // Mỗi mục một màu (ô biểu tượng ở thanh bên, tiêu đề thẻ trong trang) — kiểu macOS: nhìn màu là biết đang ở đâu.
 export const TINTS = {
-  '/': 'indigo', '/chats': 'blue', '/contacts': 'green', '/permissions': 'purple', '/schedules': 'orange',
+  '/': 'indigo', '/chats': 'blue', '/contacts': 'green', '/broadcast': 'teal', '/permissions': 'purple', '/schedules': 'orange',
   '/memory': 'pink', '/kb': 'brown', '/insight': 'teal', '/second-brain': 'purple', '/mcp': 'cyan',
   '/zalo': 'blue', '/agent': 'gray', '/ai': 'yellow', '/tools': 'gray', '/skills': 'green', '/audit': 'gray',
   '/brand': 'pink', '/health': 'red', '/maintenance': 'indigo', '/settings': 'gray',
@@ -216,7 +219,7 @@ function StatusStrip({ status, error, path, admin, update }) {
 
 // Thanh điều hướng điện thoại: 4 mục chính luôn hiện, còn lại trong "Thêm ▾".
 export const MOBILE_PRIMARY = ['/', '/chats', '/zalo', '/permissions'];
-const SHORT = { '/ai': 'Khoá & Model', '/second-brain': 'Second brain', '/mcp': 'MCP', '/zalo': 'Zalo', '/permissions': 'Phân quyền', '/health': 'Sức khoẻ', '/alerts': 'Cảnh báo', '/owners': 'Chủ nhân', '/profile': 'Tài khoản' };
+const SHORT = { '/broadcast': 'Gửi loạt', '/ai': 'Khoá & Model', '/second-brain': 'Second brain', '/mcp': 'MCP', '/zalo': 'Zalo', '/permissions': 'Phân quyền', '/health': 'Sức khoẻ', '/alerts': 'Cảnh báo', '/owners': 'Chủ nhân', '/profile': 'Tài khoản' };
 
 /**
  * Nhóm thanh bên vai trò này thấy: bỏ nhóm/mục `admin` với Chủ bot, bỏ mục có `feature` đang tắt

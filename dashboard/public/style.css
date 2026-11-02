@@ -1621,3 +1621,16 @@ button.board-item:disabled { cursor: default; }
 .audit-clear > summary:focus-visible { outline: none; box-shadow: var(--focus); border-radius: 4px; }
 .audit-clear[open] > summary { margin-bottom: 6px; }
 .audit-clear p { margin: 0 0 8px; }
+
+/* Gửi hàng loạt */
+.bc-jobs { list-style: none; margin: 8px 0 0; padding: 0; }
+.bc-job { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.bc-job:last-child { border-bottom: 0; }
+.bc-job-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.bc-job-title { min-width: 0; overflow-wrap: anywhere; }
+.bc-job .row-actions, .card > .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.bc-issues { margin-top: 8px; }
+.bc-issues ul { margin: 6px 0 0; padding-left: 18px; }
+.bc-preview { margin: 6px 0 0; padding: 10px 12px; border-left: 3px solid var(--border); background: color-mix(in srgb, var(--tint) 6%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.bc-file { cursor: pointer; }
+.bc-pace { margin-top: 10px; }

@@ -61,5 +61,8 @@ export function createSidecarClient({ baseUrl = 'http://127.0.0.1:3872', token, 
       `/reminders?threadId=${encodeURIComponent(threadId)}&threadType=${encodeURIComponent(threadType)}`, { limitMs: sendTimeoutMs },
     )).reminders,
     removeReminder: (m) => call('/reminders/remove', { method: 'POST', body: m, limitMs: sendTimeoutMs }),
+    broadcasts: async () => { const { jobs, sentToday } = await call('/broadcasts'); return { jobs, sentToday }; },
+    createBroadcast: async (m) => (await call('/broadcasts', { method: 'POST', body: m, limitMs: sendTimeoutMs, distinctTimeout: true })).job,
+    broadcastAction: async (id, action) => (await call(`/broadcasts/${encodeURIComponent(id)}/${action}`, { method: 'POST' })).job,
   };
 }

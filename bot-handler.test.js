@@ -304,6 +304,51 @@ test('bị Zalo đá (3003) thì báo needsRelogin và chờ nhịp dài nhất'
   stop();
 });
 
+test('vừa quét QR, kết nối đầu rớt 3000 rồi tự nối lại thì không bị coi là bị đá', () => {
+  const listener = new FakeListener();
+  const health = fakeHealth();
+  const stop = setupBotListener({ listener }, { user_id: 'bot' }, { health, restartDelaysMs: [5, 15, 30] });
+  listener.emit('connected');
+  listener.emit('disconnected', 3000, 'NOT_AUTHENTICATED');
+  listener.emit('connected');
+  assert.equal(health.needs, false);
+  stop();
+});
+
+test('3000 lặp lại ở lần kết nối sau vẫn là bị đá', () => {
+  const listener = new FakeListener();
+  const health = fakeHealth();
+  const stop = setupBotListener({ listener }, { user_id: 'bot' }, { health, restartDelaysMs: [5, 15, 30] });
+  listener.emit('connected');
+  listener.emit('disconnected', 3000, 'NOT_AUTHENTICATED');
+  listener.emit('connected');
+  listener.emit('disconnected', 3000, 'NOT_AUTHENTICATED');
+  assert.equal(health.needs, true);
+  stop();
+});
+
+test('kết nối đầu giữ lâu rồi mới rớt 3000 vẫn là bị đá', () => {
+  const listener = new FakeListener();
+  const health = fakeHealth();
+  let clock = 1000;
+  const stop = setupBotListener({ listener }, { user_id: 'bot' }, { health, restartDelaysMs: [5, 15, 30], now: () => clock });
+  listener.emit('connected');
+  clock += 60_000;
+  listener.emit('disconnected', 3000, 'phiên khác mở');
+  assert.equal(health.needs, true);
+  stop();
+});
+
+test('closed(3000) ngay kết nối đầu vẫn là bị đá: không còn nối lại nữa', () => {
+  const listener = new FakeListener();
+  const health = fakeHealth();
+  const stop = setupBotListener({ listener }, { user_id: 'bot' }, { health, restartDelaysMs: [5, 15, 30] });
+  listener.emit('connected');
+  listener.emit('closed', 3000, 'NOT_AUTHENTICATED');
+  assert.equal(health.needs, true);
+  stop();
+});
+
 test('chỉ có closed(3003) không có disconnected vẫn báo needsRelogin và chờ nhịp dài nhất', () => {
   const listener = new FakeListener();
   const health = fakeHealth();

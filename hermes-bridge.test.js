@@ -1037,6 +1037,24 @@ test('bridge ping returns pong and refreshes runtime heartbeat', async (t) => {
   }
 });
 
+test('dỡ cầu nối (đăng nhập lại) không để lại client ma trong runtime health', async (t) => {
+  const store = testStore(t);
+  const health = createRuntimeHealth({ store });
+  const server = startHermesBridge({ api: {}, profile: { user_id: 'bot' }, port: 0, store, health });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}`);
+  try {
+    const hello = onceMessage(ws, (msg) => msg.type === 'hello');
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await hello;
+    assert.equal(health.snapshot().bridge.attachedClients, 1);
+  } finally {
+    stopHermesBridge();
+  }
+  assert.equal(health.snapshot().bridge.attachedClients, 0);
+  ws.close();
+});
+
 test('bridge closes a client whose application heartbeat is stale', async (t) => {
   const store = testStore(t);
   const health = createRuntimeHealth({ store, staleAfterMs: 25 });

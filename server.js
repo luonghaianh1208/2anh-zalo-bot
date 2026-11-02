@@ -20,6 +20,7 @@ import { createZaloDirectory } from './zalo-directory.js';
 import { dashboardLoginUrl } from './dashboard-link.js';
 import { createGroupDirectory } from './group-directory.js';
 import { createDmRules, permissionsFileFromEnv } from './dm-rules.js';
+import { createBroadcastManager, readBroadcasts, writeBroadcasts } from './zalo-broadcast.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 installFileLog({ path: join(__dirname, 'logs', 'sidecar.log') });
@@ -71,7 +72,28 @@ const wss = new WebSocketServer({
 app.use((req, res, next) => (
   isLocalHost(req.headers.host) ? next() : res.status(403).json({ ok: false, error: 'Host không hợp lệ' })
 ));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' })); // một đợt gửi hàng loạt mang tới 500 nơi nhận kèm tên
+
+// Gửi hàng loạt: `api` đổi khi đăng nhập lại — đọc qua hàm. Chỉ gửi khi Zalo thực sự đang nối, không gửi vào phiên đang rớt.
+const broadcastsFile = process.env.ZALO_BROADCASTS_FILE || join(__dirname, 'data', 'broadcasts.json');
+const notReady = () => Object.assign(new Error('Zalo chưa đăng nhập'), { code: 'not_ready' });
+const broadcasts = createBroadcastManager({
+  load: () => readBroadcasts(broadcastsFile),
+  save: (data) => writeBroadcasts(broadcastsFile, data),
+  ready: () => {
+    const z = runtimeHealth.zaloSession();
+    return Boolean(api) && z.status === 'logged-in' && z.listener === 'connected' && !z.needsRelogin;
+  },
+  acquire: acquireSendQuota,
+  sendText: ({ threadId, threadType, text, actor }) => {
+    if (!api) throw notReady();
+    return sendSystemNotice({ api, threadId, threadType, text, actorUid: actor, actorRole: 'dashboard', action: 'dashboard_broadcast' });
+  },
+  sendFile: ({ threadId, threadType, path, actor }) => {
+    if (!api) throw notReady();
+    return sendFileNotice({ api, threadId, threadType, path, actorUid: actor });
+  },
+});
 
 // --- Dashboard control (Bearer ZALO_BRIDGE_TOKEN, không qua CSRF /api) ---
 const groupDirectory = createGroupDirectory({ getApi: () => api });
@@ -124,6 +146,7 @@ Mã có hiệu lực 5 phút. Đừng đưa mã này cho ai.`,
   groups: () => groupDirectory.list(),
   // `api` đổi khi đăng nhập lại — đọc qua hàm, không chụp giá trị lúc khởi động.
   directory: createZaloDirectory({ getApi: () => api, acquire: acquireSendQuota, audit: auditDashboardAction }),
+  broadcasts,
 }));
 // Trang quét QR cũ ở cổng này đã bỏ: đăng nhập Zalo nằm ở dashboard (mục Tài khoản Zalo). Ai mở nhầm cổng sidecar
 // thì chuyển thẳng tới đó. Cổng này giờ chỉ còn /control (dashboard gọi) và /api/status, /api/health (kiểm tra).
@@ -263,6 +286,7 @@ if (reconnectResult) {
   runtimeHealth.setZaloState('idle');
   console.log('[boot] chưa có phiên — cần quét QR');
 }
+broadcasts.start();
 
 // --- Status ---
 app.get('/api/status', (req, res) => {
@@ -312,6 +336,7 @@ function removePidFile() {
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(sig, () => {
+    broadcasts.stop();
     stopBotListener();
     removePidFile();
     clearInterval(retentionTimer);

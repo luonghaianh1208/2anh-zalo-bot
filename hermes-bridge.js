@@ -538,6 +538,8 @@ export function startHermesBridge({
 
 export function stopHermesBridge() {
   for (const ws of clients) {
+    // Sự kiện close đến sau khi activeHealth đã bị xoá: phải báo ở đây, không thì client ma nằm lại trong runtime health.
+    activeHealth?.bridgeDisconnected(clientIds.get(ws));
     try { ws.close(); } catch { /* đang đóng dở */ }
   }
   clients.clear();

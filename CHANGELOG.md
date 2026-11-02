@@ -2,6 +2,22 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.66.0] — 2026-11-02
+
+### Thêm — Trang Gửi hàng loạt cho chăm sóc khách hàng
+
+- Mục mới ở thanh bên: gửi một nội dung tới nhiều nhóm hoặc người, chọn theo thư mục hoặc tự chọn từng nơi. Có thể kèm một tệp; `{ten}` chèn tên người nhận hoặc tên nhóm.
+- Bot chạy nền ở sidecar nên đóng trang vẫn gửi tiếp. Khởi động lại thì chạy tiếp từ chỗ dở; nơi đang gửi đúng lúc đó được ghi "chưa rõ" chứ không gửi lại.
+- Nhịp gửi chọn sẵn ba mức hoặc tự chỉnh: giãn cách ngẫu nhiên (ít nhất 15 giây), nghỉ sau mỗi tốp, trần số nơi một ngày dùng chung mọi đợt (tối đa 300), khung giờ gửi theo giờ Việt Nam.
+- Zalo mất kết nối thì đợt chờ, không tính lỗi. Năm nơi liên tiếp lỗi thì tự tạm dừng.
+- Chỉ gửi được cho nhóm của bot và người đã quen: bạn bè, người từng nhắn riêng, người trong sổ hoặc thư mục. Tối đa 500 nơi mỗi đợt.
+
+### Sửa — Quét mã QR xong dashboard vẫn báo mất kết nối
+
+- Ngay sau khi đăng nhập, kết nối đầu tiên thường bị Zalo trả mã 3000 rồi tự nối lại, nhưng bot coi đó là bị đá nên dashboard báo mất kết nối thêm 2 phút. Mở lại mã QR trong lúc đó còn dỡ luôn phiên vừa đăng nhập.
+- Nay lần 3000 đầu tiên ngay sau khi kết nối được bỏ qua; rớt 3000 lần nữa mới tính là bị đá.
+- Đăng nhập lại không còn để sót một kết nối Hermes cũ khiến tình trạng hệ thống kẹt ở `degraded`.
+
 ## [2.65.0] — 2026-10-31
 
 ### Thêm — Cảnh báo bot đang đốt tiền model
