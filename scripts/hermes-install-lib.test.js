@@ -588,6 +588,7 @@ const git = (repo, ...args) => {
 
 test('cài mới: ba plugin nằm ở <HERMES_HOME>/plugins, mã Hermes không bị chép gì vào', async (t) => {
   const fx = fixture(t);
+  writeFileSync(join(fx.sidecar, 'CHANGELOG.md'), '## [9.9.9] — 2026-11-03\n', 'utf8');
   const result = await installHermes({ sidecarRoot: fx.sidecar, hermesHome: fx.hermesHome, skipPython: true });
   const targets = pluginTargets(fx.hermesHome);
   assert.deepEqual(targets, {
@@ -598,6 +599,7 @@ test('cài mới: ba plugin nằm ở <HERMES_HOME>/plugins, mã Hermes không b
   });
   assert.equal(existsSync(join(targets.platform, 'adapter.py')), true);
   assert.equal(existsSync(join(targets.tools, 'tools.py')), true);
+  assert.equal(readFileSync(join(targets.tools, 'CHANGELOG.md'), 'utf8'), '## [9.9.9] — 2026-11-03\n');
   assert.equal(existsSync(join(targets.memory, '__init__.py')), true);
   assert.doesNotMatch(readFileSync(join(targets.platform, 'plugin.yaml'), 'utf8'), /SIDECAR_SERVER/);
   for (const dir of legacyPluginTargets(fx.hermesRepo)) assert.equal(existsSync(dir), false, dir);

@@ -68,6 +68,13 @@ def register(ctx) -> None:
         ctx.register_hook("pre_llm_call", freshness.pre_llm_call)
     except Exception:  # cố hết sức — thiếu thì bot vẫn trả lời, chỉ không tự tra trước
         logger.warning("[zalo] không bật được tra cứu trước khi trả lời", exc_info=True)
+    # Hỏi về tính năng/phiên bản của chính bot: đính các bản gần đây từ CHANGELOG.md trên máy, không để mô hình tra web
+    # rồi đoán (sự cố 03/11/2026) — xem self_knowledge.py.
+    try:
+        from . import self_knowledge
+        ctx.register_hook("pre_llm_call", self_knowledge.pre_llm_call)
+    except Exception:  # cố hết sức — thiếu thì bot vẫn trả lời, chỉ không biết bản đang chạy
+        logger.warning("[zalo] không bật được thông tin phiên bản của bot", exc_info=True)
     # Skill chủ bot mở cho thành viên (dashboard › Skill › "Thành viên"): báo trợ lý danh sách ở lượt của thành viên.
     try:
         from . import member_skills

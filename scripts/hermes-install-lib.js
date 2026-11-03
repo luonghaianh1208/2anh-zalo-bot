@@ -940,6 +940,8 @@ export async function installHermes({
   const targets = pluginTargets(layout.home);
   atomicReplaceDirectory(join(root, 'hermes-plugin', 'zalo'), targets.platform);
   atomicReplaceDirectory(join(root, 'hermes-plugin', 'zalo_tools'), targets.tools);
+  // Bot đọc tệp này khi được hỏi về tính năng của chính nó (zalo_tools/self_knowledge.py).
+  if (existsSync(join(root, 'CHANGELOG.md'))) copyFileSync(join(root, 'CHANGELOG.md'), join(targets.tools, 'CHANGELOG.md'));
   // Trí nhớ dài hạn (spec §19): chỉ chép plugin; KHÔNG đổi memory.provider — người cài đặt tự bật.
   atomicReplaceDirectory(join(root, 'hermes-plugin', 'zalo_memory'), targets.memory);
   const manifestPath = join(targets.platform, 'plugin.yaml');

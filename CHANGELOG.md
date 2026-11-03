@@ -2,6 +2,14 @@
 
 Theo chuẩn [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/).
 
+## [2.66.1] — 2026-11-03
+
+### Sửa — Bot trả lời sai về tính năng của chính nó
+
+- Hỏi "bản mới đã có gửi tin hàng loạt chưa", bot tra web GitHub, không thấy rồi tự khẳng định là chưa có, dù v2.66.0 đã có tính năng đó.
+- Nay khi được hỏi về tính năng hay phiên bản của bot, plugin đính kèm bản đang chạy và tiêu đề các mục Thêm/Sửa của 12 bản gần nhất, đọc từ nhật ký phiên bản trên máy. Bot được dặn không tra web về chính mình, không thấy thì nói là không chắc.
+- Bộ cài chép nhật ký phiên bản vào thư mục plugin mỗi lần cập nhật.
+
 ## [2.66.0] — 2026-11-02
 
 ### Thêm — Trang Gửi hàng loạt cho chăm sóc khách hàng
